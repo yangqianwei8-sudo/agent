@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}案件列表{% endblock %}
+{% block content %}
+<section class="page-head">
+  <h1>案件列表</h1>
+  <a class="btn primary" href="/cases/new">创建案件</a>
+</section>
+{% if not cases %}
+<p class="muted">暂无案件。请先创建案件并上传材料。</p>
+{% else %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>案件名称</th>
+      <th>内部编号</th>
+      <th>原告</th>
+      <th>被告</th>
+      <th>Workflow</th>
+      <th>当前节点</th>
+      <th>更新时间</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for c in cases %}
+    <tr>
+      <td>{{ c.title }}</td>
+      <td>{{ c.case_no_internal or "—" }}</td>
+      <td>{{ c.plaintiff or "—" }}</td>
+      <td>{{ c.defendant or "—" }}</td>
+      <td>{{ c.workflow_status or "未启动" }}</td>
+      <td>{{ c.current_node_label or "—" }}</td>
+      <td>{{ c.updated_at or "—" }}</td>
+      <td><a class="btn" href="/cases/{{ c.id }}">打开</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

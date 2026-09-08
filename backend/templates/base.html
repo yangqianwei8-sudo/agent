@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}律师案件工作台{% endblock %}</title>
+  <link rel="stylesheet" href="/static/lawyer_agent/workspace.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/cases">Lawyer Case Agent</a>
+    <nav>
+      <a href="/cases">案件列表</a>
+      <a href="/cases/new">创建案件</a>
+    </nav>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

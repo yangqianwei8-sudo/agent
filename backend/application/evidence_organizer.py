@@ -132,7 +132,31 @@ class EvidenceOrganizerService:
             proposals = self._parse_raw_proposals(raw_proposals, result)
         else:
             inp = OrganizerInput(case_id=case_id, extracted_content_ids=ec_ids)
-            proposals = list(self.engine.organize(inp, spans).proposals)
+            try:
+                proposals = list(self.engine.organize(inp, spans).proposals)
+            except Exception as exc:  # noqa: BLE001 — engine/LLM failures
+                if skill_exec is not None:
+                    skill_exec.status = "FAILED"
+                    skill_exec.error_code = getattr(exc, "code", "ENGINE_FAILED")[:64]
+                    skill_exec.error_detail = str(exc)[:500]
+                    metrics = dict(skill_exec.metrics_json or {})
+                    meta = getattr(self.engine, "last_meta", None)
+                    if isinstance(meta, dict):
+                        metrics["llm"] = {
+                            k: meta[k]
+                            for k in (
+                                "model",
+                                "provider",
+                                "prompt_version",
+                                "request_id",
+                                "usage",
+                                "latency_ms",
+                            )
+                            if k in meta
+                        }
+                    skill_exec.metrics_json = metrics
+                    self.session.flush()
+                raise
 
         for proposal in proposals:
             try:
@@ -498,4 +522,19 @@ class EvidenceOrganizerService:
             exec_row.error_detail = "all organizer proposals failed validation"
         else:
             exec_row.status = "SUCCEEDED"
+            meta = getattr(self.engine, "last_meta", None)
+            if isinstance(meta, dict):
+                metrics["llm"] = {
+                    k: meta[k]
+                    for k in (
+                        "model",
+                        "provider",
+                        "prompt_version",
+                        "request_id",
+                        "usage",
+                        "latency_ms",
+                    )
+                    if k in meta
+                }
+                exec_row.metrics_json = metrics
         self.session.flush()

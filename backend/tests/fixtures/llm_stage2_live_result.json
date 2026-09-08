@@ -1,0 +1,139 @@
+{
+  "case_id": "abd60e48-8f60-4ab2-b3c2-1fe66c675edc",
+  "workflow": {
+    "status": "SUCCEEDED",
+    "waiting_reason": null
+  },
+  "claim": {
+    "status": "CONFIRMED",
+    "claims": [
+      {
+        "amount": 700000.0,
+        "currency": "CNY",
+        "claim_type": "PAYMENT",
+        "description": "请求判令星海地产开发有限公司支付设计优化咨询服务费余款70万元。",
+        "interest_rate": null,
+        "calculation_basis": "合同约定服务费总额100万元，签约后支付30万元，成果交付后支付70万元；已确认支付30万元，故余款为100万-30万=70万元。",
+        "interest_start_date": null,
+        "supporting_fact_ids": [
+          "4fd6ae82-436a-49c4-b7dd-2f43d28e1c1a",
+          "fec3e226-6881-4f29-8eed-800232222f7f"
+        ]
+      }
+    ],
+    "amount": "700000.0"
+  },
+  "draft": {
+    "status": "APPROVED_BY_LAWYER",
+    "version": 1,
+    "claims": [
+      {
+        "text": "1. 请求判令被告向原告支付请求判令星海地产开发有限公司支付设计优化咨询服务费余款70万元。，金额为人民币700,000元。（计算依据：合同约定服务费总额100万元，签约后支付30万元，成果交付后支付70万元；已确认支付30万元，故余款为100万-30万=70万元。）",
+        "amount": 700000.0,
+        "currency": "CNY",
+        "claim_type": "PAYMENT"
+      }
+    ],
+    "warnings": [
+      {
+        "code": "CLAIM_FACT_VERSION_PROVENANCE_GAP",
+        "message": "ClaimDirection Domain 仅存 fact_key，未包含 fact_version，无法验证版本一致性。"
+      }
+    ],
+    "has_statute_article": false,
+    "has_lpr": false,
+    "has_placeholder": true
+  },
+  "citations_count": 2,
+  "provenance_sample": [
+    {
+      "citation": {
+        "block_id": "fact-001",
+        "citation_kind": "FACT",
+        "fact_key": "4fd6ae82-436a-49c4-b7dd-2f43d28e1c1a",
+        "fact_version": 1,
+        "evidence_item_id": "982040d9-513d-4451-9420-e8559cdc2050",
+        "evidence_item_version": 1
+      },
+      "chain": {
+        "statement": "星海地产开发有限公司与智图设计优化咨询有限公司签订了设计优化咨询合同，约定服务费用总额为100万元，付款方式为签约后支付30万元，成果交付后支付70万元，乙方应",
+        "evidence_id": "982040d9-513d-4451-9420-e8559cdc2050",
+        "evidence_version": 1,
+        "span_id": "0d9f956b-d6a8-4b16-a542-715b8012df83",
+        "ec_id": "265addc2-bdec-4fcb-922c-0b53e28f85fd",
+        "material_id": "1af8badd-c708-49b5-beea-745886049365",
+        "filename": "设计优化咨询合同.docx"
+      }
+    },
+    {
+      "citation": {
+        "block_id": "fact-002",
+        "citation_kind": "FACT",
+        "fact_key": "fec3e226-6881-4f29-8eed-800232222f7f",
+        "fact_version": 1,
+        "evidence_item_id": "5707938a-734b-4cac-8436-fa1c07fd00c1",
+        "evidence_item_version": 1
+      },
+      "chain": {
+        "statement": "付款凭证显示星海地产开发有限公司向智图设计优化咨询有限公司支付了300000元，用途为设计优化咨询服务费。",
+        "evidence_id": "5707938a-734b-4cac-8436-fa1c07fd00c1",
+        "evidence_version": 1,
+        "span_id": "1210646e-1c71-48be-bb6e-86e415e68d46",
+        "ec_id": "64ab9fca-b260-49cc-b86a-7b0f89faa633",
+        "material_id": "f0efafe6-0273-4d53-9d22-94f2d3fba202",
+        "filename": "付款凭证A.docx"
+      }
+    }
+  ],
+  "skills": [
+    {
+      "skill_code": "EvidenceOrganizerSkill",
+      "status": "SUCCEEDED",
+      "error_code": null,
+      "engine_mode": null,
+      "model": "deepseek-chat",
+      "prompt_version": "v1",
+      "warnings": null
+    },
+    {
+      "skill_code": "CaseAnalystSkill",
+      "status": "SUCCEEDED",
+      "error_code": null,
+      "engine_mode": null,
+      "model": "deepseek-chat",
+      "prompt_version": "v1",
+      "warnings": null
+    },
+    {
+      "skill_code": "ClaimDirectionSkill",
+      "status": "SUCCEEDED",
+      "error_code": null,
+      "engine_mode": "real",
+      "model": "deepseek-chat",
+      "prompt_version": "v1",
+      "warnings": null
+    },
+    {
+      "skill_code": "PleadingWriterSkill",
+      "status": "SUCCEEDED",
+      "error_code": null,
+      "engine_mode": "real",
+      "model": "deepseek-chat",
+      "prompt_version": "v1",
+      "warnings": [
+        {
+          "code": "CLAIM_FACT_VERSION_PROVENANCE_GAP",
+          "message": "ClaimDirection Domain 仅存 fact_key，未包含 fact_version，无法验证版本一致性。"
+        }
+      ]
+    }
+  ],
+  "ai": {
+    "ai_mode": "Real",
+    "model": "deepseek-chat",
+    "provider": "openai_compatible"
+  },
+  "n7_hao_auto_confirm": false,
+  "n9_hao_auto_approve": false,
+  "amount_700000": true
+}

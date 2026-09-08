@@ -9,13 +9,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.agent.context import CaseContextService
-from backend.agent.dto import AgentIntent, AgentResponse
-from backend.agent.handlers import CommandHandler, build_agent_response
-from backend.agent.intent_router import DeterministicIntentRouter, IntentEngine
+from backend.agent.dto import AgentErrorCode, AgentIntent, AgentResponse
+from backend.agent.handlers import CommandHandler, HandlerResult, build_agent_response
+from backend.agent.intent_router import IntentEngine, IntentParseContext
 from backend.application.case_analyst import CaseAnalystService
 from backend.application.claim_direction import ClaimDirectionService
 from backend.application.evidence_organizer import EvidenceOrganizerService
 from backend.application.pleading_writer import PleadingWriterService
+from backend.llm.errors import LLMError
 from backend.models import AgentMessage
 
 
@@ -33,17 +34,29 @@ class CaseAgent:
         claim_svc: ClaimDirectionService | None = None,
         writer: PleadingWriterService | None = None,
     ) -> None:
+        from backend.llm.factory import (
+            build_analyst_engine,
+            build_claim_direction_engine,
+            build_intent_engine,
+            build_organizer_engine,
+            build_pleading_writer_engine,
+        )
+
         self.session = session
         self.actor_id = actor_id
-        self.intent_engine = intent_engine or DeterministicIntentRouter()
+        self.intent_engine = intent_engine or build_intent_engine()
         self.context_svc = CaseContextService(session)
         self.handler = CommandHandler(
             session,
             actor_id=actor_id,
-            organizer=organizer,
-            analyst=analyst,
-            claim_svc=claim_svc,
-            writer=writer,
+            organizer=organizer
+            or EvidenceOrganizerService(session, engine=build_organizer_engine()),
+            analyst=analyst
+            or CaseAnalystService(session, engine=build_analyst_engine()),
+            claim_svc=claim_svc
+            or ClaimDirectionService(session, engine=build_claim_direction_engine()),
+            writer=writer
+            or PleadingWriterService(session, engine=build_pleading_writer_engine()),
         )
 
     def handle_message(
@@ -72,7 +85,52 @@ class CaseAgent:
             self.session.flush()
 
         # 3) Intent
-        intent = self.intent_engine.parse(message)
+        try:
+            intent = self.intent_engine.parse(
+                message,
+                context=IntentParseContext(
+                    workflow_status=ctx.workflow_status,
+                    current_node=ctx.current_node.code if ctx.current_node else None,
+                    waiting_reason=ctx.waiting_reason,
+                    pending_human_gate=(ctx.workflow_status == "WAITING_USER"),
+                    case_title=ctx.case.title,
+                    pending_actions=[a.get("label", "") for a in ctx.available_actions],
+                    blocking_reason=None,
+                ),
+            )
+        except LLMError as exc:
+            user_msg.parsed_intent_json = {
+                "conversation_id": str(conversation_id),
+                "intent": AgentIntent.UNKNOWN.value,
+                "error_code": exc.code,
+            }
+            self.session.flush()
+            response = build_agent_response(
+                ctx=ctx,
+                handler=HandlerResult(
+                    message=(
+                        "本次 AI 意图识别调用失败，案件状态未被自动确认或推进，请重试。"
+                        f"（{exc.code}）"
+                    ),
+                    intent=AgentIntent.UNKNOWN,
+                    error_code=AgentErrorCode.LLM_REQUEST_FAILED,
+                ),
+            )
+            agent_msg = AgentMessage(
+                case_id=case_id,
+                instance_id=ctx.instance.id if ctx.instance else None,
+                role="AGENT",
+                content=response.message,
+                parsed_intent_json={
+                    "conversation_id": str(conversation_id),
+                    "intent": response.intent.value,
+                    "error_code": AgentErrorCode.LLM_REQUEST_FAILED.value,
+                },
+            )
+            self.session.add(agent_msg)
+            self.session.flush()
+            return response
+
         user_msg.parsed_intent_json = {
             "conversation_id": str(conversation_id),
             "intent": intent.intent.value,

@@ -129,20 +129,32 @@ class PleadingWriterService:
             accepted_evidence_refs=evidence_refs,
             confirmed_party_keys=list(confirmed_party_keys),
         )
-        engine_result = raw_result or self.engine.write(
-            inp,
-            parties=parties,
-            facts=facts,
-            claim=claim,
-            evidence=evidence,
-        )
-
-        self._validate_engine_result(
-            engine_result,
-            claim=claim,
-            facts=facts,
-            evidence_refs=evidence_refs,
-        )
+        try:
+            engine_result = raw_result or self.engine.write(
+                inp,
+                parties=parties,
+                facts=facts,
+                claim=claim,
+                evidence=evidence,
+            )
+            self._validate_engine_result(
+                engine_result,
+                claim=claim,
+                facts=facts,
+                evidence_refs=evidence_refs,
+            )
+        except Exception as exc:  # noqa: BLE001 — engine/LLM/validation failures
+            if skill_exec is not None:
+                skill_exec.status = "FAILED"
+                skill_exec.error_code = getattr(exc, "code", "ENGINE_FAILED")[:64]
+                skill_exec.error_detail = str(exc)[:500]
+                metrics = dict(skill_exec.metrics_json or {})
+                meta = getattr(self.engine, "last_meta", None)
+                if isinstance(meta, dict):
+                    metrics["llm"] = meta
+                skill_exec.metrics_json = metrics
+                self.session.flush()
+            raise
 
         full_text = render_civil_complaint(engine_result)
         body = build_body_structured(engine_result, full_text=full_text)
@@ -709,4 +721,8 @@ class PleadingWriterService:
         }
         exec_row.metrics_json = metrics
         exec_row.status = "SUCCEEDED"
+        meta = getattr(self.engine, "last_meta", None)
+        if isinstance(meta, dict):
+            metrics["llm"] = meta
+            exec_row.metrics_json = metrics
         self.session.flush()

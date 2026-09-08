@@ -29,6 +29,7 @@ from backend.application.evidence_organizer import EvidenceOrganizerService
 from backend.application.pleading_writer import PleadingWriterService
 from backend.domain.errors import ConflictError, DomainError, NotFoundError, ValidationError
 from backend.domain.services import DomainService
+from backend.llm.errors import LLMError
 from backend.models import (
     CaseMaterial,
     CaseParty,
@@ -81,10 +82,31 @@ class CommandHandler:
         self.runtime = WorkflowRuntime(session)
         self.domain = DomainService(session)
         self.context_svc = CaseContextService(session)
-        self.organizer = organizer or EvidenceOrganizerService(session)
-        self.analyst = analyst or CaseAnalystService(session)
-        self.claim_svc = claim_svc or ClaimDirectionService(session)
-        self.writer = writer or PleadingWriterService(session)
+        if organizer is None or analyst is None:
+            from backend.llm.factory import build_analyst_engine, build_organizer_engine
+
+            organizer = organizer or EvidenceOrganizerService(
+                session, engine=build_organizer_engine()
+            )
+            analyst = analyst or CaseAnalystService(
+                session, engine=build_analyst_engine()
+            )
+        self.organizer = organizer
+        self.analyst = analyst
+        if claim_svc is None or writer is None:
+            from backend.llm.factory import (
+                build_claim_direction_engine,
+                build_pleading_writer_engine,
+            )
+
+            claim_svc = claim_svc or ClaimDirectionService(
+                session, engine=build_claim_direction_engine()
+            )
+            writer = writer or PleadingWriterService(
+                session, engine=build_pleading_writer_engine()
+            )
+        self.claim_svc = claim_svc
+        self.writer = writer
 
     def dispatch(
         self,
@@ -127,6 +149,15 @@ class CommandHandler:
                 message=exc.message,
                 intent=intent.intent,
                 error_code=exc.code,
+            )
+        except LLMError as exc:
+            return HandlerResult(
+                message=(
+                    "本次 AI 调用失败，案件状态未被自动确认或推进，请重试。"
+                    f"（{exc.code}）"
+                ),
+                intent=intent.intent,
+                error_code=AgentErrorCode.LLM_REQUEST_FAILED,
             )
         except (ValidationError, ConflictError, NotFoundError, DomainError) as exc:
             code = AgentErrorCode.VALIDATION_ERROR

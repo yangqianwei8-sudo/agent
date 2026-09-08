@@ -8,7 +8,6 @@ from backend.domain.errors import (
     NotFoundError,
     ValidationError,
 )
-from backend.domain.services import DomainService
 
 __all__ = [
     "DomainService",
@@ -19,3 +18,11 @@ __all__ = [
     "ImmutableError",
     "StaleEvent",
 ]
+
+
+def __getattr__(name: str):
+    if name == "DomainService":
+        from backend.domain.services import DomainService
+
+        return DomainService
+    raise AttributeError(name)

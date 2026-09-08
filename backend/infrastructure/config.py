@@ -32,7 +32,20 @@ class Settings(BaseSettings):
     pdf_scan_empty_page_ratio: float = 0.8
     max_material_bytes: int = 50 * 1024 * 1024
 
+    # Real LLM (Stage 1) — default deterministic so tests never hit network
+    llm_mode: str = "deterministic"  # deterministic | real
+    llm_provider: str = "openai_compatible"
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_timeout_seconds: int = 60
+    llm_max_retries: int = 2
+
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def clear_settings_cache() -> None:
+    get_settings.cache_clear()

@@ -3,19 +3,44 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from backend.agent.dto import AgentIntent, IntentResult
 
 
+@dataclass
+class IntentParseContext:
+    """Optional workflow/case hints for LLM intent routers (ignored by deterministic)."""
+
+    workflow_status: str | None = None
+    current_node: str | None = None
+    blocking_reason: str | None = None
+    waiting_reason: str | None = None
+    pending_human_gate: bool = False
+    case_title: str | None = None
+    pending_actions: list[str] = field(default_factory=list)
+
+
 class IntentEngine(Protocol):
-    def parse(self, message: str) -> IntentResult: ...
+    def parse(
+        self,
+        message: str,
+        *,
+        context: IntentParseContext | None = None,
+    ) -> IntentResult: ...
 
 
 class DeterministicIntentRouter:
     """Keyword / pattern intent router for contract tests and V1."""
 
-    def parse(self, message: str) -> IntentResult:
+    def parse(
+        self,
+        message: str,
+        *,
+        context: IntentParseContext | None = None,
+    ) -> IntentResult:
+        _ = context
         text = message.strip()
         lower = text.lower()
 
@@ -113,8 +138,14 @@ class ScriptedIntentEngine:
     def __init__(self, result: IntentResult) -> None:
         self._result = result
 
-    def parse(self, message: str) -> IntentResult:
+    def parse(
+        self,
+        message: str,
+        *,
+        context: IntentParseContext | None = None,
+    ) -> IntentResult:
         _ = message
+        _ = context
         return self._result.model_copy(deep=True)
 
 

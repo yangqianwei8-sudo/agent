@@ -1,0 +1,62 @@
+{
+  "case_id": "0ad1054b-8242-4e77-9990-ff9ea1cc0dde",
+  "ai": {
+    "ai_mode": "Real",
+    "model": "deepseek-chat",
+    "provider": "openai_compatible"
+  },
+  "workflow": {
+    "status": "WAITING_USER",
+    "current_node": "N5_CONFIRM_PARTIES",
+    "current_node_label": "N5 确认当事人",
+    "waiting_reason": "PARTY",
+    "pending_count": null,
+    "blocking_reason": null,
+    "instance_id": "01efb227-7300-4afb-903e-77236d1253d3"
+  },
+  "evidence": [
+    {
+      "number": "1",
+      "acceptance": "ACCEPTED",
+      "title": "设计优化咨询合同",
+      "summary": "智图设计优化咨询有限公司与星海地产开发有限公司签订设计优化咨询合同，约定服务费用总额为人民币700000元，付款方式为合同签订后支付30%，成果交付后支付余款，"
+    },
+    {
+      "number": "2",
+      "acceptance": "ACCEPTED",
+      "title": "付款凭证A",
+      "summary": "付款凭证显示星海地产开发有限公司向智图设计优化咨询有限公司支付设计优化咨询服务费人民币300000元。"
+    },
+    {
+      "number": "3",
+      "acceptance": "ACCEPTED",
+      "title": "对方主张付款说明",
+      "summary": "星海地产开发有限公司主张已向智图设计优化咨询有限公司支付服务费人民币500000元，用途为设计优化咨询服务费，但备注指出与付款凭证A金额冲突。"
+    },
+    {
+      "number": "4",
+      "acceptance": "EXCLUDED",
+      "title": "催款函",
+      "summary": "智图设计优化咨询有限公司向星海地产开发有限公司发出催款函，声称已按约完成服务并交付成果，截至发函日贵司仍欠付服务费人民币肆拾玖万元整，要求收函后7日内支付。"
+    }
+  ],
+  "facts": [
+    {
+      "i": 1,
+      "status": "CANDIDATE",
+      "statement": "星海地产开发有限公司主张已向智图设计优化咨询有限公司支付服务费人民币500000元，用途为设计优化咨询服务费。"
+    },
+    {
+      "i": 2,
+      "status": "CANDIDATE",
+      "statement": "付款凭证A显示星海地产开发有限公司向智图设计优化咨询有限公司支付设计优化咨询服务费人民币300000元。"
+    },
+    {
+      "i": 3,
+      "status": "CANDIDATE",
+      "statement": "智图设计优化咨询有限公司与星海地产开发有限公司签订设计优化咨询合同，约定服务费用总额为人民币700000元，付款方式为合同签订后支付30%，成果交付后支付余款，乙方应于签约后60日内提交优化成果报告，"
+    }
+  ],
+  "parties": [],
+  "ambiguous_intent": "UNKNOWN"
+}

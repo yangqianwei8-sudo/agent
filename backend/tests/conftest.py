@@ -2,15 +2,30 @@
 
 from __future__ import annotations
 
+import os
 import uuid
+
+# Tests must never depend on real LLM / network — pin before settings load.
+os.environ["LLM_MODE"] = "deterministic"
 
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.infrastructure.config import get_settings
+from backend.infrastructure.config import clear_settings_cache, get_settings
+from backend.llm.factory import clear_llm_caches
 from backend.models import Base
 
+clear_settings_cache()
+clear_llm_caches()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _deterministic_llm_mode() -> None:
+    os.environ["LLM_MODE"] = "deterministic"
+    clear_settings_cache()
+    clear_llm_caches()
+    assert get_settings().llm_mode == "deterministic"
 
 @pytest.fixture(scope="session")
 def database_url() -> str:

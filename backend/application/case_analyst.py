@@ -119,7 +119,31 @@ class CaseAnalystService:
 
         if raw_result is None:
             inp = AnalystInput(case_id=case_id, accepted_evidence_refs=refs)
-            engine_result = self.engine.analyze(inp, views)
+            try:
+                engine_result = self.engine.analyze(inp, views)
+            except Exception as exc:  # noqa: BLE001 — engine/LLM failures
+                if skill_exec is not None:
+                    skill_exec.status = "FAILED"
+                    skill_exec.error_code = getattr(exc, "code", "ENGINE_FAILED")[:64]
+                    skill_exec.error_detail = str(exc)[:500]
+                    metrics = dict(skill_exec.metrics_json or {})
+                    meta = getattr(self.engine, "last_meta", None)
+                    if isinstance(meta, dict):
+                        metrics["llm"] = {
+                            k: meta[k]
+                            for k in (
+                                "model",
+                                "provider",
+                                "prompt_version",
+                                "request_id",
+                                "usage",
+                                "latency_ms",
+                            )
+                            if k in meta
+                        }
+                    skill_exec.metrics_json = metrics
+                    self.session.flush()
+                raise
         elif isinstance(raw_result, AnalystEngineResult):
             engine_result = raw_result
         else:
@@ -715,4 +739,19 @@ class CaseAnalystService:
             exec_row.error_detail = "all fact proposals failed validation"
         else:
             exec_row.status = "SUCCEEDED"
+            meta = getattr(self.engine, "last_meta", None)
+            if isinstance(meta, dict):
+                metrics["llm"] = {
+                    k: meta[k]
+                    for k in (
+                        "model",
+                        "provider",
+                        "prompt_version",
+                        "request_id",
+                        "usage",
+                        "latency_ms",
+                    )
+                    if k in meta
+                }
+                exec_row.metrics_json = metrics
         self.session.flush()

@@ -103,7 +103,20 @@ class ClaimDirectionService:
                 confirmed_fact_refs=fact_refs,
                 confirmed_party_keys=list(confirmed_party_keys),
             )
-            engine_result = self.engine.propose(inp, facts, parties)
+            try:
+                engine_result = self.engine.propose(inp, facts, parties)
+            except Exception as exc:  # noqa: BLE001 — engine/LLM failures
+                if skill_exec is not None:
+                    skill_exec.status = "FAILED"
+                    skill_exec.error_code = getattr(exc, "code", "ENGINE_FAILED")[:64]
+                    skill_exec.error_detail = str(exc)[:500]
+                    metrics = dict(skill_exec.metrics_json or {})
+                    meta = getattr(self.engine, "last_meta", None)
+                    if isinstance(meta, dict):
+                        metrics["llm"] = meta
+                    skill_exec.metrics_json = metrics
+                    self.session.flush()
+                raise
         elif isinstance(raw_result, ClaimDirectionEngineResult):
             engine_result = raw_result
         else:
@@ -374,6 +387,7 @@ class ClaimDirectionService:
         # Re-validate frozen ClaimDirection schema
         validated = validate_claim_direction_payload(domain_payload)
         self._assert_amount_provenance(validated, facts)
+        self._assert_interest_safety(validated, facts)
 
         fingerprint = _payload_fingerprint(validated)
         existing = self._find_duplicate(case_id, fingerprint)
@@ -472,6 +486,23 @@ class ClaimDirectionService:
                     f"amount {amount} is not grounded in CONFIRMED Fact amounts "
                     f"(cannot invent money); known={sorted(known)}"
                 )
+
+    def _assert_interest_safety(
+        self, payload: dict[str, Any], facts: list[FactView]
+    ) -> None:
+        """Reject interest fields unless CONFIRMED facts mention interest terms."""
+        import re
+
+        supported = any(
+            re.search(r"利率|利息|LPR|起算|年息|日息", f.statement or "") for f in facts
+        )
+        for item in payload.get("claims") or []:
+            if item.get("interest_rate") or item.get("interest_start_date"):
+                if not supported:
+                    raise ValidationError(
+                        "interest fields require CONFIRMED Fact support; "
+                        "cannot invent LPR/rate/start date"
+                    )
 
     def _find_duplicate(
         self, case_id: UUID, fingerprint: str
@@ -575,4 +606,8 @@ class ClaimDirectionService:
             exec_row.error_detail = "all claim direction proposals failed validation"
         else:
             exec_row.status = "SUCCEEDED"
+            meta = getattr(self.engine, "last_meta", None)
+            if isinstance(meta, dict):
+                metrics["llm"] = meta
+                exec_row.metrics_json = metrics
         self.session.flush()

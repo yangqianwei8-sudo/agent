@@ -1,0 +1,317 @@
+(() => {
+  const root = document.querySelector(".workspace");
+  if (!root) return;
+  const caseId = root.dataset.caseId;
+  const storageKey = `lca_conversation_${caseId}`;
+  let conversationId = localStorage.getItem(storageKey) || null;
+  let workspace = window.__WORKSPACE_BOOT__ || null;
+
+  const els = {
+    materialsBody: document.querySelector("#materials-table tbody"),
+    parties: document.getElementById("parties-panel"),
+    evidence: document.getElementById("evidence-panel"),
+    facts: document.getElementById("facts-panel"),
+    claim: document.getElementById("claim-panel"),
+    draft: document.getElementById("draft-panel"),
+    chatLog: document.getElementById("chat-log"),
+    agentMeta: document.getElementById("agent-meta"),
+    chatError: document.getElementById("chat-error"),
+    uploadError: document.getElementById("upload-error"),
+    wfStatus: document.getElementById("wf-status"),
+    wfNode: document.getElementById("wf-node"),
+    wfPending: document.getElementById("wf-pending"),
+    wfBlocking: document.getElementById("wf-blocking"),
+    aiMode: document.getElementById("ai-mode"),
+    aiModel: document.getElementById("ai-model"),
+    draftModal: document.getElementById("draft-modal"),
+    draftBody: document.getElementById("draft-body"),
+  };
+
+  function badge(text) {
+    return `<span class="badge ${text || ""}">${text || "—"}</span>`;
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
+
+  function renderMaterials(list) {
+    els.materialsBody.innerHTML = (list || [])
+      .map((m) => {
+        const status = m.extraction_status || m.parse_status || "—";
+        const err = m.extraction_error
+          ? `<div class="muted">${escapeHtml(m.extraction_error)}</div>`
+          : "";
+        return `<tr>
+          <td>${escapeHtml(m.filename)}</td>
+          <td>${escapeHtml(m.mime)}</td>
+          <td>${escapeHtml(m.created_at || "—")}</td>
+          <td>${badge(status)}${err}</td>
+          <td>${escapeHtml(m.extraction_method || "—")}</td>
+        </tr>`;
+      })
+      .join("");
+  }
+
+  function renderParties(list) {
+    if (!list || !list.length) {
+      els.parties.innerHTML = `<p class="muted">暂无当事人。</p>`;
+      return;
+    }
+    els.parties.innerHTML = `<table class="table"><thead><tr><th>#</th><th>角色</th><th>名称</th><th>状态</th><th></th></tr></thead><tbody>
+      ${list
+        .map(
+          (p) => `<tr>
+          <td>${p.display_index}</td>
+          <td>${escapeHtml(p.role)}</td>
+          <td>${escapeHtml(p.name)}</td>
+          <td>${badge(p.layer)}</td>
+          <td class="row-actions">
+            ${
+              p.layer === "CANDIDATE"
+                ? `<button class="btn small" data-agent-msg="确认当事人${p.display_index}">确认</button>`
+                : ""
+            }
+          </td>
+        </tr>`
+        )
+        .join("")}
+    </tbody></table>`;
+  }
+
+  function renderEvidence(list) {
+    if (!list || !list.length) {
+      els.evidence.innerHTML = `<p class="muted">暂无证据。可先「开始处理」并「继续」到整理证据。</p>`;
+      return;
+    }
+    els.evidence.innerHTML = `<table class="table"><thead><tr><th>编号</th><th>标题</th><th>摘要</th><th>状态</th><th>v</th><th></th></tr></thead><tbody>
+      ${list
+        .map(
+          (e) => `<tr>
+          <td>${escapeHtml(e.number)}</td>
+          <td>${escapeHtml(e.title)}</td>
+          <td>${escapeHtml((e.summary || "").slice(0, 80))}</td>
+          <td>${badge(e.acceptance)}</td>
+          <td>${e.version}</td>
+          <td class="row-actions">
+            ${
+              e.acceptance === "PENDING"
+                ? `<button class="btn small" data-agent-msg="接受证据${e.number}">接受</button>
+                   <button class="btn small" data-agent-msg="排除证据${e.number}">排除</button>`
+                : ""
+            }
+          </td>
+        </tr>`
+        )
+        .join("")}
+    </tbody></table>`;
+  }
+
+  function renderFacts(list) {
+    if (!list || !list.length) {
+      els.facts.innerHTML = `<p class="muted">暂无事实。</p>`;
+      return;
+    }
+    els.facts.innerHTML = `<table class="table"><thead><tr><th>#</th><th>陈述</th><th>状态</th><th>v</th><th>stale</th><th></th></tr></thead><tbody>
+      ${list
+        .map(
+          (f) => `<tr>
+          <td>${f.display_index}</td>
+          <td>${escapeHtml(f.statement)}</td>
+          <td>${badge(f.status)}</td>
+          <td>${f.version}</td>
+          <td>${f.stale ? "是" : "否"}</td>
+          <td class="row-actions">
+            ${
+              f.status === "CANDIDATE"
+                ? `<button class="btn small" data-agent-msg="确认事实${f.display_index}">确认</button>
+                   <button class="btn small" data-agent-msg="拒绝事实${f.display_index}">拒绝</button>`
+                : ""
+            }
+          </td>
+        </tr>`
+        )
+        .join("")}
+    </tbody></table>`;
+  }
+
+  function renderClaim(c) {
+    if (!c) {
+      els.claim.innerHTML = `<p class="muted">暂无诉讼请求建议。</p>`;
+      return;
+    }
+    els.claim.innerHTML = `
+      <p>${badge(c.status)} v${c.version} ${c.stale ? "(stale)" : ""}</p>
+      <p><strong>策略</strong>：${escapeHtml(c.overall_strategy || "—")}</p>
+      <p><strong>类型</strong>：${escapeHtml(c.claim_type || "—")}</p>
+      <p><strong>描述</strong>：${escapeHtml(c.description || "—")}</p>
+      <p><strong>金额</strong>：${escapeHtml(c.amount ?? "—")} ${escapeHtml(c.currency || "")}</p>
+      <p><strong>计算基础</strong>：${escapeHtml(c.calculation_basis || "—")}</p>
+      ${
+        c.status === "CANDIDATE"
+          ? `<button class="btn small" data-agent-msg="确认诉讼请求1">确认诉讼请求</button>`
+          : ""
+      }
+    `;
+  }
+
+  function renderDraft(d) {
+    if (!d) {
+      els.draft.innerHTML = `<p class="muted">暂无起诉状草稿。</p>`;
+      return;
+    }
+    els.draft.innerHTML = `
+      <p>${badge(d.status)} v${d.version} ${d.stale_reason ? "stale: " + escapeHtml(d.stale_reason) : ""}</p>
+      <div class="row-actions">
+        <button class="btn small" id="btn-view-draft">查看全文</button>
+        ${
+          d.status === "DRAFT" || d.status === "IN_REVIEW"
+            ? `<button class="btn small primary" data-agent-msg="批准这份起诉状">批准这份起诉状</button>`
+            : ""
+        }
+        <button class="btn small" data-agent-msg="生成起诉状">生成/重新生成</button>
+      </div>
+    `;
+    const viewBtn = document.getElementById("btn-view-draft");
+    if (viewBtn) {
+      viewBtn.onclick = () => {
+        els.draftBody.textContent = JSON.stringify(d.body_structured_json || {}, null, 2);
+        els.draftModal.showModal();
+      };
+    }
+  }
+
+  function renderChat(messages) {
+    els.chatLog.innerHTML = (messages || [])
+      .map(
+        (m) => `<div class="msg ${m.role}">
+          <div class="role">${escapeHtml(m.role)} · ${escapeHtml(m.created_at || "")}</div>
+          <div>${escapeHtml(m.content)}</div>
+        </div>`
+      )
+      .join("");
+    els.chatLog.scrollTop = els.chatLog.scrollHeight;
+  }
+
+  function renderWorkflow(wf) {
+    els.wfStatus.textContent = wf.status || "未启动";
+    els.wfNode.textContent = wf.current_node_label || "—";
+    els.wfPending.textContent = wf.pending_count || 0;
+    els.wfBlocking.textContent = wf.blocking_reason || "";
+  }
+
+  function renderAi(ai) {
+    if (!els.aiMode) return;
+    els.aiMode.textContent = (ai && ai.ai_mode) || "Deterministic";
+    if (els.aiModel) {
+      els.aiModel.textContent = ai && ai.model ? " · " + ai.model : "";
+    }
+  }
+
+  function renderAll(data) {
+    workspace = data;
+    renderAi(data.ai || {});
+    renderWorkflow(data.workflow || {});
+    renderMaterials(data.materials || []);
+    renderParties(data.parties || []);
+    renderEvidence(data.evidence || []);
+    renderFacts(data.facts || []);
+    renderClaim(data.claim_direction);
+    renderDraft(data.draft);
+    renderChat(data.conversation || []);
+  }
+
+  async function refreshWorkspace() {
+    const res = await fetch(`/api/cases/${caseId}/workspace`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    renderAll(data);
+    return data;
+  }
+
+  async function sendAgentMessage(message) {
+    els.chatError.hidden = true;
+    const body = { message, conversation_id: conversationId };
+    const res = await fetch(`/cases/${caseId}/agent/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = data.detail || data.message || res.statusText;
+      els.chatError.hidden = false;
+      els.chatError.textContent = typeof detail === "string" ? detail : JSON.stringify(detail);
+      return;
+    }
+    if (data.conversation_id) {
+      conversationId = data.conversation_id;
+      localStorage.setItem(storageKey, conversationId);
+    }
+    const bits = [
+      `intent=${data.intent || ""}`,
+      `status=${data.workflow_status || ""}`,
+      `node=${data.current_node || ""}`,
+    ];
+    if (data.blocking_reason) bits.push(data.blocking_reason);
+    if (data.warnings && data.warnings.length) bits.push("warnings: " + data.warnings.join("; "));
+    if (data.error_code) bits.push("error=" + data.error_code);
+    els.agentMeta.textContent = bits.join(" · ");
+    await refreshWorkspace();
+  }
+
+  document.getElementById("chat-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const input = document.getElementById("chat-input");
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = "";
+    await sendAgentMessage(msg);
+  });
+
+  document.getElementById("quick-actions").addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("button[data-msg]");
+    if (!btn) return;
+    await sendAgentMessage(btn.dataset.msg);
+  });
+
+  root.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("[data-agent-msg]");
+    if (!btn) return;
+    await sendAgentMessage(btn.dataset.agentMsg);
+  });
+
+  document.getElementById("upload-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    els.uploadError.hidden = true;
+    const fileInput = document.getElementById("upload-file");
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) {
+      els.uploadError.hidden = false;
+      els.uploadError.textContent = "请选择 PDF 或 DOCX 文件。";
+      return;
+    }
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`/api/cases/${caseId}/materials`, { method: "POST", body: fd });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      els.uploadError.hidden = false;
+      els.uploadError.textContent = data.detail || "上传失败";
+      return;
+    }
+    if (!data.success) {
+      els.uploadError.hidden = false;
+      els.uploadError.textContent =
+        "文件已登记，但解析未成功：" + (data.extraction_error || data.extraction_status);
+    }
+    fileInput.value = "";
+    await refreshWorkspace();
+  });
+
+  if (workspace) renderAll(workspace);
+})();
