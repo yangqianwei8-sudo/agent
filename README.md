@@ -1,6 +1,16 @@
 # 诉讼案件工作 Agent V1
 
-当前进度：**Phase 4 Material / Extraction**（终点：SourceSpan）
+## Lawyer Case Agent V1
+
+- **Status:** V1 Acceptance PASS
+- **Core workflow:** CLOSED LOOP
+- **Acceptance regression:** `backend/tests/acceptance/test_v1_live_acceptance.py`
+
+Documents:
+
+- [docs/V1_FINAL_ACCEPTANCE.md](docs/V1_FINAL_ACCEPTANCE.md)
+- [docs/V1_TECH_DEBT.md](docs/V1_TECH_DEBT.md)
+- [docs/V1_1_BACKLOG.md](docs/V1_1_BACKLOG.md)
 
 ## 快速开始
 
@@ -20,7 +30,8 @@ ruff check backend
 pytest -q
 ```
 
-## 阶段边界
+Acceptance (synthetic case data):
 
-- Phase 4：CaseMaterial → ExtractedContent → SourceSpan（含 Pdf/Docx/OCR stub）
-- **不做**：EvidenceItem、Organizer、LLM、Agent、前端
+```bash
+pytest backend/tests/acceptance -q
+```

@@ -305,6 +305,7 @@ class DomainService:
         source_span_ids: list[UUID] | None = None,
         evidence_id: UUID | None = None,
         actor_id: UUID | None = None,
+        organizer_run_id: UUID | None = None,
     ) -> EvidenceItem:
         self._require_case(case_id)
         eid = evidence_id or uuid.uuid4()
@@ -318,6 +319,7 @@ class DomainService:
             category=category,
             summary=summary,
             acceptance=EvidenceAcceptance.PENDING.value,
+            organizer_run_id=organizer_run_id,
         )
         self.repo.add(item)
         self.repo.flush()
@@ -340,7 +342,13 @@ class DomainService:
             "evidence_items",
             item.row_id,
             case_id=case_id,
-            after={"id": str(item.id), "version": item.version, "number": number},
+            after={
+                "id": str(item.id),
+                "version": item.version,
+                "number": number,
+                "acceptance": item.acceptance,
+                "organizer_run_id": str(organizer_run_id) if organizer_run_id else None,
+            },
         )
         return item
 
@@ -520,6 +528,7 @@ class DomainService:
         evidence_links: list[dict[str, Any]],
         importance: str = "SUPPORTING",
         actor_id: UUID | None = None,
+        analyst_run_id: UUID | None = None,
     ) -> Fact:
         self._require_case(case_id)
         if not evidence_links:
@@ -532,6 +541,7 @@ class DomainService:
             importance=importance,
             version=1,
             is_current=True,
+            analyst_run_id=analyst_run_id,
         )
         self.repo.add(fact)
         self.repo.flush()
@@ -560,7 +570,12 @@ class DomainService:
             "facts",
             fact.id,
             case_id=case_id,
-            after={"fact_key": str(fact.fact_key), "version": fact.version},
+            after={
+                "fact_key": str(fact.fact_key),
+                "version": fact.version,
+                "status": fact.status,
+                "analyst_run_id": str(analyst_run_id) if analyst_run_id else None,
+            },
         )
         return fact
 
@@ -962,6 +977,47 @@ class DomainService:
         )
         return new_claim
 
+    def reject_claim_direction(
+        self,
+        claim_direction_key: UUID,
+        *,
+        actor_id: UUID,
+        decision: HumanDecision | None = None,
+    ) -> ClaimDirection:
+        """CANDIDATE/CONFIRMED → REJECTED (DB already allows REJECTED; Phase 7 additive)."""
+        claim = self._require_current_claim(claim_direction_key)
+        if claim.status not in {
+            LayerStatus.CANDIDATE.value,
+            LayerStatus.CONFIRMED.value,
+        }:
+            raise ConflictError("claim direction cannot be rejected from current status")
+        decision = decision or self._new_decision(
+            case_id=claim.case_id,
+            actor_id=actor_id,
+            decision_type="REJECT_CLAIM_DIRECTION",
+            target_type="ClaimDirection",
+            target_id=claim.claim_direction_key,
+            result=DecisionResult.REJECTED.value,
+            payload={
+                "claim_direction_key": str(claim.claim_direction_key),
+                "version": claim.version,
+            },
+        )
+        self.repo.add_decision(decision)
+        self.repo.flush()
+        claim.status = LayerStatus.REJECTED.value
+        claim.is_current = True
+        claim.updated_at = _now()
+        self._audit(
+            actor_id,
+            "reject_claim_direction",
+            "claim_directions",
+            claim.id,
+            case_id=claim.case_id,
+            after={"status": claim.status, "decision_id": str(decision.id)},
+        )
+        return claim
+
     def invalidate_dependencies(
         self,
         event: StaleEvent,
@@ -1138,7 +1194,12 @@ class DomainService:
 
     def _assert_supporting_facts_confirmed(self, payload: dict[str, Any]) -> None:
         for item in payload.get("claims") or []:
-            for fact_id in item.get("supporting_fact_ids") or []:
+            fact_ids = item.get("supporting_fact_ids") or []
+            if not fact_ids:
+                raise ValidationError(
+                    "each claim requires at least one supporting_fact_id"
+                )
+            for fact_id in fact_ids:
                 fact_key = UUID(str(fact_id))
                 fact = self.repo.get_current_fact(fact_key)
                 if fact is None:

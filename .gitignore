@@ -32,3 +32,8 @@ Thumbs.db
 data/
 uploads/
 storage/
+
+# Acceptance run artifacts (regenerable)
+backend/tests/acceptance/last_acceptance_log.txt
+backend/tests/acceptance/last_provenance_chains.json
+backend/tests/acceptance/fixtures_v1/
