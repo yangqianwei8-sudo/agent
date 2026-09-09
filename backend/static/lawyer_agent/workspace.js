@@ -235,34 +235,77 @@
   }
 
   async function sendAgentMessage(message) {
+    if (root.dataset.busy === "1") return;
+    root.dataset.busy = "1";
     els.chatError.hidden = true;
-    const body = { message, conversation_id: conversationId };
-    const res = await fetch(`/cases/${caseId}/agent/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+    const loading = document.getElementById("agent-loading");
+    if (loading) {
+      loading.hidden = false;
+      const hint = loading.querySelector("[data-loading-text]");
+      if (hint) {
+        const lower = String(message || "");
+        if (lower.includes("继续") || lower.includes("开始")) {
+          hint.textContent = "AI 正在处理案件……请勿重复提交。";
+        } else if (lower.includes("生成") || lower.includes("起诉状")) {
+          hint.textContent = "AI 正在起草起诉状……请勿重复提交。";
+        } else {
+          hint.textContent = "正在处理你的指令……请勿重复提交。";
+        }
+      }
+    }
+    document.querySelectorAll("button, #chat-form button").forEach((b) => {
+      if (b instanceof HTMLButtonElement) b.disabled = true;
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const detail = data.detail || data.message || res.statusText;
+    try {
+      const body = { message, conversation_id: conversationId };
+      const res = await fetch(`/cases/${caseId}/agent/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = data.detail || data.message || res.statusText;
+        els.chatError.hidden = false;
+        els.chatError.textContent =
+          typeof detail === "string" ? detail : JSON.stringify(detail);
+        return;
+      }
+      if (data.conversation_id) {
+        conversationId = data.conversation_id;
+        localStorage.setItem(storageKey, conversationId);
+      }
+      const bits = [];
+      if (data.current_node_label) bits.push(data.current_node_label);
+      else if (data.current_node) bits.push(data.current_node);
+      if (data.workflow_status === "WAITING_USER") bits.push("等待你确认");
+      else if (data.workflow_status === "WAITING_RETRY") bits.push("可重试");
+      else if (data.workflow_status === "SUCCEEDED") bits.push("已完成");
+      if (data.blocking_reason) bits.push(data.blocking_reason);
+      if (data.error_code) bits.push("需处理错误");
+      els.agentMeta.textContent = bits.join(" · ");
+      const diag = document.getElementById("agent-diag");
+      if (diag) {
+        diag.textContent = [
+          data.intent || "",
+          data.workflow_status || "",
+          data.current_node || "",
+          data.error_code || "",
+        ]
+          .filter(Boolean)
+          .join(" · ");
+      }
+      await refreshWorkspace();
+    } catch (err) {
       els.chatError.hidden = false;
-      els.chatError.textContent = typeof detail === "string" ? detail : JSON.stringify(detail);
-      return;
+      els.chatError.textContent = "网络或服务异常，请稍后重试。";
+    } finally {
+      root.dataset.busy = "0";
+      if (loading) loading.hidden = true;
+      document.querySelectorAll("button").forEach((b) => {
+        if (b instanceof HTMLButtonElement) b.disabled = false;
+      });
     }
-    if (data.conversation_id) {
-      conversationId = data.conversation_id;
-      localStorage.setItem(storageKey, conversationId);
-    }
-    const bits = [
-      `intent=${data.intent || ""}`,
-      `status=${data.workflow_status || ""}`,
-      `node=${data.current_node || ""}`,
-    ];
-    if (data.blocking_reason) bits.push(data.blocking_reason);
-    if (data.warnings && data.warnings.length) bits.push("warnings: " + data.warnings.join("; "));
-    if (data.error_code) bits.push("error=" + data.error_code);
-    els.agentMeta.textContent = bits.join(" · ");
-    await refreshWorkspace();
   }
 
   document.getElementById("chat-form").addEventListener("submit", async (ev) => {

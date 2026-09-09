@@ -535,17 +535,16 @@ class CommandHandler:
             if result.instance.current_node_id
             else None
         )
-        msg = (
-            f"已完成 {label}。"
-            f"当前：{node.code if node else 'DONE'} / {result.instance.status}"
-            + (
-                f"（{result.instance.waiting_reason}）"
-                if result.instance.waiting_reason
-                else ""
-            )
-        )
+        msg = f"已完成「{label}」。"
         assert cmd is not None
-        self._finish_cmd(cmd, {"message": msg})
+        self._finish_cmd(
+            cmd,
+            {
+                "message": msg,
+                "next_node": node.code if node else None,
+                "status": result.instance.status,
+            },
+        )
         return HandlerResult(message=msg, intent=AgentIntent.CONTINUE, command_id=cmd_id)
 
     def _run_n1(self, ctx: CaseContext) -> HandlerResult:
@@ -635,13 +634,8 @@ class CommandHandler:
             actor_id=self.actor_id,
             auto_complete=True,
         )
-        pending = len(result.created) + len(
-            [x for x in result.amended if x.acceptance == "PENDING"]
-        )
         msg = (
             f"证据整理完成，新增/更新 {len(result.evidence_item_ids)} 条证据。"
-            f"已进入 N3 确认门，待确认约 {pending} 条。"
-            "可以说「接受证据1」「排除证据2」或「查看证据」。"
         )
         assert cmd is not None
         self._finish_cmd(cmd, {"message": msg})
@@ -1769,44 +1763,21 @@ class CommandHandler:
             return "尚无工作流。可以说「开始处理这个案件」。"
         code = ctx.current_node.code if ctx.current_node else "?"
         label = ctx.current_node.name if ctx.current_node else ""
-        pending = 0
-        blocking = None
-        if code == "N3_CONFIRM_EVIDENCE":
-            pending = len(ctx.pending_evidence)
-            blocking = f"{pending} 条 Evidence 待律师确认"
-        elif code == "N5_CONFIRM_PARTIES":
-            pending = len(ctx.pending_parties)
-            party_ok = self.analyst.is_party_gate_complete(ctx.case.id)
-            blocking = "当事人待确认" if pending or not party_ok else None
-        elif code == "N6_CONFIRM_FACTS":
-            pending = len(ctx.pending_facts)
-            blocking = f"{pending} 个 Fact Candidate 尚未由律师确认或拒绝"
-        elif code == "N7_CONFIRM_CLAIMS":
-            pending = len(ctx.pending_claims)
-            blocking = f"{pending} 条诉讼请求待确认" if pending else None
-        elif code == "N9_REVIEW":
-            d = ctx.latest_draft
-            blocking = (
-                f"草稿 v{d.version} status={d.status} 待审核"
-                if d
-                else "无草稿"
-            )
-        parts = [
-            f"workflow_status={ctx.workflow_status}",
-            f"current_node={code} ({label})",
-        ]
-        if ctx.waiting_reason:
-            parts.append(f"waiting_reason={ctx.waiting_reason}")
-        if pending:
-            parts.append(f"pending_count={pending}")
-        if blocking:
-            parts.append(f"blocking={blocking}")
-        if ctx.latest_draft and code == "N9_REVIEW":
-            parts.append(
-                f"draft_id={ctx.latest_draft.id} v{ctx.latest_draft.version} "
-                f"status={ctx.latest_draft.status}"
-            )
-        return "；".join(parts)
+        if ctx.workflow_status == "WAITING_RETRY":
+            return f"上一步失败，可输入「重试」。当前步骤：{label or code}。"
+        if ctx.workflow_status == "SUCCEEDED":
+            return "案件工作流已完成。"
+        if ctx.waiting_reason == "user_pause":
+            return f"案件已暂停，当前停在：{label or code}。可说「恢复」。"
+        hint = self._next_step_hint(ctx)
+        if hint:
+            return hint
+        status_zh = {
+            "RUNNING": "处理中",
+            "WAITING_USER": "等待你确认",
+            "PENDING": "待开始",
+        }.get(ctx.workflow_status or "", ctx.workflow_status or "")
+        return f"当前步骤：{label or code}（{status_zh}）。"
 
     def _accepted_evidence_refs(self, case_id: UUID) -> list[dict[str, Any]]:
         items = list(
@@ -1890,15 +1861,23 @@ def build_agent_response(
     if code == "N3_CONFIRM_EVIDENCE":
         pending = len(ctx.pending_evidence)
         if pending:
-            blocking = f"{pending} 条 Evidence 待确认"
+            blocking = f"{pending} 条证据待确认"
+    elif code == "N5_CONFIRM_PARTIES":
+        pending = len(ctx.pending_parties)
+        if pending:
+            blocking = f"{pending} 个当事人待确认"
     elif code == "N6_CONFIRM_FACTS":
         pending = len(ctx.pending_facts)
         if pending:
-            blocking = f"{pending} 个 Fact Candidate 待处理"
+            blocking = f"{pending} 个事实候选待处理"
     elif code == "N7_CONFIRM_CLAIMS":
         pending = len(ctx.pending_claims)
+        if pending:
+            blocking = f"{pending} 条诉讼请求待确认"
     elif code == "N9_REVIEW" and ctx.latest_draft:
-        blocking = f"draft status={ctx.latest_draft.status}"
+        blocking = "起诉状草稿待你审核"
+    elif ctx.workflow_status == "WAITING_RETRY":
+        blocking = "上一步失败，可输入「重试」"
 
     return AgentResponse(
         conversation_id=ctx.conversation_id,

@@ -127,6 +127,30 @@ a { color: var(--accent); text-decoration: none; }
 .msg.USER { background: #eef2ff; }
 .msg.AGENT { background: #ecfdf3; }
 .msg .role { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.2rem; }
+.agent-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0.55rem 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  background: #eef6ff;
+  border: 1px solid #c5d7ea;
+  color: var(--accent);
+  font-weight: 600;
+}
+.agent-loading[hidden] { display: none !important; }
+.spinner {
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid #c5d7ea;
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.agent-diag-wrap { margin: 0.35rem 0 0.5rem; font-size: 0.8rem; }
+.agent-diag-wrap summary { cursor: pointer; }
 .quick-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; }
 .quick-actions button { font-size: 0.82rem; }
 .chat-form { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; margin-top: 0.75rem; }

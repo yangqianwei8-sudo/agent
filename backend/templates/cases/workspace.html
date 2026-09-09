@@ -107,7 +107,15 @@
         <button type="button" data-msg="开始处理这个案件">开始处理</button>
       </div>
       <div id="chat-log" class="chat-log"></div>
+      <div id="agent-loading" class="agent-loading" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span data-loading-text>AI 正在处理案件……请勿重复提交。</span>
+      </div>
       <div id="agent-meta" class="agent-meta muted"></div>
+      <details class="agent-diag-wrap muted">
+        <summary>技术详情</summary>
+        <div id="agent-diag"></div>
+      </details>
       <div id="chat-error" class="error" hidden></div>
       <form id="chat-form" class="chat-form">
         <textarea id="chat-input" rows="3" placeholder="例如：继续 / 录入原告：某某公司 / 确认当事人1 / 批准这份起诉状"></textarea>
