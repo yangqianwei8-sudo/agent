@@ -1,0 +1,80 @@
+{
+  "seed_used": false,
+  "direct_domain": false,
+  "direct_db_mutation": false,
+  "browser_ui_party_form_verified_case": "58bc4b84-0c35-4079-a941-b66032bc1b92",
+  "browser_ui_party_form_verified": true,
+  "create": "api_same_as_browser_form",
+  "title": "Daily Use Party Fix Live-智图诉星海",
+  "case_id": "eb29ceb4-1b76-4fd4-b7d9-3c4f5f9828ea",
+  "upload": true,
+  "evidence_node": "N3_CONFIRM_EVIDENCE",
+  "evidence": true,
+  "party_count_before": 0,
+  "n5_node": "N5_CONFIRM_PARTIES",
+  "n5_status": "WAITING_USER",
+  "hao_intent": "UNKNOWN",
+  "plaintiff_created_by": "UI Party create API",
+  "plaintiff": {
+    "party_key": "fc9a131c-ad0f-4ec6-bdbd-9dc034371c96",
+    "role": "PLAINTIFF",
+    "name": "智图设计优化咨询有限公司",
+    "party_type": "ORG",
+    "layer": "CANDIDATE",
+    "version": 1,
+    "status_label": "待确认",
+    "role_label": "原告"
+  },
+  "restart_persistence": true,
+  "defendant_agent_intent": "CREATE_PARTY",
+  "party_count_after_create": 2,
+  "candidates": [
+    {
+      "role": "PLAINTIFF",
+      "name": "智图设计优化咨询有限公司",
+      "layer": "CANDIDATE"
+    },
+    {
+      "role": "DEFENDANT",
+      "name": "星海地产开发有限公司",
+      "layer": "CANDIDATE"
+    }
+  ],
+  "hao_after_create_intent": "UNKNOWN",
+  "confirmed": [
+    {
+      "role": "PLAINTIFF",
+      "name": "智图设计优化咨询有限公司",
+      "layer": "CONFIRMED"
+    },
+    {
+      "role": "DEFENDANT",
+      "name": "星海地产开发有限公司",
+      "layer": "CONFIRMED"
+    }
+  ],
+  "party_confirmed": true,
+  "fact": true,
+  "hao_claim_intent": "UNKNOWN",
+  "claim": "CONFIRM_CLAIM_DIRECTION",
+  "hao_draft_intent": "UNKNOWN",
+  "writer": "APPROVE_DRAFT",
+  "n9": "N9_REVIEW",
+  "workflow_status": "SUCCEEDED",
+  "draft_status": "APPROVED_BY_LAWYER",
+  "writer_has_plaintiff": true,
+  "writer_has_defendant": true,
+  "parties_final": [
+    {
+      "role": "PLAINTIFF",
+      "name": "智图设计优化咨询有限公司",
+      "layer": "CONFIRMED"
+    },
+    {
+      "role": "DEFENDANT",
+      "name": "星海地产开发有限公司",
+      "layer": "CONFIRMED"
+    }
+  ],
+  "pass": true
+}

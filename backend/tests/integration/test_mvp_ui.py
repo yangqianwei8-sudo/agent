@@ -199,19 +199,25 @@ def test_j_k_l_ui_buttons_route_through_agent_messages_not_domain() -> None:
     assert 'data-agent-msg="接受证据' in js or "接受证据${e.number}" in js
     assert "确认事实${f.display_index}" in js
     assert 'data-agent-msg="批准这份起诉状"' in js
+    assert "确认当事人${p.display_index}" in js
     assert "/cases/${caseId}/agent/messages" in js
+    assert "/api/cases/${caseId}/parties" in js  # create candidate only
     # Must not call domain mutation paths from UI JS
     assert "accept_evidence" not in js
     assert "approve_document_draft" not in js
     assert "confirm_fact" not in js
-    # API surface: no bypass mutation routes under /api/cases
-    paths = {getattr(r, "path", "") for r in app.routes}
+    assert "confirm_party" not in js
+    # API surface: no bypass confirm/reject mutation routes under /api/cases
+    from backend.api.cases_api import router as cases_api_router
+
+    paths = {getattr(r, "path", "") for r in cases_api_router.routes}
     forbidden = [
         p
         for p in paths
-        if re.search(r"/api/cases/.+(accept|approve|confirm|exclude)", p, re.I)
+        if re.search(r"/api/cases/.+(accept|approve|confirm|exclude|reject)", p, re.I)
     ]
     assert forbidden == []
+    assert any(re.search(r"/api/cases/.+/parties$", p) for p in paths)
 
 
 def test_same_filename_creates_new_material_not_overwrite(

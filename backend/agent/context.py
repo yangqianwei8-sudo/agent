@@ -157,7 +157,9 @@ class CaseContextService:
             actions.append({"type": "ACCEPT_EVIDENCE", "label": "接受证据"})
             actions.append({"type": "EXCLUDE_EVIDENCE", "label": "排除证据"})
         if code == "N5_CONFIRM_PARTIES":
+            actions.append({"type": "CREATE_PARTY", "label": "录入当事人"})
             actions.append({"type": "CONFIRM_PARTY", "label": "确认当事人"})
+            actions.append({"type": "REJECT_PARTY", "label": "拒绝当事人"})
         if code == "N6_CONFIRM_FACTS":
             actions.append({"type": "CONFIRM_FACT", "label": "确认事实"})
             actions.append({"type": "REJECT_FACT", "label": "拒绝事实"})

@@ -209,7 +209,7 @@ class CaseAnalystService:
         return result
 
     def is_party_gate_complete(self, case_id: UUID) -> bool:
-        """N5: every current CaseParty must be CONFIRMED (and at least one exists)."""
+        """N5: no CANDIDATE left; at least one CONFIRMED; REJECTED is resolved."""
         parties = list(
             self.session.scalars(
                 select(CaseParty).where(
@@ -220,7 +220,11 @@ class CaseAnalystService:
         )
         if not parties:
             return False
-        return all(p.layer == "CONFIRMED" for p in parties)
+        if any(p.layer == "CANDIDATE" for p in parties):
+            return False
+        if not any(p.layer == "CONFIRMED" for p in parties):
+            return False
+        return all(p.layer in {"CONFIRMED", "REJECTED"} for p in parties)
 
     def is_fact_gate_complete(self, *, fact_keys: list[UUID]) -> bool:
         """N6: listed Facts must be CONFIRMED or REJECTED (no CANDIDATE)."""
@@ -298,7 +302,8 @@ class CaseAnalystService:
             raise NotFoundError("workflow instance not found")
         if not self.is_party_gate_complete(instance.case_id):
             raise ValidationError(
-                "N5 party gate incomplete: parties missing or not CONFIRMED"
+                "N5 party gate incomplete: parties missing, still CANDIDATE, "
+                "or no CONFIRMED party"
             )
 
     def complete_n5_confirm_parties(

@@ -854,6 +854,41 @@ class DomainService:
         )
         return new_party
 
+    def reject_party(
+        self,
+        party_key: UUID,
+        *,
+        actor_id: UUID,
+        decision: HumanDecision | None = None,
+    ) -> CaseParty:
+        """Reject a CANDIDATE party so N5 can proceed without confirming it."""
+        party = self._require_current_party(party_key)
+        if party.layer != LayerStatus.CANDIDATE.value:
+            raise ConflictError("only CANDIDATE party can be rejected")
+        decision = decision or self._new_decision(
+            case_id=party.case_id,
+            actor_id=actor_id,
+            decision_type="REJECT_PARTY",
+            target_type="CaseParty",
+            target_id=party.party_key,
+            result=DecisionResult.REJECTED.value,
+            payload={"party_key": str(party.party_key), "version": party.version},
+        )
+        self.repo.add_decision(decision)
+        self.repo.flush()
+        party.layer = LayerStatus.REJECTED.value
+        party.confirm_decision_id = decision.id
+        party.updated_at = _now()
+        self._audit(
+            actor_id,
+            "reject_party",
+            "case_parties",
+            party.id,
+            case_id=party.case_id,
+            after={"layer": party.layer, "decision_id": str(decision.id)},
+        )
+        return party
+
     # ----- ClaimDirection -----
 
     def create_claim_direction(

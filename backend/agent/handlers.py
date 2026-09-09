@@ -26,6 +26,7 @@ from backend.agent.resolver import TargetResolver
 from backend.application.case_analyst import CaseAnalystService
 from backend.application.claim_direction import ClaimDirectionService
 from backend.application.evidence_organizer import EvidenceOrganizerService
+from backend.application.party_management import PartyManagementService
 from backend.application.pleading_writer import PleadingWriterService
 from backend.domain.errors import ConflictError, DomainError, NotFoundError, ValidationError
 from backend.domain.services import DomainService
@@ -66,6 +67,21 @@ class HandlerResult:
     related_decision_id: UUID | None = None
 
 
+# Machine nodes must be executed in the same HTTP request that starts them.
+_MACHINE_NODE_CODES = frozenset(
+    {"N0_CREATE", "N1_PARSE", "N2_ORGANIZE", "N4_ANALYZE", "N8_WRITE"}
+)
+_HUMAN_GATE_CODES = frozenset(
+    {
+        "N3_CONFIRM_EVIDENCE",
+        "N5_CONFIRM_PARTIES",
+        "N6_CONFIRM_FACTS",
+        "N7_CONFIRM_CLAIMS",
+        "N9_REVIEW",
+    }
+)
+
+
 class CommandHandler:
     def __init__(
         self,
@@ -93,6 +109,7 @@ class CommandHandler:
             )
         self.organizer = organizer
         self.analyst = analyst
+        self.party_svc = PartyManagementService(session, domain=self.domain)
         if claim_svc is None or writer is None:
             from backend.llm.factory import (
                 build_claim_direction_engine,
@@ -125,6 +142,8 @@ class CommandHandler:
             AgentIntent.ACCEPT_EVIDENCE: self._accept_evidence,
             AgentIntent.EXCLUDE_EVIDENCE: self._exclude_evidence,
             AgentIntent.CONFIRM_PARTY: self._confirm_party,
+            AgentIntent.CREATE_PARTY: self._create_party,
+            AgentIntent.REJECT_PARTY: self._reject_party,
             AgentIntent.AMEND_PARTY: self._amend_party,
             AgentIntent.CONFIRM_FACT: self._confirm_fact,
             AgentIntent.REJECT_FACT: self._reject_fact,
@@ -151,11 +170,9 @@ class CommandHandler:
                 error_code=exc.code,
             )
         except LLMError as exc:
+            self._fail_current_machine_node(ctx, exc)
             return HandlerResult(
-                message=(
-                    "本次 AI 调用失败，案件状态未被自动确认或推进，请重试。"
-                    f"（{exc.code}）"
-                ),
+                message=self._llm_failure_message(ctx, exc),
                 intent=intent.intent,
                 error_code=AgentErrorCode.LLM_REQUEST_FAILED,
             )
@@ -179,6 +196,13 @@ class CommandHandler:
         except WorkflowError as exc:
             return HandlerResult(
                 message=str(exc),
+                intent=intent.intent,
+                error_code=AgentErrorCode.INTERNAL_ERROR,
+            )
+        except Exception as exc:  # noqa: BLE001 — last-resort machine-node safety net
+            self._fail_current_machine_node(ctx, exc)
+            return HandlerResult(
+                message=self._llm_failure_message(ctx, exc),
                 intent=intent.intent,
                 error_code=AgentErrorCode.INTERNAL_ERROR,
             )
@@ -295,11 +319,18 @@ class CommandHandler:
         )
         cmd.instance_id = result.instance.id
         self.session.flush()
-        return HandlerResult(
-            message=msg,
+        # Same HTTP request: run machine nodes until the first human gate (N3).
+        started = HandlerResult(
+            message="案件工作流已启动。",
             intent=AgentIntent.START_CASE_WORKFLOW,
             command_id=cmd_id,
             references=[{"workflow_instance_id": str(result.instance.id)}],
+        )
+        ctx2 = self.context_svc.load(ctx.case.id, conversation_id=ctx.conversation_id)
+        return self._run_until_human_gate(
+            ctx2,
+            intent=AgentIntent.START_CASE_WORKFLOW,
+            seed=started,
         )
 
     def _pause(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
@@ -357,15 +388,25 @@ class CommandHandler:
             else None
         )
         msg = (
-            f"已从用户暂停恢复。当前节点：{node.code if node else code}，"
-            f"状态：{result.instance.status}。"
+            f"已从用户暂停恢复。当前步骤：{node.name if node else code}。"
         )
-        return HandlerResult(
+        seed = HandlerResult(
             message=msg,
             intent=AgentIntent.RESUME,
             command_id=cmd_id,
             idempotent_replay=result.idempotent_replay,
         )
+        ctx2 = self.context_svc.load(ctx.case.id, conversation_id=ctx.conversation_id)
+        # If resume lands on a machine node that was left RUNNING, execute it now.
+        if (
+            ctx2.current_node
+            and ctx2.current_node.code in _MACHINE_NODE_CODES
+            and ctx2.workflow_status == "RUNNING"
+        ):
+            return self._run_until_human_gate(
+                ctx2, intent=AgentIntent.RESUME, seed=seed
+            )
+        return seed
 
     def _retry(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
         if ctx.instance is None:
@@ -377,14 +418,15 @@ class CommandHandler:
             )
         cmd_id = stable_command_id("RETRY", ctx.instance.id, ctx.instance.current_node_id)
         result = self.runtime.retry_node(ctx.instance.id, command_id=cmd_id)
-        return HandlerResult(
-            message=(
-                f"已重试当前节点（复用原 input snapshot）。"
-                f"node_run={result.node_run.id if result.node_run else None}"
-            ),
+        seed = HandlerResult(
+            message="已准备重新尝试当前步骤。",
             intent=AgentIntent.RETRY,
             command_id=cmd_id,
             idempotent_replay=result.idempotent_replay,
+        )
+        ctx2 = self.context_svc.load(ctx.case.id, conversation_id=ctx.conversation_id)
+        return self._run_until_human_gate(
+            ctx2, intent=AgentIntent.RETRY, seed=seed
         )
 
     def _continue(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
@@ -401,44 +443,23 @@ class CommandHandler:
         code = ctx.current_node.code if ctx.current_node else None
         if code is None:
             raise AgentError("工作流无当前节点", code=AgentErrorCode.INVALID_WORKFLOW_STATE)
-
-        if code == "N0_CREATE":
-            return self._run_machine_complete(ctx, label="N0_CREATE")
-        if code == "N1_PARSE":
-            return self._run_n1(ctx)
-        if code == "N2_ORGANIZE":
-            return self._run_n2(ctx)
-        if code == "N3_CONFIRM_EVIDENCE":
-            return self._gate_continue_evidence(ctx)
-        if code == "N4_ANALYZE":
-            return self._run_n4(ctx)
-        if code == "N5_CONFIRM_PARTIES":
-            return self._gate_continue_parties(ctx)
-        if code == "N6_CONFIRM_FACTS":
-            return self._gate_continue_facts(ctx)
-        if code == "N7_CONFIRM_CLAIMS":
-            return self._gate_continue_claims(ctx)
-        if code == "N8_WRITE":
-            return self._run_n8(ctx)
-        if code == "N9_REVIEW":
-            return self._gate_continue_draft(ctx)
-        raise AgentError(f"未知节点 {code}", code=AgentErrorCode.INVALID_WORKFLOW_STATE)
+        return self._run_until_human_gate(ctx, intent=AgentIntent.CONTINUE)
 
     def _organize(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
         if ctx.current_node and ctx.current_node.code == "N2_ORGANIZE":
-            return self._run_n2(ctx)
+            return self._run_until_human_gate(ctx, intent=AgentIntent.ORGANIZE_EVIDENCE)
         raise AgentError(
-            "当前不在 N2_ORGANIZE，无法整理证据。可说「继续」按工作流推进。",
+            "当前不在证据整理步骤，无法整理证据。可说「继续」按工作流推进。",
             code=AgentErrorCode.INVALID_WORKFLOW_STATE,
         )
 
     def _generate_complaint(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
         if ctx.current_node and ctx.current_node.code == "N8_WRITE":
-            return self._run_n8(ctx)
+            return self._run_until_human_gate(ctx, intent=AgentIntent.GENERATE_COMPLAINT)
         if ctx.current_node and ctx.current_node.code == "N9_REVIEW":
             return HandlerResult(
                 message=(
-                    "起诉状草稿已存在，当前在 N9 审核。"
+                    "起诉状草稿已存在，当前在审核阶段。"
                     "可说「查看起诉状」或「批准这份起诉状」。"
                 ),
                 intent=AgentIntent.GENERATE_COMPLAINT,
@@ -655,8 +676,7 @@ class CommandHandler:
             auto_complete=True,
         )
         msg = (
-            f"案件分析完成，提出 {len(result.created_facts)} 条事实候选。"
-            "已进入当事人/事实确认门。请确认当事人与事实。"
+            f"AI 已根据你确认的证据完成案件分析，提出 {len(result.created_facts)} 条事实候选。"
         )
         assert cmd is not None
         self._finish_cmd(cmd, {"message": msg})
@@ -702,8 +722,8 @@ class CommandHandler:
             else:
                 warnings.append(str(w))
         msg = (
-            f"起诉状草稿已生成（version={result.draft.version if result.draft else '?'}）。"
-            "已进入 N9 审核，不会自动批准。可说「查看起诉状」或「批准这份起诉状」。"
+            f"起诉状草稿已生成（第 {result.draft.version if result.draft else '?'} 版）。"
+            "现在需要你审核草稿；说「查看起诉状」或「批准这份起诉状」。"
         )
         assert cmd is not None
         self._finish_cmd(cmd, {"message": msg, "warnings": warnings})
@@ -772,9 +792,9 @@ class CommandHandler:
             node_run_id=node_run.id,
             auto_advance=True,
         )
-        msg = f"证据确认门已完成。当前状态 {done.instance.status}。"
+        msg = "证据确认已经完成。"
         assert cmd is not None
-        self._finish_cmd(cmd, {"message": msg})
+        self._finish_cmd(cmd, {"message": msg, "instance_status": done.instance.status})
         return HandlerResult(message=msg, intent=AgentIntent.CONTINUE, command_id=cmd_id)
 
     def _gate_continue_parties(self, ctx: CaseContext) -> HandlerResult:
@@ -792,7 +812,11 @@ class CommandHandler:
             )
             if not parties:
                 return HandlerResult(
-                    message="当前没有当事人记录，无法通过 N5。请先由分析流程创建当事人候选。",
+                    message=(
+                        "当前没有当事人记录，无法通过 N5。"
+                        "请在「当事人」区域点击「新增当事人」，"
+                        "或对 Agent 说「录入原告：…」「录入被告：…」。"
+                    ),
                     intent=AgentIntent.CONTINUE,
                     error_code=AgentErrorCode.HUMAN_GATE_REQUIRED,
                 )
@@ -804,7 +828,7 @@ class CommandHandler:
                 message=(
                     "当事人确认门：不能因「继续」自动确认。\n"
                     + "\n".join(lines)
-                    + "\n请说「确认当事人1」。"
+                    + "\n请说「确认当事人1」；录错且未确认的可「拒绝当事人1」。"
                 ),
                 intent=AgentIntent.CONTINUE,
                 error_code=AgentErrorCode.HUMAN_GATE_REQUIRED,
@@ -826,9 +850,9 @@ class CommandHandler:
             node_run_id=node_run.id,
             auto_advance=True,
         )
-        msg = f"当事人确认完成，进入 {done.instance.waiting_reason or done.instance.status}。"
+        msg = "当事人确认完成。现在需要你确认案件事实。"
         assert cmd is not None
-        self._finish_cmd(cmd, {"message": msg})
+        self._finish_cmd(cmd, {"message": msg, "status": done.instance.status})
         return HandlerResult(message=msg, intent=AgentIntent.CONTINUE, command_id=cmd_id)
 
     def _gate_continue_facts(self, ctx: CaseContext) -> HandlerResult:
@@ -873,9 +897,9 @@ class CommandHandler:
             node_run_id=node_run.id,
             auto_advance=True,
         )
-        msg = f"事实确认门完成。当前 {done.instance.status}/{done.instance.waiting_reason}。"
+        msg = "事实确认已经完成。接下来将生成诉讼请求建议。"
         assert cmd is not None
-        self._finish_cmd(cmd, {"message": msg})
+        self._finish_cmd(cmd, {"message": msg, "status": done.instance.status})
         return HandlerResult(message=msg, intent=AgentIntent.CONTINUE, command_id=cmd_id)
 
     def _gate_continue_claims(self, ctx: CaseContext) -> HandlerResult:
@@ -955,9 +979,9 @@ class CommandHandler:
             node_run_id=node_run.id,
             auto_advance=True,
         )
-        msg = f"诉讼请求确认完成。当前 {done.instance.status}。"
+        msg = "诉讼请求确认已经完成。"
         assert cmd is not None
-        self._finish_cmd(cmd, {"message": msg})
+        self._finish_cmd(cmd, {"message": msg, "status": done.instance.status})
         return HandlerResult(message=msg, intent=AgentIntent.CONTINUE, command_id=cmd_id)
 
     def _gate_continue_draft(self, ctx: CaseContext) -> HandlerResult:
@@ -1195,6 +1219,55 @@ class CommandHandler:
             ],
         )
 
+    def _create_party(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
+        params = intent.parameters or {}
+        role = params.get("role")
+        name = params.get("name")
+        if not role or not name:
+            raise AgentError(
+                "请明确角色与名称，例如：录入原告：某某公司",
+                code=AgentErrorCode.VALIDATION_ERROR,
+            )
+        # Speculative language must never create parties
+        raw_reason = str(params.get("llm_reason") or params.get("target_text") or "")
+        blob = f"{name} {raw_reason}"
+        if any(w in blob for w in ("可能", "好像", "看起来", "是不是", "是否")):
+            raise AgentError(
+                "未明确要求录入当事人，未创建。请使用「录入原告：…」等明确指令。",
+                code=AgentErrorCode.VALIDATION_ERROR,
+            )
+        try:
+            dto = self.party_svc.create_party_candidate(
+                case_id=ctx.case.id,
+                role=str(role),
+                name=str(name),
+                actor_id=self.actor_id,
+                party_type=params.get("party_type"),
+            )
+        except ValidationError as exc:
+            raise AgentError(exc.message, code=AgentErrorCode.VALIDATION_ERROR) from exc
+        except ConflictError as exc:
+            raise AgentError(exc.message, code=AgentErrorCode.VALIDATION_ERROR) from exc
+        role_label = {"PLAINTIFF": "原告", "DEFENDANT": "被告", "THIRD_PARTY": "第三人"}.get(
+            dto.role, dto.role
+        )
+        msg = (
+            f"已录入{role_label}“{dto.name}”，当前为待确认状态。"
+            "请在确认无误后明确确认该当事人。"
+        )
+        return HandlerResult(
+            message=msg,
+            intent=AgentIntent.CREATE_PARTY,
+            references=[
+                {
+                    "party_key": str(dto.party_key),
+                    "role": dto.role,
+                    "layer": dto.layer,
+                    "version": dto.version,
+                }
+            ],
+        )
+
     def _confirm_party(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
         if not intent.targets:
             raise AgentError("请指定当事人编号", code=AgentErrorCode.AMBIGUOUS_TARGET)
@@ -1222,6 +1295,34 @@ class CommandHandler:
         assert cmd is not None
         self._finish_cmd(cmd, {"message": msg})
         return HandlerResult(message=msg, intent=AgentIntent.CONFIRM_PARTY, command_id=cmd_id)
+
+    def _reject_party(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
+        if not intent.targets:
+            raise AgentError("请指定当事人编号", code=AgentErrorCode.AMBIGUOUS_TARGET)
+        resolver = TargetResolver(self.session, case_id=ctx.case.id)
+        party = resolver.resolve_party_by_display_index(int(intent.targets[0]))
+        cmd_id = stable_command_id(
+            "REJECT_PARTY", ctx.case.id, party.party_key, party.version
+        )
+        cmd, replay = self._begin_cmd(
+            cmd_id,
+            case_id=ctx.case.id,
+            instance_id=ctx.instance.id if ctx.instance else None,
+            command_type="REJECT_PARTY",
+            payload={"party_key": str(party.party_key)},
+        )
+        if replay and cmd is not None:
+            return self._replay_msg(cmd, AgentIntent.REJECT_PARTY)
+        if party.layer != "CANDIDATE":
+            raise AgentError(
+                f"仅 CANDIDATE 可拒绝，当前 {party.layer}",
+                code=AgentErrorCode.VALIDATION_ERROR,
+            )
+        updated = self.domain.reject_party(party.party_key, actor_id=self.actor_id)
+        msg = f"已拒绝当事人：{updated.role} {updated.name}"
+        assert cmd is not None
+        self._finish_cmd(cmd, {"message": msg})
+        return HandlerResult(message=msg, intent=AgentIntent.REJECT_PARTY, command_id=cmd_id)
 
     def _amend_party(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
         raise AgentError(
@@ -1445,6 +1546,220 @@ class CommandHandler:
                     "status": draft.status,
                 }
             ],
+        )
+
+    # ----- orchestration: no fake RUNNING -----
+
+    def _reload_ctx(self, ctx: CaseContext) -> CaseContext:
+        return self.context_svc.load(ctx.case.id, conversation_id=ctx.conversation_id)
+
+    def _step_current_node(self, ctx: CaseContext) -> HandlerResult:
+        """Execute exactly one node action for the current position (no chaining)."""
+        code = ctx.current_node.code if ctx.current_node else None
+        if code == "N0_CREATE":
+            return self._run_machine_complete(ctx, label="N0_CREATE")
+        if code == "N1_PARSE":
+            return self._run_n1(ctx)
+        if code == "N2_ORGANIZE":
+            return self._run_n2(ctx)
+        if code == "N3_CONFIRM_EVIDENCE":
+            return self._gate_continue_evidence(ctx)
+        if code == "N4_ANALYZE":
+            return self._run_n4(ctx)
+        if code == "N5_CONFIRM_PARTIES":
+            return self._gate_continue_parties(ctx)
+        if code == "N6_CONFIRM_FACTS":
+            return self._gate_continue_facts(ctx)
+        if code == "N7_CONFIRM_CLAIMS":
+            return self._gate_continue_claims(ctx)
+        if code == "N8_WRITE":
+            return self._run_n8(ctx)
+        if code == "N9_REVIEW":
+            return self._gate_continue_draft(ctx)
+        raise AgentError(f"未知节点 {code}", code=AgentErrorCode.INVALID_WORKFLOW_STATE)
+
+    def _run_until_human_gate(
+        self,
+        ctx: CaseContext,
+        *,
+        intent: AgentIntent,
+        seed: HandlerResult | None = None,
+    ) -> HandlerResult:
+        """Run machine nodes in this HTTP request until a human gate / terminal / failure.
+
+        RUNNING is only valid while a step is executing inside this loop.
+        """
+        parts: list[str] = []
+        warnings: list[str] = []
+        references: list[dict[str, Any]] = []
+        command_id = seed.command_id if seed else None
+        last_error: AgentErrorCode | None = None
+        if seed is not None:
+            if seed.message:
+                parts.append(seed.message)
+            warnings.extend(seed.warnings or [])
+            references.extend(seed.references or [])
+            last_error = seed.error_code
+
+        for _ in range(12):
+            ctx = self._reload_ctx(ctx)
+            if ctx.instance is None:
+                break
+            status = ctx.workflow_status or ""
+            if status in {"SUCCEEDED", "FAILED", "CANCELLED", "WAITING_RETRY"}:
+                break
+            if status == "WAITING_USER" and ctx.waiting_reason == "user_pause":
+                break
+
+            code = ctx.current_node.code if ctx.current_node else None
+            if code is None:
+                break
+
+            # At a human gate with WAITING_USER: run gate handler once (may propose
+            # or complete). If it stays waiting for the lawyer, stop.
+            if code in _HUMAN_GATE_CODES and status == "WAITING_USER":
+                step = self._step_current_node(ctx)
+                if step.message:
+                    parts.append(step.message)
+                warnings.extend(step.warnings or [])
+                references.extend(step.references or [])
+                if step.command_id:
+                    command_id = step.command_id
+                last_error = step.error_code
+                ctx_after = self._reload_ctx(ctx)
+                # Gate incomplete / still waiting → stop (do not auto-confirm).
+                if (
+                    step.error_code == AgentErrorCode.HUMAN_GATE_REQUIRED
+                    or (
+                        ctx_after.workflow_status == "WAITING_USER"
+                        and (
+                            ctx_after.current_node is None
+                            or ctx_after.current_node.code in _HUMAN_GATE_CODES
+                        )
+                        and (
+                            ctx_after.current_node is None
+                            or ctx_after.current_node.code == code
+                        )
+                    )
+                ):
+                    break
+                # Gate completed and advanced — loop to execute following machine nodes.
+                continue
+
+            if code in _MACHINE_NODE_CODES:
+                try:
+                    step = self._step_current_node(ctx)
+                except LLMError as exc:
+                    self._fail_current_machine_node(ctx, exc)
+                    parts.append(self._llm_failure_message(ctx, exc))
+                    last_error = AgentErrorCode.LLM_REQUEST_FAILED
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    self._fail_current_machine_node(ctx, exc)
+                    parts.append(self._llm_failure_message(ctx, exc))
+                    last_error = AgentErrorCode.INTERNAL_ERROR
+                    break
+                if step.message:
+                    parts.append(step.message)
+                warnings.extend(step.warnings or [])
+                references.extend(step.references or [])
+                if step.command_id:
+                    command_id = step.command_id
+                if step.error_code:
+                    last_error = step.error_code
+                    break
+                # After machine complete+auto_advance, either WAITING_USER gate or
+                # next machine RUNNING — loop continues.
+                continue
+
+            # Unknown / unexpected: stop safely
+            break
+
+        ctx_final = self._reload_ctx(ctx)
+        hint = self._next_step_hint(ctx_final)
+        if hint and (not parts or hint not in parts[-1]):
+            parts.append(hint)
+        message = "\n\n".join(p.strip() for p in parts if p and p.strip())
+        if not message:
+            message = self._status_text(ctx_final)
+        return HandlerResult(
+            message=message,
+            intent=intent,
+            warnings=warnings,
+            references=references,
+            error_code=last_error,
+            command_id=command_id,
+        )
+
+    def _next_step_hint(self, ctx: CaseContext) -> str:
+        if ctx.instance is None:
+            return ""
+        if ctx.workflow_status == "WAITING_RETRY":
+            return "你可以输入「重试」再次尝试本步骤。已确认的证据与决定不会丢失。"
+        if ctx.workflow_status == "SUCCEEDED":
+            return "案件工作流已全部完成。"
+        if ctx.workflow_status != "WAITING_USER":
+            return ""
+        code = ctx.current_node.code if ctx.current_node else None
+        if code == "N3_CONFIRM_EVIDENCE":
+            n = len(ctx.pending_evidence)
+            if n:
+                return f"现在需要你确认证据（还有 {n} 条待处理）。可说「接受证据1」或「排除证据2」。"
+            return "现在需要你确认证据。"
+        if code == "N5_CONFIRM_PARTIES":
+            return "现在需要你确认本案当事人。可在「当事人」区域新增，并说「确认当事人1」。"
+        if code == "N6_CONFIRM_FACTS":
+            return "现在需要你确认或拒绝事实候选。可说「确认事实1」或「拒绝事实1」。"
+        if code == "N7_CONFIRM_CLAIMS":
+            if ctx.pending_claims:
+                return "现在需要你确认诉讼请求。可说「确认诉讼请求1」。"
+            return "现在可以生成诉讼请求建议。请说「继续」。"
+        if code == "N9_REVIEW":
+            return "现在需要你审核起诉状草稿。可说「查看起诉状」或「批准这份起诉状」。"
+        return ""
+
+    def _fail_current_machine_node(self, ctx: CaseContext, exc: BaseException) -> None:
+        """Mark RUNNING machine NodeRun as FAILED/WAITING_RETRY via Runtime."""
+        try:
+            ctx2 = self._reload_ctx(ctx)
+            if ctx2.instance is None or ctx2.current_node is None:
+                return
+            if ctx2.current_node.code not in _MACHINE_NODE_CODES:
+                return
+            latest = self._current_node_run(ctx2)
+            if latest is None or latest.status != "RUNNING":
+                return
+            code = getattr(exc, "code", None) or type(exc).__name__
+            detail = getattr(exc, "message", None) or str(exc)
+            self.runtime.fail_node(
+                latest.id,
+                error_code=str(code)[:100],
+                error_detail=str(detail)[:500],
+                retryable=True,
+            )
+            self.session.flush()
+        except Exception:  # noqa: BLE001 — never mask original failure path
+            return
+
+    def _llm_failure_message(self, ctx: CaseContext, exc: BaseException) -> str:
+        code = ctx.current_node.code if ctx.current_node else ""
+        title = {
+            "N2_ORGANIZE": "证据整理失败",
+            "N4_ANALYZE": "案件分析失败",
+            "N7_CONFIRM_CLAIMS": "诉讼请求生成失败",
+            "N8_WRITE": "起诉状起草失败",
+        }.get(code, "AI 处理失败")
+        reason = getattr(exc, "message", None) or str(exc) or "未知错误"
+        err_code = getattr(exc, "code", None)
+        if err_code == "LLM_TIMEOUT" or "timeout" in reason.lower():
+            reason = "AI 服务请求超时。"
+        elif err_code:
+            reason = f"{reason}"
+        return (
+            f"{title}\n\n"
+            f"原因：\n{reason}\n\n"
+            "你已经确认的证据与决定不会丢失。\n\n"
+            "请输入「重试」重新尝试。"
         )
 
     # ----- helpers -----

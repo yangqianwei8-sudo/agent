@@ -59,7 +59,7 @@
 
   function renderParties(list) {
     if (!list || !list.length) {
-      els.parties.innerHTML = `<p class="muted">暂无当事人。</p>`;
+      els.parties.innerHTML = `<p class="muted">暂无当事人。请点击上方「新增当事人」录入原告/被告候选。</p>`;
       return;
     }
     els.parties.innerHTML = `<table class="table"><thead><tr><th>#</th><th>角色</th><th>名称</th><th>状态</th><th></th></tr></thead><tbody>
@@ -67,13 +67,14 @@
         .map(
           (p) => `<tr>
           <td>${p.display_index}</td>
-          <td>${escapeHtml(p.role)}</td>
+          <td>${escapeHtml(p.role_label || p.role)}</td>
           <td>${escapeHtml(p.name)}</td>
-          <td>${badge(p.layer)}</td>
+          <td>${badge(p.status_label || p.layer)}</td>
           <td class="row-actions">
             ${
               p.layer === "CANDIDATE"
-                ? `<button class="btn small" data-agent-msg="确认当事人${p.display_index}">确认</button>`
+                ? `<button class="btn small" data-agent-msg="确认当事人${p.display_index}">确认</button>
+                   <button class="btn small" data-agent-msg="拒绝当事人${p.display_index}">拒绝</button>`
                 : ""
             }
           </td>
@@ -312,6 +313,63 @@
     fileInput.value = "";
     await refreshWorkspace();
   });
+
+  const partyForm = document.getElementById("party-form");
+  const partyToggle = document.getElementById("btn-toggle-party-form");
+  const partyCancel = document.getElementById("btn-cancel-party-form");
+  const partyError = document.getElementById("party-form-error");
+
+  function setPartyFormOpen(open) {
+    if (!partyForm) return;
+    partyForm.hidden = !open;
+    if (partyError) {
+      partyError.hidden = true;
+      partyError.textContent = "";
+    }
+  }
+
+  if (partyToggle) {
+    partyToggle.addEventListener("click", () => setPartyFormOpen(partyForm.hidden));
+  }
+  if (partyCancel) {
+    partyCancel.addEventListener("click", () => setPartyFormOpen(false));
+  }
+  if (partyForm) {
+    partyForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      if (partyError) {
+        partyError.hidden = true;
+        partyError.textContent = "";
+      }
+      const role = document.getElementById("party-role").value;
+      const name = document.getElementById("party-name").value;
+      const body = {
+        role,
+        name,
+        address: document.getElementById("party-address").value || null,
+        legal_representative: document.getElementById("party-legal-rep").value || null,
+        credit_code: document.getElementById("party-credit-code").value || null,
+        contact: document.getElementById("party-contact").value || null,
+      };
+      const res = await fetch(`/api/cases/${caseId}/parties`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (partyError) {
+          partyError.hidden = false;
+          partyError.textContent =
+            typeof data.detail === "string" ? data.detail : "新增当事人失败";
+        }
+        return;
+      }
+      partyForm.reset();
+      setPartyFormOpen(false);
+      await refreshWorkspace();
+    });
+  }
 
   if (workspace) renderAll(workspace);
 })();

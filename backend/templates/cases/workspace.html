@@ -41,6 +41,34 @@
 
       <div class="card">
         <h2>当事人</h2>
+        <div class="party-create">
+          <button type="button" class="btn small" id="btn-toggle-party-form">+ 新增当事人</button>
+          <form id="party-form" class="party-form" hidden>
+            <label>角色
+              <select id="party-role" required>
+                <option value="">请选择</option>
+                <option value="PLAINTIFF">原告</option>
+                <option value="DEFENDANT">被告</option>
+                <option value="THIRD_PARTY">第三人</option>
+              </select>
+            </label>
+            <label>名称
+              <input id="party-name" type="text" maxlength="500" placeholder="当事人名称" required />
+            </label>
+            <details class="party-optional">
+              <summary>可选信息</summary>
+              <label>地址 <input id="party-address" type="text" maxlength="500" /></label>
+              <label>法定代表人 <input id="party-legal-rep" type="text" maxlength="200" /></label>
+              <label>统一社会信用代码 <input id="party-credit-code" type="text" maxlength="64" /></label>
+              <label>联系方式 <input id="party-contact" type="text" maxlength="200" /></label>
+            </details>
+            <div class="row-actions">
+              <button class="btn small primary" type="submit">保存候选</button>
+              <button class="btn small" type="button" id="btn-cancel-party-form">取消</button>
+            </div>
+            <div id="party-form-error" class="error" hidden></div>
+          </form>
+        </div>
         <div id="parties-panel"></div>
       </div>
 
@@ -82,7 +110,7 @@
       <div id="agent-meta" class="agent-meta muted"></div>
       <div id="chat-error" class="error" hidden></div>
       <form id="chat-form" class="chat-form">
-        <textarea id="chat-input" rows="3" placeholder="例如：继续 / 接受证据1 / 确认事实1 / 批准这份起诉状"></textarea>
+        <textarea id="chat-input" rows="3" placeholder="例如：继续 / 录入原告：某某公司 / 确认当事人1 / 批准这份起诉状"></textarea>
         <button class="btn primary" type="submit">发送</button>
       </form>
     </section>

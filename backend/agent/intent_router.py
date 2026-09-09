@@ -87,6 +87,26 @@ class DeterministicIntentRouter:
         if m := re.search(r"确认当事人\s*([0-9]+)", text):
             return IntentResult(intent=AgentIntent.CONFIRM_PARTY, targets=[m.group(1)])
 
+        if m := re.search(r"拒绝当事人\s*([0-9]+)", text):
+            return IntentResult(intent=AgentIntent.REJECT_PARTY, targets=[m.group(1)])
+
+        if m := re.search(
+            r"(?:录入|新增|添加)\s*(原告|被告|第三人)\s*[:：]?\s*(.+)$",
+            text,
+        ):
+            role_raw, name_raw = m.group(1), m.group(2).strip()
+            # Ambiguous speculation must not match — require explicit create verbs above
+            if name_raw and not re.search(r"(可能|好像|看起来|是不是|是否)", name_raw):
+                role_map = {
+                    "原告": "PLAINTIFF",
+                    "被告": "DEFENDANT",
+                    "第三人": "THIRD_PARTY",
+                }
+                return IntentResult(
+                    intent=AgentIntent.CREATE_PARTY,
+                    parameters={"role": role_map[role_raw], "name": name_raw},
+                )
+
         if m := re.search(r"确认诉讼请求\s*([0-9]+)?", text):
             targets = [m.group(1)] if m.group(1) else []
             return IntentResult(

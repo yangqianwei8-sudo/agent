@@ -1,4 +1,4 @@
-"""JSON APIs for lawyer MVP: cases, workspace, material upload."""
+"""JSON APIs for lawyer MVP: cases, workspace, material upload, party create."""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from backend.application.material_upload import MaterialUploadService
+from backend.application.party_management import PartyManagementService
 from backend.application.workspace import WorkspaceQueryService
-from backend.domain.errors import DomainError, ValidationError
+from backend.domain.errors import ConflictError, DomainError, NotFoundError, ValidationError
 from backend.domain.services import DomainService
 from backend.infrastructure.config import get_settings
 from backend.infrastructure.db import get_db_session
@@ -28,6 +29,22 @@ class CreateCaseBody(BaseModel):
     title: str = Field(min_length=1, max_length=500)
     goal_summary: str | None = Field(default=None, max_length=4000)
     owner_user_id: UUID | None = None
+
+
+class CreatePartyBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str
+    name: str
+    party_type: str | None = None
+    address: str | None = None
+    legal_representative: str | None = None
+    credit_code: str | None = None
+    contact: str | None = None
+    # Forbidden confirm flags — rejected explicitly in Application if present
+    status: str | None = None
+    confirmed: bool | None = None
+    layer: str | None = None
 
 
 @router.get("")
@@ -64,6 +81,50 @@ def api_workspace(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/{case_id}/parties")
+def api_create_party(
+    case_id: UUID,
+    body: CreatePartyBody,
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> dict[str, Any]:
+    case = session.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    try:
+        dto = PartyManagementService(session).create_party_candidate(
+            case_id=case_id,
+            role=body.role,
+            name=body.name,
+            actor_id=case.owner_user_id,
+            party_type=body.party_type,
+            address=body.address,
+            legal_representative=body.legal_representative,
+            credit_code=body.credit_code,
+            contact=body.contact,
+            status=body.status,
+            confirmed=body.confirmed,
+            layer=body.layer,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    except DomainError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    return {
+        "party_key": str(dto.party_key),
+        "role": dto.role,
+        "name": dto.name,
+        "party_type": dto.party_type,
+        "layer": dto.layer,
+        "version": dto.version,
+        "status_label": dto.to_dict()["status_label"],
+        "role_label": dto.to_dict()["role_label"],
+    }
 
 
 @router.post("/{case_id}/materials")

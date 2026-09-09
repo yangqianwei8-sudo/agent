@@ -243,13 +243,27 @@ class WorkspaceQueryService:
                 .order_by(CaseParty.created_at.asc(), CaseParty.party_key.asc())
             )
         )
+        role_labels = {
+            "PLAINTIFF": "原告",
+            "DEFENDANT": "被告",
+            "THIRD_PARTY": "第三人",
+            "OTHER": "其他",
+        }
+        status_labels = {
+            "CANDIDATE": "待确认",
+            "CONFIRMED": "已确认",
+            "REJECTED": "已拒绝",
+            "SUPERSEDED": "已替代",
+        }
         return [
             {
                 "party_key": str(p.party_key),
                 "role": p.role,
+                "role_label": role_labels.get(p.role, p.role),
                 "name": p.name,
                 "party_type": p.party_type,
                 "layer": p.layer,
+                "status_label": status_labels.get(p.layer, p.layer),
                 "version": p.version,
                 "display_index": i,
             }

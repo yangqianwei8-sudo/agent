@@ -10,6 +10,7 @@ from backend.application.evidence_organizer import (
     OrganizerApplyResult,
 )
 from backend.application.material_extraction import ExtractionOutcome, MaterialExtractionService
+from backend.application.party_management import PartyCandidateDTO, PartyManagementService
 from backend.application.pleading_writer import (
     PleadingWriterApplyResult,
     PleadingWriterService,
@@ -24,6 +25,8 @@ __all__ = [
     "OrganizerApplyResult",
     "MaterialExtractionService",
     "ExtractionOutcome",
+    "PartyManagementService",
+    "PartyCandidateDTO",
     "PleadingWriterService",
     "PleadingWriterApplyResult",
 ]

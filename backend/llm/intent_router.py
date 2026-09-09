@@ -23,6 +23,8 @@ _HIGH_RISK = frozenset(
         AgentIntent.ACCEPT_EVIDENCE,
         AgentIntent.EXCLUDE_EVIDENCE,
         AgentIntent.CONFIRM_PARTY,
+        AgentIntent.CREATE_PARTY,
+        AgentIntent.REJECT_PARTY,
         AgentIntent.AMEND_PARTY,
         AgentIntent.CONFIRM_FACT,
         AgentIntent.REJECT_FACT,
@@ -118,12 +120,13 @@ class LLMIntentRouter:
         targets = _targets_from_text(target_text, intent, text)
         if intent in _HIGH_RISK and intent not in {
             AgentIntent.APPROVE_DRAFT,
+            AgentIntent.CREATE_PARTY,
             AgentIntent.CONFIRM_CLAIM_DIRECTION,
             AgentIntent.REJECT_CLAIM_DIRECTION,
             AgentIntent.AMEND_CLAIM_DIRECTION,
         }:
             if not targets and intent != AgentIntent.APPROVE_DRAFT:
-                # require explicit target for evidence/fact/party
+                # require explicit target for evidence/fact/party confirm
                 if intent in {
                     AgentIntent.ACCEPT_EVIDENCE,
                     AgentIntent.EXCLUDE_EVIDENCE,
@@ -131,6 +134,7 @@ class LLMIntentRouter:
                     AgentIntent.REJECT_FACT,
                     AgentIntent.AMEND_FACT,
                     AgentIntent.CONFIRM_PARTY,
+                    AgentIntent.REJECT_PARTY,
                     AgentIntent.AMEND_PARTY,
                 }:
                     fallback = _deterministic_fallback(text, ctx)
@@ -157,10 +161,17 @@ class LLMIntentRouter:
 
         # Explicit numbered confirms: if LLM is fuzzy/misses target, fall back to
         # deterministic parse (never for ambiguous affirmations).
+        _no_target_ok = {
+            AgentIntent.APPROVE_DRAFT,
+            AgentIntent.CREATE_PARTY,
+            AgentIntent.CONFIRM_CLAIM_DIRECTION,
+            AgentIntent.REJECT_CLAIM_DIRECTION,
+            AgentIntent.AMEND_CLAIM_DIRECTION,
+        }
         if result.intent == AgentIntent.UNKNOWN or (
             result.intent in _HIGH_RISK
             and not result.targets
-            and result.intent not in {AgentIntent.APPROVE_DRAFT}
+            and result.intent not in _no_target_ok
         ):
             fallback = _deterministic_fallback(text, ctx)
             if fallback is not None:
@@ -178,10 +189,17 @@ def _deterministic_fallback(
     det = DeterministicIntentRouter().parse(text, context=ctx)
     if det.intent == AgentIntent.UNKNOWN:
         return None
+    _no_target_ok = {
+        AgentIntent.APPROVE_DRAFT,
+        AgentIntent.CREATE_PARTY,
+        AgentIntent.CONFIRM_CLAIM_DIRECTION,
+        AgentIntent.REJECT_CLAIM_DIRECTION,
+        AgentIntent.AMEND_CLAIM_DIRECTION,
+    }
     if (
         det.intent in _HIGH_RISK
         and not det.targets
-        and det.intent not in {AgentIntent.APPROVE_DRAFT}
+        and det.intent not in _no_target_ok
     ):
         return None
     return det
@@ -226,12 +244,14 @@ def _targets_from_text(
             return [m.group(1)]
         nums = re.findall(r"[0-9]+", target_text)
         return nums[:1]
-    if intent in {AgentIntent.CONFIRM_PARTY, AgentIntent.AMEND_PARTY}:
+    if intent in {AgentIntent.CONFIRM_PARTY, AgentIntent.REJECT_PARTY, AgentIntent.AMEND_PARTY}:
         m = re.search(r"当事人\s*([0-9]+)", blob)
         if m:
             return [m.group(1)]
         nums = re.findall(r"[0-9]+", target_text)
         return nums[:1]
+    if intent == AgentIntent.CREATE_PARTY:
+        return []
     if intent == AgentIntent.CONFIRM_CLAIM_DIRECTION:
         m = re.search(r"诉讼请求\s*([0-9]+)", blob)
         if m:
