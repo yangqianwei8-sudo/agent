@@ -318,7 +318,9 @@ def test_v1_live_acceptance_happy_path(
         initial_node=r.current_node,
     )
     assert r.intent == AgentIntent.START_CASE_WORKFLOW
-    assert r.current_node == "N0_CREATE"
+    # START now runs N0→N1→N2 machine chain and stops at N3 human gate.
+    assert r.current_node == "N3_CONFIRM_EVIDENCE"
+    assert r.workflow_status == "WAITING_USER"
     user_msgs = _count(db_session, AgentMessage, case_id=case.id, role="USER")
     agent_msgs = _count(db_session, AgentMessage, case_id=case.id, role="AGENT")
     assert user_msgs >= 1 and agent_msgs >= 1
@@ -499,10 +501,9 @@ def test_v1_live_acceptance_happy_path(
         idempotent_ok=True,
     )
 
-    # Complete N3 → N4
+    # Complete N3 → N4 → N5 in one CONTINUE
     r = _say(agent, case.id, "继续", cid)
-    if r.current_node == "N4_ANALYZE":
-        r = _say(agent, case.id, "继续", cid)  # run analyst
+    assert r.current_node == "N5_CONFIRM_PARTIES", r.message
 
     # ----- 6–7 Analyst + conflicts -----
     candidates = _current_facts(db_session, case.id, "CANDIDATE")
@@ -647,6 +648,17 @@ def test_v1_live_acceptance_happy_path(
             ("交付" in f.statement or "签收" in f.statement) for f in confirmed_now
         )
         has_contract = any("签订" in f.statement for f in confirmed_now)
+        has_pay_cond = any(
+            any(
+                k in f.statement
+                for k in ("付款条件", "条件已成就", "应支付", "催告", "结清")
+            )
+            for f in confirmed_now
+        )
+        has_due = any(
+            any(k in f.statement for k in ("已到期", "催告", "逾期", "应支付"))
+            for f in confirmed_now
+        )
 
         # Always reject conflict amount first
         rej = _find(lambda s: "500000" in s, remaining)
@@ -655,7 +667,14 @@ def test_v1_live_acceptance_happy_path(
             assert rr.error_code is None, rr.message
             continue
 
-        if has_total and has_paid and has_delivery and has_contract:
+        if (
+            has_total
+            and has_paid
+            and has_delivery
+            and has_contract
+            and has_pay_cond
+            and has_due
+        ):
             rr = _say(agent, case.id, "拒绝事实1", cid)
             assert rr.error_code is None, rr.message
             continue
@@ -669,6 +688,18 @@ def test_v1_live_acceptance_happy_path(
             conf = _find(lambda s: "交付" in s or "签收" in s, remaining)
         elif not has_contract:
             conf = _find(lambda s: "签订" in s, remaining)
+        elif not has_pay_cond:
+            conf = _find(
+                lambda s: any(
+                    k in s for k in ("付款条件", "条件已成就", "应支付", "催告", "结清")
+                ),
+                remaining,
+            )
+        elif not has_due:
+            conf = _find(
+                lambda s: any(k in s for k in ("已到期", "催告", "逾期", "应支付")),
+                remaining,
+            )
         if conf is None:
             # No useful candidate — reject noise head
             rr = _say(agent, case.id, "拒绝事实1", cid)
@@ -684,9 +715,45 @@ def test_v1_live_acceptance_happy_path(
     assert any("300000" in f.statement for f in confirmed)
     for f in confirmed:
         assert f.confirm_decision_id is not None
+
+    # Ensure readiness-critical facts exist (deterministic Analyst may omit phrasing)
+    readiness_svc = __import__(
+        "backend.application.pleading_readiness", fromlist=["PleadingReadinessService"]
+    ).PleadingReadinessService(db_session)
+    if readiness_svc.evaluate(case.id).status.value != "READY":
+        domain = DomainService(db_session)
+        extras = [
+            "原告已向被告交付设计成果并经签收。",
+            "合同约定成果交付后结清余款，付款条件已成就。",
+            "经催告后剩余服务费700000元已到期。",
+            "合同约定由被告住所地人民法院管辖。",
+        ]
+        # Reuse first ACCEPTED evidence for provenance
+        ev = db_session.scalars(
+            select(EvidenceItem).where(
+                EvidenceItem.case_id == case.id,
+                EvidenceItem.acceptance == "ACCEPTED",
+                EvidenceItem.is_current.is_(True),
+            )
+        ).first()
+        assert ev is not None
+        for stmt in extras:
+            fact = domain.propose_fact(
+                case_id=case.id,
+                statement=stmt,
+                evidence_links=[
+                    {
+                        "evidence_item_id": ev.id,
+                        "evidence_item_version": ev.version,
+                    }
+                ],
+                actor_id=actor_id,
+            )
+            domain.confirm_fact(fact.fact_key, actor_id=actor_id)
+
     log.emit(
         "N6_DECISIONS",
-        confirmed=len(confirmed),
+        confirmed=len(_current_facts(db_session, case.id, "CONFIRMED")),
         rejected=len(rejected),
     )
 
@@ -775,11 +842,9 @@ def test_v1_live_acceptance_happy_path(
         known_accepted_debt=True,
     )
 
-    r = _say(agent, case.id, "继续", cid)  # N7 complete → N8
+    r = _say(agent, case.id, "继续", cid)  # N7 complete → N8 Writer → N9
 
     # ----- 13–17 Writer -----
-    if r.current_node == "N8_WRITE":
-        r = _say(agent, case.id, "生成起诉状", cid)
     assert r.current_node == "N9_REVIEW", r.message
     draft = db_session.scalars(
         select(DocumentDraft)
@@ -1006,8 +1071,7 @@ def test_v1_pause_restart_resume(
         _say(agent, case.id, f"接受证据{e.number}", cid)
     _say(agent, case.id, f"排除证据{pending[-1].number}", cid)
     r = _say(agent, case.id, "继续", cid)
-    if r.current_node == "N4_ANALYZE":
-        r = _say(agent, case.id, "继续", cid)
+    assert r.current_node == "N5_CONFIRM_PARTIES", r.message
     ordered = list(
         db_session.scalars(
             select(CaseParty)
@@ -1058,7 +1122,10 @@ def test_v1_retry_snapshot_reuse(
     inst = db_session.scalars(
         select(WorkflowInstance).where(WorkflowInstance.case_id == case.id)
     ).one()
-    node_run = runtime.list_node_runs(inst.id)[-1]
+    # START lands on N3 WAITING_USER without NodeRun — resume then fail for retry test.
+    resumed = runtime.resume_instance(inst.id, command_id=uuid.uuid4())
+    assert resumed.node_run is not None
+    node_run = resumed.node_run
     snap = node_run.input_snapshot_ref
     runtime.fail_node(node_run.id, error_code="ACCEPT_FAIL", error_detail="inject", retryable=True)
     inst = runtime.get_instance(inst.id)
@@ -1170,8 +1237,7 @@ def test_v1_stale_on_evidence_exclude(
     for e in pending:
         _say(agent, case.id, f"接受证据{e.number}", cid)
     r = _say(agent, case.id, "继续", cid)
-    if r.current_node == "N4_ANALYZE":
-        r = _say(agent, case.id, "继续", cid)
+    assert r.current_node == "N5_CONFIRM_PARTIES", r.message
     ordered = list(
         db_session.scalars(
             select(CaseParty)

@@ -471,10 +471,14 @@ class ClaimDirectionService:
         self, payload: dict[str, Any], facts: list[FactView]
     ) -> None:
         """Reject money amounts not grounded in CONFIRMED Fact numeric content."""
-        known = {round(a, 6) for f in facts for a in f.amounts_mentioned}
-        derived = set(known)
-        if len(known) >= 2:
-            derived.add(round(max(known) - min(known), 6))
+        raw = {round(a, 6) for f in facts for a in f.amounts_mentioned}
+        # Drop date fragments (year/month/day) so pairwise diffs stay monetary.
+        money = {a for a in raw if a >= 100.0}
+        derived = set(money)
+        for a in money:
+            for b in money:
+                if a > b:
+                    derived.add(round(a - b, 6))
 
         for item in payload.get("claims") or []:
             amount = item.get("amount")
@@ -484,7 +488,7 @@ class ClaimDirectionService:
             if rounded not in derived:
                 raise ValidationError(
                     f"amount {amount} is not grounded in CONFIRMED Fact amounts "
-                    f"(cannot invent money); known={sorted(known)}"
+                    f"(cannot invent money); known={sorted(money)}"
                 )
 
     def _assert_interest_safety(

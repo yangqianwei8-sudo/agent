@@ -74,6 +74,9 @@ class DeterministicIntentRouter:
         if m := re.search(r"确认事实\s*([0-9]+)", text):
             return IntentResult(intent=AgentIntent.CONFIRM_FACT, targets=[m.group(1)])
 
+        if m := re.search(r"事实\s*([0-9]+)\s*确认", text):
+            return IntentResult(intent=AgentIntent.CONFIRM_FACT, targets=[m.group(1)])
+
         if m := re.search(r"拒绝事实\s*([0-9]+)", text):
             return IntentResult(intent=AgentIntent.REJECT_FACT, targets=[m.group(1)])
 
@@ -84,28 +87,41 @@ class DeterministicIntentRouter:
                 parameters={"new_statement": m.group(2).strip()},
             )
 
-        if m := re.search(r"确认当事人\s*([0-9]+)", text):
+        if m := re.search(r"确认被告\s*([0-9]+)", text):
+            return IntentResult(
+                intent=AgentIntent.CONFIRM_PARTY,
+                targets=[m.group(1)],
+                parameters={"role": "DEFENDANT"},
+            )
+
+        if m := re.search(r"确认原告\s*([0-9]+)", text):
+            return IntentResult(
+                intent=AgentIntent.CONFIRM_PARTY,
+                targets=[m.group(1)],
+                parameters={"role": "PLAINTIFF"},
+            )
+
+        if m := re.search(r"确认(?:当事人|第三人)\s*([0-9]+)", text):
             return IntentResult(intent=AgentIntent.CONFIRM_PARTY, targets=[m.group(1)])
 
-        if m := re.search(r"拒绝当事人\s*([0-9]+)", text):
+        if m := re.search(r"拒绝(?:当事人|原告|被告|第三人)\s*([0-9]+)", text):
             return IntentResult(intent=AgentIntent.REJECT_PARTY, targets=[m.group(1)])
 
-        if m := re.search(
-            r"(?:录入|新增|添加)\s*(原告|被告|第三人)\s*[:：]?\s*(.+)$",
-            text,
-        ):
-            role_raw, name_raw = m.group(1), m.group(2).strip()
-            # Ambiguous speculation must not match — require explicit create verbs above
-            if name_raw and not re.search(r"(可能|好像|看起来|是不是|是否)", name_raw):
-                role_map = {
-                    "原告": "PLAINTIFF",
-                    "被告": "DEFENDANT",
-                    "第三人": "THIRD_PARTY",
-                }
-                return IntentResult(
-                    intent=AgentIntent.CREATE_PARTY,
-                    parameters={"role": role_map[role_raw], "name": name_raw},
-                )
+        # Party creation — never treat residual fragments as names
+        from backend.agent.action_safety import (
+            detect_create_party_request,
+            detect_incomplete_mutation,
+        )
+
+        party_prop = detect_create_party_request(text)
+        if party_prop is not None:
+            params = dict(party_prop.arguments)
+            if party_prop.missing_fields:
+                params["missing_fields"] = list(party_prop.missing_fields)
+            return IntentResult(
+                intent=AgentIntent.CREATE_PARTY,
+                parameters=params,
+            )
 
         if m := re.search(r"确认诉讼请求\s*([0-9]+)?", text):
             targets = [m.group(1)] if m.group(1) else []
@@ -129,7 +145,23 @@ class DeterministicIntentRouter:
         if _match(lower, (r"查看起诉状", r"查看草稿", r"^show\s*draft")):
             return IntentResult(intent=AgentIntent.SHOW_DRAFT)
 
-        if _match(lower, (r"生成起诉状", r"起草起诉状", r"写起诉状")):
+        if _match(
+            lower,
+            (
+                r"(能不能|能否|可以|可否).{0,8}(生成|写|起草)?起诉状",
+                r"(为什么不能|还差什么|还缺什么|还缺哪些).{0,16}(生成|写)?起诉状?",
+                r"^为什么不能[？?]?$",
+                r"还缺哪些关键",
+                r"起诉准备度",
+                r"(能不能|能否|可以)起诉",
+            ),
+        ):
+            return IntentResult(
+                intent=AgentIntent.CASE_CONVERSATION,
+                parameters={"user_message": text},
+            )
+
+        if _match(lower, (r"生成起诉状", r"起草起诉状", r"写起诉状", r"帮我生成起诉状")):
             return IntentResult(intent=AgentIntent.GENERATE_COMPLAINT)
 
         if _match(lower, (r"整理证据", r"运行组织器", r"organize")):
@@ -147,9 +179,28 @@ class DeterministicIntentRouter:
         if _match(lower, (r"^继续$", r"^continue$", r"继续处理")):
             return IntentResult(intent=AgentIntent.CONTINUE)
 
-        # Fuzzy affirmations — NEVER map to confirm/approve
-        if _match(lower, (r"^(好|可以|没问题|看起来行)$",)):
-            return IntentResult(intent=AgentIntent.UNKNOWN, parameters={"reason": "ambiguous"})
+        # Incomplete mutation asks — keep ACTION intent, empty slots for Safety Gate
+        incomplete = detect_incomplete_mutation(text)
+        if incomplete is not None:
+            params = dict(incomplete.arguments)
+            if incomplete.missing_fields:
+                params["missing_fields"] = list(incomplete.missing_fields)
+            params["routing_status"] = "INCOMPLETE"
+            return IntentResult(
+                intent=incomplete.intent,
+                targets=list(incomplete.targets),
+                parameters=params,
+            )
+
+        # Fuzzy short affirmations — NEVER map to confirm/approve
+        if _match(lower, (r"^(好|好的|可以|嗯|没问题|看起来行|行|ok|okay|yes)$",)):
+            return IntentResult(
+                intent=AgentIntent.UNKNOWN, parameters={"reason": "ambiguous"}
+            )
+
+        # Free-form case discussion / questions → conversation channel
+        if text:
+            return IntentResult(intent=AgentIntent.CASE_CONVERSATION)
 
         return IntentResult(intent=AgentIntent.UNKNOWN)
 

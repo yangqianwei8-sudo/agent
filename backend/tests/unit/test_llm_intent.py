@@ -96,7 +96,11 @@ def test_k_uuid_does_not_bypass_target_resolver() -> None:
         len(t) < 36 or t.count("-") != 4 for t in out.targets
     ) or out.targets == []
     assert "evidence_item_id" not in out.parameters
-    # Without numeric target → UNKNOWN (missing explicit number)
-    assert out.intent in {AgentIntent.UNKNOWN, AgentIntent.ACCEPT_EVIDENCE}
+    # Without numeric target → UNKNOWN / conversation / or ACCEPT without usable target
+    assert out.intent in {
+        AgentIntent.UNKNOWN,
+        AgentIntent.ACCEPT_EVIDENCE,
+        AgentIntent.CASE_CONVERSATION,
+    }
     if out.intent == AgentIntent.ACCEPT_EVIDENCE:
         assert fake_id not in out.targets

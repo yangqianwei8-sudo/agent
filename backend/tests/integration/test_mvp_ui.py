@@ -88,11 +88,14 @@ def test_c_workspace_opens(client: TestClient) -> None:
     assert page.status_code == 200
     assert "Agent 对话" in page.text
     assert "案件材料" in page.text
+    assert "待处理文件" in page.text
     ws = client.get(f"/api/cases/{case_id}/workspace")
     assert ws.status_code == 200
     body = ws.json()
     assert body["case"]["id"] == case_id
     assert "materials" in body
+    assert "pending_materials" in body
+    assert "material_pool" in body
     assert "conversation" in body
 
 
@@ -138,6 +141,20 @@ def test_e_docx_upload_success(client: TestClient) -> None:
     assert res.json()["extraction_status"] == "SUCCEEDED"
 
 
+def test_e2_md_upload_success(client: TestClient) -> None:
+    case_id = client.post("/api/cases", json={"title": "MD上传"}).json()["id"]
+    body = "# 催款函\n\n请于七日内支付服务费 **100000** 元。\n".encode()
+    res = client.post(
+        f"/api/cases/{case_id}/materials",
+        files={"file": ("催款函.md", body, "text/markdown")},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["extraction_status"] == "SUCCEEDED"
+    assert data.get("usable") is True
+
+
 def test_f_illegal_extension_rejected(client: TestClient) -> None:
     case_id = client.post("/api/cases", json={"title": "非法扩展名"}).json()["id"]
     res = client.post(
@@ -145,7 +162,8 @@ def test_f_illegal_extension_rejected(client: TestClient) -> None:
         files={"file": ("malware.exe", b"MZ", "application/octet-stream")},
     )
     assert res.status_code == 400
-    assert "pdf" in res.json()["detail"].lower() or "docx" in res.json()["detail"].lower()
+    detail = res.json()["detail"].lower()
+    assert "pdf" in detail or "docx" in detail or "md" in detail
 
 
 def test_g_path_traversal_filename_sanitized() -> None:

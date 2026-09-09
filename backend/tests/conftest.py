@@ -7,6 +7,7 @@ import uuid
 
 # Tests must never depend on real LLM / network — pin before settings load.
 os.environ["LLM_MODE"] = "deterministic"
+os.environ.setdefault("CAMSCANNER_CLI_ENABLED", "false")
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -23,6 +24,7 @@ clear_llm_caches()
 @pytest.fixture(scope="session", autouse=True)
 def _deterministic_llm_mode() -> None:
     os.environ["LLM_MODE"] = "deterministic"
+    os.environ.setdefault("CAMSCANNER_CLI_ENABLED", "false")
     clear_settings_cache()
     clear_llm_caches()
     assert get_settings().llm_mode == "deterministic"

@@ -20,6 +20,7 @@ from backend.models import (
 )
 from backend.schemas.case_analyst import EvidenceRef
 from backend.schemas.claim_direction_proposal import FactRef
+from backend.schemas.pleading_readiness import PleadingNotReadyError
 from backend.schemas.pleading_writer import (
     ClaimDirectionRef,
     ClaimLine,
@@ -63,6 +64,10 @@ def _seed_writer_world(
         [
             "合同约定服务费总价为1000000元。",
             "被告已支付300000元。",
+            "原告已向被告交付设计成果并经签收。",
+            "合同约定成果提交后付款，付款条件已成就。",
+            "尚欠服务费700000元已到期。",
+            "合同约定由被告住所地人民法院管辖。",
         ]
         if amount_facts
         else [
@@ -198,7 +203,7 @@ def test_a_no_confirmed_claim_direction(
     )
     domain.reject_claim_direction(claim.claim_direction_key, actor_id=actor_id)
     svc = PleadingWriterService(db_session)
-    with pytest.raises(ValidationError, match="CONFIRMED"):
+    with pytest.raises((ValidationError, PleadingNotReadyError), match="CONFIRMED|ClaimDirection"):
         svc.write(
             **_writer_args(case, parties, facts, evidences, claim),
             actor_id=actor_id,
@@ -215,7 +220,10 @@ def test_b_stale_claim_direction(
     claim = domain.repo.get_current_claim(claim.claim_direction_key)
     assert claim is not None and claim.stale is True
     svc = PleadingWriterService(db_session)
-    with pytest.raises(ValidationError, match="CONFIRMED|stale|no CONFIRMED"):
+    with pytest.raises(
+        (ValidationError, PleadingNotReadyError),
+        match="CONFIRMED|stale|no CONFIRMED|ClaimDirection",
+    ):
         svc.write(
             **_writer_args(case, parties, facts, evidences, claim),
             actor_id=actor_id,

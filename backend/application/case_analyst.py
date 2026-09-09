@@ -449,6 +449,10 @@ class CaseAnalystService:
                 raise ValidationError(
                     f"broken provenance: material/case mismatch for span {span.id}"
                 )
+            if material.life_status == "VOID":
+                raise ValidationError(
+                    f"broken provenance: material is VOID for span {span.id}"
+                )
             ec = self.session.get(ExtractedContent, span.extracted_content_id)
             if ec is None or ec.status != "SUCCEEDED":
                 raise ValidationError(

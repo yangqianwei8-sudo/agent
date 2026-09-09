@@ -13,7 +13,14 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.agent.action_safety import (
+    ActionAuditEvent,
+    ActionSafetyGate,
+    SafetyVerdict,
+    audit_action,
+)
 from backend.agent.context import CaseContext, CaseContextService
+from backend.agent.conversation_context import CaseConversationContextBuilder
 from backend.agent.dto import (
     AgentAction,
     AgentError,
@@ -26,21 +33,27 @@ from backend.agent.resolver import TargetResolver
 from backend.application.case_analyst import CaseAnalystService
 from backend.application.claim_direction import ClaimDirectionService
 from backend.application.evidence_organizer import EvidenceOrganizerService
+from backend.application.material_usability import MaterialUsabilityPolicy
 from backend.application.party_management import PartyManagementService
+from backend.application.pleading_readiness import PleadingReadinessService
 from backend.application.pleading_writer import PleadingWriterService
 from backend.domain.errors import ConflictError, DomainError, NotFoundError, ValidationError
 from backend.domain.services import DomainService
+from backend.llm.case_conversation import (
+    CaseConversationEngine,
+    DeterministicCaseConversationEngine,
+)
 from backend.llm.errors import LLMError
 from backend.models import (
-    CaseMaterial,
     CaseParty,
     ClaimDirection,
     EvidenceItem,
-    ExtractedContent,
     Fact,
     NodeRun,
+    SkillExecution,
     SystemCommand,
 )
+from backend.schemas.pleading_readiness import PleadingNotReadyError, ReadinessStatus
 from backend.workflow.errors import WorkflowConflictError, WorkflowError
 from backend.workflow.runtime import WorkflowRuntime
 
@@ -65,6 +78,11 @@ class HandlerResult:
     command_id: UUID | None = None
     idempotent_replay: bool = False
     related_decision_id: UUID | None = None
+    pending_action: dict[str, Any] | None = None
+    safety_result: str | None = None
+    missing_fields: list[str] = field(default_factory=list)
+    routing_status: str | None = None
+    recent_focus: dict[str, Any] | None = None
 
 
 # Machine nodes must be executed in the same HTTP request that starts them.
@@ -92,14 +110,21 @@ class CommandHandler:
         analyst: CaseAnalystService | None = None,
         claim_svc: ClaimDirectionService | None = None,
         writer: PleadingWriterService | None = None,
+        conversation_engine: CaseConversationEngine | None = None,
     ) -> None:
         self.session = session
         self.actor_id = actor_id
         self.runtime = WorkflowRuntime(session)
         self.domain = DomainService(session)
         self.context_svc = CaseContextService(session)
-        if organizer is None or analyst is None:
-            from backend.llm.factory import build_analyst_engine, build_organizer_engine
+        self.party_svc = PartyManagementService(session, domain=self.domain)
+        if organizer is None or analyst is None or claim_svc is None or writer is None:
+            from backend.llm.factory import (
+                build_analyst_engine,
+                build_claim_direction_engine,
+                build_organizer_engine,
+                build_pleading_writer_engine,
+            )
 
             organizer = organizer or EvidenceOrganizerService(
                 session, engine=build_organizer_engine()
@@ -107,30 +132,68 @@ class CommandHandler:
             analyst = analyst or CaseAnalystService(
                 session, engine=build_analyst_engine()
             )
-        self.organizer = organizer
-        self.analyst = analyst
-        self.party_svc = PartyManagementService(session, domain=self.domain)
-        if claim_svc is None or writer is None:
-            from backend.llm.factory import (
-                build_claim_direction_engine,
-                build_pleading_writer_engine,
-            )
-
             claim_svc = claim_svc or ClaimDirectionService(
                 session, engine=build_claim_direction_engine()
             )
             writer = writer or PleadingWriterService(
                 session, engine=build_pleading_writer_engine()
             )
+        self.organizer = organizer
+        self.analyst = analyst
         self.claim_svc = claim_svc
         self.writer = writer
+        self.conversation_engine = (
+            conversation_engine or DeterministicCaseConversationEngine()
+        )
+        self.conversation_context = CaseConversationContextBuilder(session)
+        self.safety_gate = ActionSafetyGate()
 
     def dispatch(
         self,
         *,
         ctx: CaseContext,
         intent: IntentResult,
+        raw_message: str = "",
+        resolution: dict[str, Any] | None = None,
     ) -> HandlerResult:
+        from backend.agent.action_safety import MUTATION_INTENTS
+
+        if intent.intent in MUTATION_INTENTS:
+            safety = self.safety_gate.validate(
+                intent=intent.intent,
+                targets=intent.targets,
+                parameters=intent.parameters or {},
+                raw_message=raw_message
+                or str((intent.parameters or {}).get("user_message") or ""),
+                case_id=ctx.case.id,
+                conversation_id=ctx.conversation_id,
+                resolution=resolution or self._build_resolution(ctx),
+            )
+            if safety.verdict != SafetyVerdict.VALID:
+                routing = {
+                    SafetyVerdict.INCOMPLETE: "INCOMPLETE",
+                    SafetyVerdict.AMBIGUOUS: "AMBIGUOUS",
+                    SafetyVerdict.INVALID: "INVALID",
+                }.get(safety.verdict, safety.verdict.value)
+                return HandlerResult(
+                    message=safety.message,
+                    intent=intent.intent,
+                    pending_action=safety.pending_action,
+                    safety_result=safety.verdict.value,
+                    missing_fields=list(safety.missing_fields),
+                    routing_status=routing,
+                )
+            # Apply sanitized arguments back
+            intent = intent.model_copy(
+                update={
+                    "parameters": {
+                        **(intent.parameters or {}),
+                        **safety.proposal.arguments,
+                    },
+                    "targets": safety.proposal.targets or intent.targets,
+                }
+            )
+
         mapping = {
             AgentIntent.START_CASE_WORKFLOW: self._start,
             AgentIntent.CONTINUE: self._continue,
@@ -158,18 +221,70 @@ class CommandHandler:
             AgentIntent.SHOW_FACTS: self._show_facts,
             AgentIntent.SHOW_CLAIMS: self._show_claims,
             AgentIntent.SHOW_DRAFT: self._show_draft,
+            AgentIntent.CASE_CONVERSATION: self._case_conversation,
             AgentIntent.UNKNOWN: self._unknown,
         }
         fn = mapping.get(intent.intent, self._unknown)
         try:
-            return fn(ctx, intent)
+            result = fn(ctx, intent)
+            if intent.intent in MUTATION_INTENTS and result.error_code is None:
+                audit_action(
+                    ActionAuditEvent.ACTION_EXECUTED,
+                    case_id=ctx.case.id,
+                    conversation_id=ctx.conversation_id,
+                    intent=intent.intent,
+                    validation_result="executed",
+                )
+                if result.safety_result is None:
+                    result.safety_result = SafetyVerdict.VALID.value
+                if result.routing_status is None:
+                    result.routing_status = "READY"
+            elif intent.intent == AgentIntent.CASE_CONVERSATION:
+                result.routing_status = result.routing_status or "CONVERSATION"
+            elif intent.intent == AgentIntent.UNKNOWN:
+                result.routing_status = result.routing_status or "UNKNOWN"
+            elif intent.intent == AgentIntent.GENERATE_COMPLAINT and result.error_code:
+                if result.error_code == AgentErrorCode.PLEADING_NOT_READY:
+                    result.routing_status = result.routing_status or "WAITING_USER"
+                else:
+                    result.routing_status = result.routing_status or "INVALID"
+            return result
         except AgentError as exc:
             return HandlerResult(
                 message=exc.message,
                 intent=intent.intent,
                 error_code=exc.code,
             )
+        except PleadingNotReadyError as exc:
+            svc = PleadingReadinessService(self.session)
+            msg = svc.lawyer_summary(exc.readiness)
+            return HandlerResult(
+                message=msg,
+                intent=intent.intent,
+                error_code=AgentErrorCode.PLEADING_NOT_READY,
+                routing_status="WAITING_USER",
+                references=[
+                    {
+                        "type": "pleading_readiness",
+                        "status": exc.readiness.status.value,
+                        "blocking_codes": [
+                            i.code for i in exc.readiness.blocking_issues
+                        ],
+                    }
+                ],
+            )
         except LLMError as exc:
+            # Conversation failures must NOT fail workflow machine nodes
+            if intent.intent == AgentIntent.CASE_CONVERSATION:
+                return HandlerResult(
+                    message=(
+                        "这次案件分析请求失败了，你可以重新问一次。"
+                        "案件数据没有发生变化。"
+                        f"（{exc.code}）"
+                    ),
+                    intent=AgentIntent.CASE_CONVERSATION,
+                    error_code=AgentErrorCode.LLM_REQUEST_FAILED,
+                )
             self._fail_current_machine_node(ctx, exc)
             return HandlerResult(
                 message=self._llm_failure_message(ctx, exc),
@@ -200,6 +315,15 @@ class CommandHandler:
                 error_code=AgentErrorCode.INTERNAL_ERROR,
             )
         except Exception as exc:  # noqa: BLE001 — last-resort machine-node safety net
+            if intent.intent == AgentIntent.CASE_CONVERSATION:
+                return HandlerResult(
+                    message=(
+                        "这次案件讨论失败了，你可以重新问一次。"
+                        "案件数据没有发生变化。"
+                    ),
+                    intent=AgentIntent.CASE_CONVERSATION,
+                    error_code=AgentErrorCode.INTERNAL_ERROR,
+                )
             self._fail_current_machine_node(ctx, exc)
             return HandlerResult(
                 message=self._llm_failure_message(ctx, exc),
@@ -258,15 +382,123 @@ class CommandHandler:
         reason = (intent.parameters or {}).get("reason")
         if reason == "ambiguous":
             return HandlerResult(
-                message="请使用明确指令，例如「确认事实1」「接受证据2」「批准这份起诉状」。",
+                message=(
+                    "这听起来像模糊肯定。我不会据此自动确认。"
+                    "若要写入案件，请使用明确指令，例如"
+                    "「确认事实1」「接受证据2」「批准这份起诉状」。"
+                    "若只是讨论案件，可以直接提问。"
+                ),
                 intent=AgentIntent.UNKNOWN,
                 error_code=AgentErrorCode.UNKNOWN_INTENT,
             )
         return HandlerResult(
-            message="未识别意图。可以说：开始处理案件 / 继续 / 状态 / 暂停 / 查看证据。",
+            message=(
+                "我还不能确定你要执行哪项操作。"
+                "可以直接问我案件事实、证据、风险或诉讼策略；"
+                "若要推进案件，请说「继续」或明确的确认指令。"
+            ),
             intent=AgentIntent.UNKNOWN,
             error_code=AgentErrorCode.UNKNOWN_INTENT,
         )
+
+    def _case_conversation(
+        self, ctx: CaseContext, intent: IntentResult
+    ) -> HandlerResult:
+        """READ ONLY case discussion — no Domain / Workflow / HumanDecision writes."""
+        user_message = str((intent.parameters or {}).get("user_message") or "").strip()
+        if not user_message:
+            user_message = "请基于当前案件上下文回答律师问题。"
+
+        if self._is_readiness_question(user_message):
+            readiness = PleadingReadinessService(self.session).evaluate(ctx.case.id)
+            return HandlerResult(
+                message=PleadingReadinessService(self.session).lawyer_summary(readiness),
+                intent=AgentIntent.CASE_CONVERSATION,
+                routing_status="CONVERSATION",
+                references=[
+                    {
+                        "type": "pleading_readiness",
+                        "status": readiness.status.value,
+                        "blocking_codes": [i.code for i in readiness.blocking_issues],
+                        "display_status": readiness.display_status,
+                    }
+                ],
+            )
+
+        try:
+            pack = self.conversation_context.build(
+                case_id=ctx.case.id,
+                conversation_id=ctx.conversation_id,
+                user_message=user_message,
+            )
+            result = self.conversation_engine.reply(
+                user_message=user_message, context=pack
+            )
+        except LLMError as exc:
+            return HandlerResult(
+                message=(
+                    "这次案件分析请求失败了，你可以重新问一次。"
+                    "案件数据没有发生变化。"
+                    f"（{exc.code}）"
+                ),
+                intent=AgentIntent.CASE_CONVERSATION,
+                error_code=AgentErrorCode.LLM_REQUEST_FAILED,
+            )
+
+        chunks = [result.answer]
+        if result.uncertainties:
+            chunks.append(
+                "\n### 不确定性\n"
+                + "\n".join(f"- {u}" for u in result.uncertainties)
+            )
+        if result.missing_information:
+            chunks.append(
+                "\n### 缺失信息\n"
+                + "\n".join(f"- {m}" for m in result.missing_information)
+            )
+        if result.suggested_actions:
+            chunks.append(
+                "\n### 建议（不会自动执行）\n"
+                + "\n".join(f"- {s}" for s in result.suggested_actions)
+            )
+        refs: list[dict[str, Any]] = [
+            {
+                "type": c.type,
+                "display_number": c.display_number,
+                "label": c.label,
+            }
+            for c in result.citations
+        ]
+        return HandlerResult(
+            message="\n".join(chunks).strip(),
+            intent=AgentIntent.CASE_CONVERSATION,
+            references=refs,
+        )
+
+    @staticmethod
+    def _is_readiness_question(text: str) -> bool:
+        t = (text or "").strip()
+        keys = (
+            "能不能起诉",
+            "能否起诉",
+            "可以起诉吗",
+            "能不能生成起诉状",
+            "能否生成起诉状",
+            "可以生成起诉状",
+            "还差什么才能写起诉状",
+            "还缺什么才能",
+            "还缺哪些",
+            "为什么不能生成",
+            "为什么不能写起诉状",
+            "为什么不能",
+            "起诉准备度",
+            "具备生成起诉状",
+            "是否具备起诉条件",
+            "现在能不能写起诉状",
+            "缺哪些关键",
+            "关键缺口",
+        )
+        return any(k in t for k in keys)
 
     def _status(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
         return HandlerResult(message=self._status_text(ctx), intent=AgentIntent.STATUS)
@@ -454,6 +686,21 @@ class CommandHandler:
         )
 
     def _generate_complaint(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
+        readiness = PleadingReadinessService(self.session).evaluate(ctx.case.id)
+        if readiness.status != ReadinessStatus.READY:
+            return HandlerResult(
+                message=PleadingReadinessService(self.session).lawyer_summary(readiness),
+                intent=AgentIntent.GENERATE_COMPLAINT,
+                error_code=AgentErrorCode.PLEADING_NOT_READY,
+                routing_status="WAITING_USER",
+                references=[
+                    {
+                        "type": "pleading_readiness",
+                        "status": readiness.status.value,
+                        "blocking_codes": [i.code for i in readiness.blocking_issues],
+                    }
+                ],
+            )
         if ctx.current_node and ctx.current_node.code == "N8_WRITE":
             return self._run_until_human_gate(ctx, intent=AgentIntent.GENERATE_COMPLAINT)
         if ctx.current_node and ctx.current_node.code == "N9_REVIEW":
@@ -482,8 +729,9 @@ class CommandHandler:
     def _ensure_running_node_run(self, ctx: CaseContext) -> NodeRun:
         assert ctx.instance and ctx.current_node
         latest = self._current_node_run(ctx)
-        if latest and latest.status in {"RUNNING", "WAITING_USER"}:
-            return latest
+        # Gate nodes often leave Instance WAITING_USER + NodeRun WAITING_USER.
+        # Resume instance before complete/auto_advance so the next machine node
+        # can start_node (requires RUNNING instance).
         if ctx.workflow_status == "WAITING_USER":
             cmd_id = stable_command_id(
                 "RESUME_GATE",
@@ -492,15 +740,20 @@ class CommandHandler:
                 latest.attempt if latest else 0,
             )
             resumed = self.runtime.resume_instance(ctx.instance.id, command_id=cmd_id)
-            if resumed.node_run is None:
-                raise AgentError(
-                    "无法启动当前门节点",
-                    code=AgentErrorCode.INVALID_WORKFLOW_STATE,
-                )
-            return resumed.node_run
+            if resumed.node_run is not None:
+                return resumed.node_run
+            latest = self._current_node_run(ctx)
+            if latest and latest.status in {"RUNNING", "WAITING_USER"}:
+                return latest
+            raise AgentError(
+                "无法启动当前门节点",
+                code=AgentErrorCode.INVALID_WORKFLOW_STATE,
+            )
+        if latest and latest.status in {"RUNNING", "WAITING_USER"}:
+            return latest
         if latest and latest.status == "RUNNING":
             return latest
-        # RUNNING instance without node run — start
+        # RUNNING instance without usable node run — start
         if ctx.workflow_status == "RUNNING":
             if latest is None or latest.status in {"SUCCEEDED", "FAILED"}:
                 return self.runtime.start_node(
@@ -548,58 +801,34 @@ class CommandHandler:
         return HandlerResult(message=msg, intent=AgentIntent.CONTINUE, command_id=cmd_id)
 
     def _run_n1(self, ctx: CaseContext) -> HandlerResult:
-        """N1: if materials already have SUCCEEDED EC, complete; else instruct."""
-        materials = list(
-            self.session.scalars(
-                select(CaseMaterial).where(
-                    CaseMaterial.case_id == ctx.case.id,
-                    CaseMaterial.life_status == "ACTIVE",
+        """N1: usable material pool must be non-empty; pending/FAILED do not block."""
+        policy = MaterialUsabilityPolicy(self.session)
+        usable = policy.list_usable_materials(ctx.case.id)
+        pending = policy.list_unusable_materials(ctx.case.id)
+        if not usable:
+            if pending:
+                names = "、".join(m.filename for m in pending)
+                raise AgentError(
+                    "尚无可读取的案件材料。以下文件已上传但未能解析成功，"
+                    "因此未进入案件材料池，也不会参与证据整理："
+                    + names
+                    + "。请重新解析、作废，或上传可读取版本后再「继续」。",
+                    code=AgentErrorCode.VALIDATION_ERROR,
                 )
-            )
-        )
-        if not materials:
             raise AgentError(
                 "案件尚无已登记材料。请先登记 CaseMaterial 后再继续。",
-                code=AgentErrorCode.VALIDATION_ERROR,
-            )
-        missing: list[str] = []
-        for m in materials:
-            ecs = list(
-                self.session.scalars(
-                    select(ExtractedContent).where(ExtractedContent.material_id == m.id)
-                )
-            )
-            if not any(ec.status == "SUCCEEDED" for ec in ecs):
-                missing.append(m.filename)
-        if missing:
-            raise AgentError(
-                "以下材料尚无成功解析结果，本阶段不自动跑复杂提取："
-                + "、".join(missing)
-                + "。请先完成材料解析后再「继续」。",
                 code=AgentErrorCode.VALIDATION_ERROR,
             )
         return self._run_machine_complete(ctx, label="N1_PARSE")
 
     def _resolve_ec_ids(self, case_id: UUID) -> list[UUID]:
-        materials = list(
-            self.session.scalars(
-                select(CaseMaterial).where(
-                    CaseMaterial.case_id == case_id,
-                    CaseMaterial.life_status == "ACTIVE",
-                )
-            )
-        )
-        if not materials:
+        policy = MaterialUsabilityPolicy(self.session)
+        usable = policy.list_usable_materials(case_id)
+        if not usable:
             raise AgentError("没有可用材料", code=AgentErrorCode.NOT_FOUND)
         ids: list[UUID] = []
-        for m in materials:
-            ecs = [
-                ec
-                for ec in self.session.scalars(
-                    select(ExtractedContent).where(ExtractedContent.material_id == m.id)
-                )
-                if ec.status == "SUCCEEDED"
-            ]
+        for m in usable:
+            ecs = policy.succeeded_extracted_contents(m.id)
             if len(ecs) == 0:
                 raise AgentError(
                     f"材料 {m.filename} 无 SUCCEEDED ExtractedContent",
@@ -612,6 +841,17 @@ class CommandHandler:
                 )
             ids.append(ecs[0].id)
         return ids
+
+    def _material_disclosure_suffix(self, case_id: UUID) -> str:
+        pool = MaterialUsabilityPolicy(self.session).pool_summary(case_id)
+        disclosure = pool.get("disclosure") or {}
+        summary = disclosure.get("summary") or ""
+        warning = pool.get("warning")
+        parts = [summary]
+        if warning:
+            parts.append(warning)
+        text = "\n".join(p for p in parts if p)
+        return f"\n\n{text}" if text else ""
 
     def _run_n2(self, ctx: CaseContext) -> HandlerResult:
         assert ctx.instance
@@ -636,6 +876,7 @@ class CommandHandler:
         )
         msg = (
             f"证据整理完成，新增/更新 {len(result.evidence_item_ids)} 条证据。"
+            + self._material_disclosure_suffix(ctx.case.id)
         )
         assert cmd is not None
         self._finish_cmd(cmd, {"message": msg})
@@ -671,6 +912,7 @@ class CommandHandler:
         )
         msg = (
             f"AI 已根据你确认的证据完成案件分析，提出 {len(result.created_facts)} 条事实候选。"
+            + self._material_disclosure_suffix(ctx.case.id)
         )
         assert cmd is not None
         self._finish_cmd(cmd, {"message": msg})
@@ -678,6 +920,22 @@ class CommandHandler:
 
     def _run_n8(self, ctx: CaseContext) -> HandlerResult:
         assert ctx.instance
+        readiness_svc = PleadingReadinessService(self.session)
+        readiness = readiness_svc.evaluate(ctx.case.id)
+        if readiness.status != ReadinessStatus.READY:
+            return HandlerResult(
+                message=readiness_svc.lawyer_summary(readiness),
+                intent=AgentIntent.GENERATE_COMPLAINT,
+                error_code=AgentErrorCode.PLEADING_NOT_READY,
+                routing_status="WAITING_USER",
+                references=[
+                    {
+                        "type": "pleading_readiness",
+                        "status": readiness.status.value,
+                        "blocking_codes": [i.code for i in readiness.blocking_issues],
+                    }
+                ],
+            )
         node_run = self._ensure_running_node_run(ctx)
         cmd_id = stable_command_id("CONTINUE", ctx.instance.id, "N8", node_run.id)
         cmd, replay = self._begin_cmd(
@@ -693,19 +951,27 @@ class CommandHandler:
         facts = self._confirmed_fact_refs(ctx.case.id)
         evidence = self._accepted_evidence_refs(ctx.case.id)
         parties = self._confirmed_party_keys(ctx.case.id)
-        result = self.writer.run_n8_write(
-            instance_id=ctx.instance.id,
-            node_run_id=node_run.id,
-            claim_direction_ref={
-                "claim_direction_key": str(claim.claim_direction_key),
-                "claim_direction_version": claim.version,
-            },
-            confirmed_fact_refs=facts,
-            accepted_evidence_refs=evidence,
-            confirmed_party_keys=parties,
-            actor_id=self.actor_id,
-            auto_complete=True,
-        )
+        try:
+            result = self.writer.run_n8_write(
+                instance_id=ctx.instance.id,
+                node_run_id=node_run.id,
+                claim_direction_ref={
+                    "claim_direction_key": str(claim.claim_direction_key),
+                    "claim_direction_version": claim.version,
+                },
+                confirmed_fact_refs=facts,
+                accepted_evidence_refs=evidence,
+                confirmed_party_keys=parties,
+                actor_id=self.actor_id,
+                auto_complete=True,
+            )
+        except PleadingNotReadyError as exc:
+            return HandlerResult(
+                message=readiness_svc.lawyer_summary(exc.readiness),
+                intent=AgentIntent.GENERATE_COMPLAINT,
+                error_code=AgentErrorCode.PLEADING_NOT_READY,
+                routing_status="WAITING_USER",
+            )
         warnings_raw = list(result.warnings or [])
         warnings: list[str] = []
         for w in warnings_raw:
@@ -718,6 +984,7 @@ class CommandHandler:
         msg = (
             f"起诉状草稿已生成（第 {result.draft.version if result.draft else '?'} 版）。"
             "现在需要你审核草稿；说「查看起诉状」或「批准这份起诉状」。"
+            + self._material_disclosure_suffix(ctx.case.id)
         )
         assert cmd is not None
         self._finish_cmd(cmd, {"message": msg, "warnings": warnings})
@@ -900,10 +1167,40 @@ class CommandHandler:
         assert ctx.instance
         claim_ctx = (ctx.context_json or {}).get("claim_direction") or {}
         keys = claim_ctx.get("claim_direction_keys") or []
-        # Need propose if no proposals yet
-        if not keys and not ctx.pending_claims:
+        latest = self._current_node_run(ctx)
+        skill_on_run = None
+        if latest is not None:
+            skill_on_run = self.session.scalars(
+                select(SkillExecution).where(SkillExecution.node_run_id == latest.id)
+            ).first()
+
+        # This attempt already proposed with nothing usable → ask for 重试.
+        if (
+            skill_on_run is not None
+            and skill_on_run.status == "FAILED"
+            and not keys
+            and not ctx.pending_claims
+        ):
+            self._fail_or_park_claim_propose(ctx, claim_ctx)
+            rejected = claim_ctx.get("rejected_proposals") or []
+            detail = ""
+            if rejected:
+                detail = rejected[0].get("error") or rejected[0].get("code") or ""
+            detail = detail or (skill_on_run.error_detail or skill_on_run.error_code or "")
+            return HandlerResult(
+                message=(
+                    "诉讼请求建议未能生成。\n\n"
+                    f"原因：{detail}\n\n"
+                    "你已经确认的事实与当事人不会丢失。\n\n"
+                    "【重新尝试】请输入「重试」。"
+                ),
+                intent=AgentIntent.CONTINUE,
+                error_code=AgentErrorCode.LLM_REQUEST_FAILED,
+            )
+
+        # Need propose if no proposals yet (fresh NodeRun after retry has no skill yet)
+        if not keys and not ctx.pending_claims and skill_on_run is None:
             node_run = self._ensure_running_node_run(ctx)
-            # If node already has skill, don't re-propose blindly
             cmd_id = stable_command_id("N7_PROPOSE", ctx.instance.id, node_run.id)
             cmd, replay = self._begin_cmd(
                 cmd_id,
@@ -913,6 +1210,8 @@ class CommandHandler:
                 payload={},
             )
             if replay and cmd is not None:
+                # Replay must not leave NodeRun RUNNING after resume.
+                self._ensure_human_gate_waiting(ctx)
                 return self._replay_msg(cmd, AgentIntent.CONTINUE)
             facts = self._confirmed_fact_refs(ctx.case.id)
             parties = self._confirmed_party_keys(ctx.case.id)
@@ -924,6 +1223,29 @@ class CommandHandler:
                 actor_id=self.actor_id,
                 auto_wait=True,
             )
+            if not result.created:
+                # Soft-failed proposals: park or fail for retry; never leave RUNNING.
+                ctx2 = self._reload_ctx(ctx)
+                claim_ctx2 = (ctx2.context_json or {}).get("claim_direction") or {}
+                self._fail_or_park_claim_propose(ctx2, claim_ctx2)
+                rejected = result.rejected_proposals or []
+                detail = ""
+                if rejected:
+                    detail = rejected[0].get("error") or ""
+                msg = (
+                    "诉讼请求建议未能生成。\n\n"
+                    f"原因：{detail or '提案未通过校验。'}\n\n"
+                    "你已经确认的事实与当事人不会丢失。\n\n"
+                    "【重新尝试】请输入「重试」。"
+                )
+                assert cmd is not None
+                self._finish_cmd(cmd, {"message": msg})
+                return HandlerResult(
+                    message=msg,
+                    intent=AgentIntent.CONTINUE,
+                    command_id=cmd_id,
+                    error_code=AgentErrorCode.LLM_REQUEST_FAILED,
+                )
             msg = (
                 f"已生成 {len(result.created)} 条诉讼请求建议，等待律师确认。"
                 "可以说「查看诉讼请求」「确认诉讼请求1」。"
@@ -977,6 +1299,60 @@ class CommandHandler:
         assert cmd is not None
         self._finish_cmd(cmd, {"message": msg, "status": done.instance.status})
         return HandlerResult(message=msg, intent=AgentIntent.CONTINUE, command_id=cmd_id)
+
+    def _fail_or_park_claim_propose(
+        self, ctx: CaseContext, claim_ctx: dict[str, Any]
+    ) -> None:
+        """Claim propose with 0 usable results must not leave NodeRun RUNNING."""
+        latest = self._current_node_run(ctx) if ctx.current_node else None
+        rejected = claim_ctx.get("rejected_proposals") or []
+        if latest and latest.status in {"RUNNING", "WAITING_USER"}:
+            detail = ""
+            if rejected:
+                detail = str(rejected[0].get("error") or rejected[0].get("code") or "")
+            try:
+                self.runtime.fail_node(
+                    latest.id,
+                    error_code="CLAIM_PROPOSE_FAILED",
+                    error_detail=(detail or "no usable claim proposals")[:500],
+                    retryable=True,
+                )
+                return
+            except Exception:  # noqa: BLE001
+                pass
+        self._ensure_human_gate_waiting(ctx)
+
+    def _ensure_human_gate_waiting(self, ctx: CaseContext) -> None:
+        """If a human gate NodeRun is RUNNING with no worker, park as WAITING_USER."""
+        if ctx.instance is None or ctx.current_node is None:
+            return
+        if ctx.current_node.code not in _HUMAN_GATE_CODES:
+            return
+        latest = self._current_node_run(ctx)
+        if latest is not None and latest.status == "RUNNING":
+            latest.status = "WAITING_USER"
+            self.session.flush()
+        if ctx.workflow_status == "WAITING_USER" and ctx.waiting_reason != "user_pause":
+            return
+        reason_map = {
+            "N3_CONFIRM_EVIDENCE": "EVIDENCE",
+            "N5_CONFIRM_PARTIES": "PARTY",
+            "N6_CONFIRM_FACTS": "FACT",
+            "N7_CONFIRM_CLAIMS": "CLAIM",
+            "N9_REVIEW": "DRAFT",
+        }
+        reason = reason_map.get(ctx.current_node.code, ctx.current_node.code)
+        try:
+            self.runtime.wait_for_user(
+                ctx.instance.id,
+                reason=reason,
+                context={
+                    "gate": ctx.current_node.code,
+                    "node_run_id": str(latest.id) if latest else None,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            return
 
     def _gate_continue_draft(self, ctx: CaseContext) -> HandlerResult:
         draft = ctx.latest_draft
@@ -1215,50 +1591,69 @@ class CommandHandler:
 
     def _create_party(self, ctx: CaseContext, intent: IntentResult) -> HandlerResult:
         params = intent.parameters or {}
-        role = params.get("role")
-        name = params.get("name")
-        if not role or not name:
+        parties = list(params.get("parties") or [])
+        if not parties and params.get("role") and params.get("name"):
+            parties = [{"role": params["role"], "name": params["name"]}]
+        if not parties:
             raise AgentError(
                 "请明确角色与名称，例如：录入原告：某某公司",
                 code=AgentErrorCode.VALIDATION_ERROR,
             )
+
         # Speculative language must never create parties
-        raw_reason = str(params.get("llm_reason") or params.get("target_text") or "")
-        blob = f"{name} {raw_reason}"
+        blob = " ".join(
+            [
+                str(params.get("llm_reason") or ""),
+                str(params.get("target_text") or ""),
+                *(str(p.get("name") or "") for p in parties),
+            ]
+        )
         if any(w in blob for w in ("可能", "好像", "看起来", "是不是", "是否")):
             raise AgentError(
                 "未明确要求录入当事人，未创建。请使用「录入原告：…」等明确指令。",
                 code=AgentErrorCode.VALIDATION_ERROR,
             )
+
+        created: list[Any] = []
         try:
-            dto = self.party_svc.create_party_candidate(
-                case_id=ctx.case.id,
-                role=str(role),
-                name=str(name),
-                actor_id=self.actor_id,
-                party_type=params.get("party_type"),
-            )
+            for p in parties:
+                dto = self.party_svc.create_party_candidate(
+                    case_id=ctx.case.id,
+                    role=str(p["role"]),
+                    name=str(p["name"]),
+                    actor_id=self.actor_id,
+                    party_type=params.get("party_type"),
+                )
+                created.append(dto)
         except ValidationError as exc:
             raise AgentError(exc.message, code=AgentErrorCode.VALIDATION_ERROR) from exc
         except ConflictError as exc:
             raise AgentError(exc.message, code=AgentErrorCode.VALIDATION_ERROR) from exc
-        role_label = {"PLAINTIFF": "原告", "DEFENDANT": "被告", "THIRD_PARTY": "第三人"}.get(
-            dto.role, dto.role
-        )
+
+        role_label = {
+            "PLAINTIFF": "原告",
+            "DEFENDANT": "被告",
+            "THIRD_PARTY": "第三人",
+        }
+        bits = [
+            f"{role_label.get(d.role, d.role)}“{d.name}”" for d in created
+        ]
         msg = (
-            f"已录入{role_label}“{dto.name}”，当前为待确认状态。"
+            f"已录入{'、'.join(bits)}，当前为待确认状态。"
             "请在确认无误后明确确认该当事人。"
         )
         return HandlerResult(
             message=msg,
             intent=AgentIntent.CREATE_PARTY,
+            pending_action=None,
             references=[
                 {
-                    "party_key": str(dto.party_key),
-                    "role": dto.role,
-                    "layer": dto.layer,
-                    "version": dto.version,
+                    "party_key": str(d.party_key),
+                    "role": d.role,
+                    "layer": d.layer,
+                    "version": d.version,
                 }
+                for d in created
             ],
         )
 
@@ -1266,7 +1661,10 @@ class CommandHandler:
         if not intent.targets:
             raise AgentError("请指定当事人编号", code=AgentErrorCode.AMBIGUOUS_TARGET)
         resolver = TargetResolver(self.session, case_id=ctx.case.id)
-        party = resolver.resolve_party_by_display_index(int(intent.targets[0]))
+        party = resolver.resolve_party_by_display_index(
+            int(intent.targets[0]),
+            role=(intent.parameters or {}).get("role"),
+        )
         cmd_id = stable_command_id(
             "CONFIRM_PARTY", ctx.case.id, party.party_key, party.version
         )
@@ -1294,7 +1692,10 @@ class CommandHandler:
         if not intent.targets:
             raise AgentError("请指定当事人编号", code=AgentErrorCode.AMBIGUOUS_TARGET)
         resolver = TargetResolver(self.session, case_id=ctx.case.id)
-        party = resolver.resolve_party_by_display_index(int(intent.targets[0]))
+        party = resolver.resolve_party_by_display_index(
+            int(intent.targets[0]),
+            role=(intent.parameters or {}).get("role"),
+        )
         cmd_id = stable_command_id(
             "REJECT_PARTY", ctx.case.id, party.party_key, party.version
         )
@@ -1609,9 +2010,9 @@ class CommandHandler:
             if code is None:
                 break
 
-            # At a human gate with WAITING_USER: run gate handler once (may propose
-            # or complete). If it stays waiting for the lawyer, stop.
-            if code in _HUMAN_GATE_CODES and status == "WAITING_USER":
+            # Human gates: invoke once. Stop while still on this gate.
+            # Only continue the loop when the gate completed and advanced.
+            if code in _HUMAN_GATE_CODES:
                 step = self._step_current_node(ctx)
                 if step.message:
                     parts.append(step.message)
@@ -1621,24 +2022,15 @@ class CommandHandler:
                     command_id = step.command_id
                 last_error = step.error_code
                 ctx_after = self._reload_ctx(ctx)
-                # Gate incomplete / still waiting → stop (do not auto-confirm).
-                if (
-                    step.error_code == AgentErrorCode.HUMAN_GATE_REQUIRED
-                    or (
-                        ctx_after.workflow_status == "WAITING_USER"
-                        and (
-                            ctx_after.current_node is None
-                            or ctx_after.current_node.code in _HUMAN_GATE_CODES
-                        )
-                        and (
-                            ctx_after.current_node is None
-                            or ctx_after.current_node.code == code
-                        )
-                    )
-                ):
-                    break
-                # Gate completed and advanced — loop to execute following machine nodes.
-                continue
+                after_code = (
+                    ctx_after.current_node.code if ctx_after.current_node else None
+                )
+                if after_code != code:
+                    # Gate completed and advanced — run following machine nodes.
+                    continue
+                # Still on this human gate: never leave a zombie RUNNING NodeRun.
+                self._ensure_human_gate_waiting(ctx_after)
+                break
 
             if code in _MACHINE_NODE_CODES:
                 try:
@@ -1698,7 +2090,10 @@ class CommandHandler:
         if code == "N3_CONFIRM_EVIDENCE":
             n = len(ctx.pending_evidence)
             if n:
-                return f"现在需要你确认证据（还有 {n} 条待处理）。可说「接受证据1」或「排除证据2」。"
+                return (
+                    f"现在需要你确认证据（还有 {n} 条待处理）。"
+                    "可说「接受证据1」或「排除证据2」。"
+                )
             return "现在需要你确认证据。"
         if code == "N5_CONFIRM_PARTIES":
             return "现在需要你确认本案当事人。可在「当事人」区域新增，并说「确认当事人1」。"
@@ -1839,14 +2234,78 @@ class CommandHandler:
         code = ctx.current_node.code if ctx.current_node else None
         if code == "N6_CONFIRM_FACTS" and ctx.pending_facts:
             return (
-                f"现在不能生成起诉状，因为还有 {len(ctx.pending_facts)} 个事实候选"
-                "尚未由律师确认。"
+                "当前还不能安全生成起诉状，因为还有 "
+                f"{len(ctx.pending_facts)} 个事实候选尚未由律师确认。"
             )
         if code == "N3_CONFIRM_EVIDENCE" and ctx.pending_evidence:
             return (
-                f"现在不能生成起诉状，因为还有 {len(ctx.pending_evidence)} 条证据待确认。"
+                "当前还不能安全生成起诉状，因为还有 "
+                f"{len(ctx.pending_evidence)} 条证据待确认。"
             )
-        return f"当前节点 {code} 不能生成起诉状。"
+        return f"当前还不能安全生成起诉状，因为当前节点 {code} 尚不满足生成条件。"
+
+    def _build_resolution(self, ctx: CaseContext) -> dict[str, Any]:
+        evidence_numbers = [
+            str(e.number)
+            for e in ctx.pending_evidence
+            if getattr(e, "number", None) is not None
+        ]
+        # Also include any current evidence numbers for listing
+        if not evidence_numbers:
+            from backend.models import EvidenceItem
+
+            evidence_numbers = [
+                str(e.number)
+                for e in self.session.scalars(
+                    select(EvidenceItem).where(
+                        EvidenceItem.case_id == ctx.case.id,
+                        EvidenceItem.is_current.is_(True),
+                    )
+                )
+                if getattr(e, "number", None) is not None
+            ]
+        fact_indices = list(range(1, len(ctx.pending_facts) + 1))
+        party_labels = []
+        unique_by_role: dict[str, list] = {}
+        for i, p in enumerate(
+            sorted(ctx.pending_parties, key=lambda x: (x.created_at, x.party_key)),
+            start=1,
+        ):
+            role_zh = {
+                "PLAINTIFF": "原告",
+                "DEFENDANT": "被告",
+                "THIRD_PARTY": "第三人",
+            }.get(p.role, p.role)
+            party_labels.append(f"{role_zh}{i}（{p.name}）")
+            unique_by_role.setdefault(p.role, []).append(
+                {"display_index": i, "role": p.role, "name": p.name}
+            )
+        unique_candidate_party = None
+        # Prefer role-scoped uniqueness when role known later; for bare confirm,
+        # only if exactly one candidate party overall.
+        if len(ctx.pending_parties) == 1:
+            p0 = ctx.pending_parties[0]
+            unique_candidate_party = {
+                "display_index": 1,
+                "role": p0.role,
+                "name": p0.name,
+            }
+        # Role-unique maps for "确认被告"
+        role_unique = {
+            role: items[0]
+            for role, items in unique_by_role.items()
+            if len(items) == 1
+        }
+        claim_count = len(ctx.pending_claims)
+        return {
+            "evidence_numbers": evidence_numbers,
+            "fact_indices": fact_indices,
+            "party_labels": party_labels,
+            "claim_count": claim_count,
+            "unique_claim_index": 1 if claim_count == 1 else None,
+            "unique_candidate_party": unique_candidate_party,
+            "role_unique_parties": role_unique,
+        }
 
 
 def build_agent_response(
@@ -1895,4 +2354,9 @@ def build_agent_response(
         error_code=handler.error_code,
         command_id=handler.command_id,
         idempotent_replay=handler.idempotent_replay,
+        safety_result=handler.safety_result,
+        missing_fields=list(handler.missing_fields or []),
+        pending_action=handler.pending_action,
+        routing_status=handler.routing_status,
+        recent_focus=handler.recent_focus,
     )

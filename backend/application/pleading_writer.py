@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.application.claim_direction import ClaimDirectionService
+from backend.application.pleading_readiness import PleadingReadinessService
 from backend.domain.errors import NotFoundError, ValidationError
 from backend.domain.services import DomainService
 from backend.models import (
@@ -97,6 +98,9 @@ class PleadingWriterService:
         raw_result: PleadingWriterEngineResult | None = None,
     ) -> PleadingWriterApplyResult:
         self.domain._require_case(case_id)  # noqa: SLF001
+
+        # Hard gate: No readiness → No complaint draft
+        PleadingReadinessService(self.session).assert_ready(case_id)
 
         claim = self._require_writer_claim(case_id, claim_direction_ref)
         parties = self._validate_parties(case_id, confirmed_party_keys)
@@ -493,6 +497,10 @@ class PleadingWriterService:
             if material is None or material.case_id != case_id:
                 raise ValidationError(
                     f"broken provenance: material/case mismatch for span {span.id}"
+                )
+            if material.life_status == "VOID":
+                raise ValidationError(
+                    f"broken provenance: material is VOID for span {span.id}"
                 )
             ec = self.session.get(ExtractedContent, span.extracted_content_id)
             if ec is None or ec.status != "SUCCEEDED":

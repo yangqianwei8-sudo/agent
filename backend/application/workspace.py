@@ -8,16 +8,19 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.application.material_usability import (
+    MaterialUsabilityPolicy,
+    MaterialUsabilityView,
+)
+from backend.application.pleading_readiness import PleadingReadinessService
 from backend.llm.factory import ai_mode_label
 from backend.models import (
     AgentMessage,
     Case,
-    CaseMaterial,
     CaseParty,
     ClaimDirection,
     DocumentDraft,
     EvidenceItem,
-    ExtractedContent,
     Fact,
     WorkflowInstance,
     WorkflowNode,
@@ -52,19 +55,44 @@ class WorkspaceQueryService:
         if case is None:
             raise LookupError("case not found")
         workflow = self._workflow_block(case_id)
+        policy = MaterialUsabilityPolicy(self.session)
+        usable = [
+            self._material_row(policy.describe_material(m), pool="usable")
+            for m in policy.list_usable_materials(case_id)
+        ]
+        pending = [
+            self._material_row(policy.describe_material(m), pool="pending")
+            for m in policy.list_unusable_materials(case_id)
+        ]
+        voided = [
+            self._material_row(policy.describe_material(m), pool="void")
+            for m in policy.list_void_materials(case_id)
+        ]
+        pool = policy.pool_summary(case_id)
         return {
             "case": self._case_detail(case),
             "workflow": workflow,
-            "materials": self._materials(case_id),
+            # Lawyer "案件材料池" — SUCCEEDED only (never FAILED / pending / void)
+            "materials": usable,
+            "usable_materials": usable,
+            "pending_materials": pending,
+            "void_materials": voided,
+            "material_pool": pool,
+            "analysis_disclosure": pool["disclosure"],
             "evidence": self._evidence(case_id),
             "parties": self._parties(case_id),
             "facts": self._facts(case_id),
             "claim_direction": self._claim(case_id),
             "draft": self._draft(case_id),
+            "pleading_readiness": self._pleading_readiness(case_id),
             "conversation": self._conversation(case_id),
             "node_labels": NODE_LABELS_ZH,
             "ai": ai_mode_label(),
         }
+
+    def _pleading_readiness(self, case_id: UUID) -> dict[str, Any]:
+        result = PleadingReadinessService(self.session).evaluate(case_id)
+        return result.model_dump(mode="json")
 
     def _case_summary(self, case: Case) -> dict[str, Any]:
         parties = self._parties(case.id)
@@ -174,39 +202,41 @@ class WorkspaceQueryService:
             "instance_id": str(inst.id),
         }
 
-    def _materials(self, case_id: UUID) -> list[dict[str, Any]]:
-        rows = list(
-            self.session.scalars(
-                select(CaseMaterial)
-                .where(CaseMaterial.case_id == case_id)
-                .order_by(CaseMaterial.created_at.desc())
-            )
+    def _material_row(self, view: MaterialUsabilityView, *, pool: str) -> dict[str, Any]:
+        m = view.material
+        # Prefer the usable SUCCEEDED EC when present; else latest for diagnostics only.
+        succeeded = list(view.succeeded_ecs)
+        display_ec = (
+            succeeded[-1] if succeeded else (view.all_ecs[-1] if view.all_ecs else None)
         )
-        out: list[dict[str, Any]] = []
-        for m in rows:
-            ecs = list(
-                self.session.scalars(
-                    select(ExtractedContent)
-                    .where(ExtractedContent.material_id == m.id)
-                    .order_by(ExtractedContent.created_at.desc())
-                )
-            )
-            latest = ecs[0] if ecs else None
-            out.append(
-                {
-                    "id": str(m.id),
-                    "filename": m.filename,
-                    "mime": m.mime,
-                    "byte_size": m.byte_size,
-                    "parse_status": m.parse_status,
-                    "life_status": m.life_status,
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
-                    "extraction_method": latest.extraction_method if latest else None,
-                    "extraction_status": latest.status if latest else None,
-                    "extraction_error": latest.error_detail if latest else None,
-                }
-            )
-        return out
+        return {
+            "id": str(m.id),
+            "filename": m.filename,
+            "mime": m.mime,
+            "byte_size": m.byte_size,
+            "parse_status": m.parse_status,
+            "life_status": m.life_status,
+            "life_status_label": (
+                "已作废"
+                if m.life_status == "VOID"
+                else ("可读取" if view.usable else "待处理")
+            ),
+            "pool": pool,
+            "usable": view.usable,
+            "status_label": view.status_label,
+            "pending_reason": view.pending_reason,
+            "analysis_participation": view.analysis_participation,
+            "void_reason": m.void_reason,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+            "page_count": display_ec.page_count if display_ec else None,
+            "extraction_method": display_ec.extraction_method if display_ec else None,
+            "extraction_status": display_ec.status if display_ec else None,
+            "extraction_error": display_ec.error_detail if display_ec else None,
+            "succeeded_extracted_content_id": (
+                str(succeeded[-1].id) if len(succeeded) == 1 else None
+            ),
+            "succeeded_ec_count": len(succeeded),
+        }
 
     def _evidence(self, case_id: UUID) -> list[dict[str, Any]]:
         rows = list(

@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.application.material_usability import MaterialUsabilityPolicy
 from backend.domain.errors import NotFoundError, ValidationError
 from backend.domain.services import DomainService
 from backend.models import (
@@ -67,29 +68,58 @@ class EvidenceOrganizerService:
         extracted_content_ids: list[UUID] | None = None,
         material_ids: list[UUID] | None = None,
     ) -> list[UUID]:
-        """Resolve Organizer scope. Never auto-picks latest EC when a material has multiple."""
+        """Resolve Organizer scope from usable materials only.
+
+        Never auto-picks latest EC. Never resolves FAILED / VOID / no-SUCCEEDED.
+        """
+        policy = MaterialUsabilityPolicy(self.session)
         if extracted_content_ids:
-            return list(extracted_content_ids)
+            resolved: list[UUID] = []
+            rejected: list[str] = []
+            for ec_id in extracted_content_ids:
+                try:
+                    policy.assert_extracted_content_usable(
+                        case_id=case_id, extracted_content_id=ec_id
+                    )
+                    resolved.append(ec_id)
+                except ValidationError as exc:
+                    rejected.append(str(exc))
+            if rejected:
+                raise ValidationError(
+                    "organizer scope rejected unusable extracted_content: "
+                    + "; ".join(rejected)
+                )
+            return resolved
         if not material_ids:
             raise ValidationError(
                 "extracted_content_ids or material_ids required; no implicit EC scan"
             )
-        resolved: list[UUID] = []
+        resolved = []
+        rejected = []
         for mid in material_ids:
-            material = self.session.get(CaseMaterial, mid)
-            if material is None or material.case_id != case_id:
-                raise ValidationError(f"material {mid} does not belong to case {case_id}")
-            ecs = self.session.scalars(
-                select(ExtractedContent).where(ExtractedContent.material_id == mid)
-            ).all()
-            if len(ecs) == 0:
-                raise ValidationError(f"material {mid} has no ExtractedContent")
-            if len(ecs) > 1:
+            try:
+                policy.assert_material_usable_for_scope(case_id=case_id, material_id=mid)
+            except ValidationError as exc:
+                rejected.append(str(exc))
+                continue
+            succeeded = policy.succeeded_extracted_contents(mid)
+            if len(succeeded) == 0:
+                rejected.append(
+                    f"material {mid} has no SUCCEEDED ExtractedContent; "
+                    "not in usable material pool"
+                )
+                continue
+            if len(succeeded) > 1:
                 raise ValidationError(
                     f"material {mid} has multiple ExtractedContent; "
                     "pass extracted_content_ids explicitly (no auto latest)"
                 )
-            resolved.append(ecs[0].id)
+            resolved.append(succeeded[0].id)
+        if rejected:
+            raise ValidationError(
+                "organizer scope rejected unusable materials (audit): "
+                + "; ".join(rejected)
+            )
         return resolved
 
     def organize(
@@ -348,26 +378,26 @@ class EvidenceOrganizerService:
     def _load_and_validate_ecs(
         self, case_id: UUID, extracted_content_ids: list[UUID]
     ) -> list[ExtractedContent]:
+        policy = MaterialUsabilityPolicy(self.session)
         ecs: list[ExtractedContent] = []
         for ec_id in extracted_content_ids:
-            ec = self.session.get(ExtractedContent, ec_id)
-            if ec is None:
-                raise NotFoundError(f"extracted_content not found: {ec_id}")
-            material = self.session.get(CaseMaterial, ec.material_id)
-            if material is None or material.case_id != case_id:
-                raise ValidationError(
-                    f"extracted_content {ec_id} does not belong to case {case_id}"
+            try:
+                ecs.append(
+                    policy.assert_extracted_content_usable(
+                        case_id=case_id, extracted_content_id=ec_id
+                    )
                 )
-            if ec.status != "SUCCEEDED":
-                raise ValidationError(
-                    f"extracted_content {ec_id} is not SUCCEEDED (status={ec.status})"
-                )
-            ecs.append(ec)
+            except ValidationError as exc:
+                # Preserve NotFound semantics when EC row is missing
+                if self.session.get(ExtractedContent, ec_id) is None:
+                    raise NotFoundError(f"extracted_content not found: {ec_id}") from exc
+                raise
         return ecs
 
     def _load_trusted_spans(
         self, case_id: UUID, ecs: list[ExtractedContent]
     ) -> list[SpanView]:
+        policy = MaterialUsabilityPolicy(self.session)
         ec_ids = [ec.id for ec in ecs]
         rows = self.session.scalars(
             select(SourceSpan).where(SourceSpan.extracted_content_id.in_(ec_ids))
@@ -377,8 +407,12 @@ class EvidenceOrganizerService:
             material = self.session.get(CaseMaterial, span.material_id)
             if material is None or material.case_id != case_id:
                 continue
+            if material.life_status == "VOID":
+                continue
             ec = self.session.get(ExtractedContent, span.extracted_content_id)
             if ec is None or ec.status != "SUCCEEDED":
+                continue
+            if not policy.is_material_usable(material.id, case_id=case_id):
                 continue
             views.append(
                 SpanView(

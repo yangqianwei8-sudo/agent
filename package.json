@@ -1,0 +1,8 @@
+{
+  "name": "litigation-case-agent-tools",
+  "private": true,
+  "description": "Node tooling for CamScanner CLI (scanned PDF → Markdown)",
+  "dependencies": {
+    "camscanner-cli": "^1.1.6"
+  }
+}

@@ -63,7 +63,11 @@ class PdfParser:
         if self._looks_like_scan(page_non_ws):
             return ParseFailureDTO(
                 error_code="PDF_NEEDS_OCR",
-                error_detail="text layer appears empty; OCR path required",
+                error_detail=(
+                    "该 PDF 没有可提取的文字层（多为扫描件或图片型 PDF）。"
+                    "将尝试通过 CamScanner CLI 转为 Markdown；"
+                    "若未启用或转换失败，请手动转为 .md / .docx 后再上传。"
+                ),
                 extraction_method=self.EXTRACTION_METHOD,
                 extraction_version=self.EXTRACTION_VERSION,
                 needs_ocr=True,

@@ -140,12 +140,29 @@ class LLMIntentRouter:
                     fallback = _deterministic_fallback(text, ctx)
                     if fallback is not None:
                         return fallback
+                    # Action clear but args missing → INCOMPLETE, never UNKNOWN
+                    from backend.agent.action_safety import detect_incomplete_mutation
+
+                    incomplete = detect_incomplete_mutation(text)
+                    if incomplete is not None:
+                        params = dict(incomplete.arguments)
+                        params.update(args)
+                        if incomplete.missing_fields:
+                            params["missing_fields"] = list(incomplete.missing_fields)
+                        params["routing_status"] = "INCOMPLETE"
+                        params.setdefault("prompt_version", PROMPT_VERSION)
+                        return IntentResult(
+                            intent=incomplete.intent,
+                            targets=list(incomplete.targets),
+                            parameters=params,
+                        )
+                    args = dict(args)
+                    args["missing_fields"] = ["target"]
+                    args["routing_status"] = "INCOMPLETE"
                     return IntentResult(
-                        intent=AgentIntent.UNKNOWN,
-                        parameters={
-                            "reason": "missing_explicit_target",
-                            "target_text": target_text,
-                        },
+                        intent=intent,
+                        targets=[],
+                        parameters=args,
                     )
 
         if out.reason:
@@ -159,6 +176,65 @@ class LLMIntentRouter:
         safe_targets = [t for t in targets if not _UUID_RE.fullmatch(t)]
         result = IntentResult(intent=intent, targets=safe_targets, parameters=args)
 
+        # Overlay deterministic CREATE_PARTY / numbered party-role confirms
+        det_full = _deterministic_fallback(text, ctx)
+        if det_full is not None and det_full.intent == AgentIntent.CREATE_PARTY:
+            from backend.agent.action_safety import (
+                PartyNameValidator,
+                detect_create_party_request,
+            )
+
+            det = detect_create_party_request(text)
+            if det is not None:
+                params = dict(det.arguments)
+                if det.missing_fields:
+                    params["missing_fields"] = list(det.missing_fields)
+                params.setdefault("prompt_version", PROMPT_VERSION)
+                params.setdefault("confidence", out.confidence)
+                return IntentResult(intent=AgentIntent.CREATE_PARTY, parameters=params)
+
+        if result.intent == AgentIntent.CREATE_PARTY:
+            from backend.agent.action_safety import (
+                PartyNameValidator,
+                detect_create_party_request,
+            )
+
+            det = detect_create_party_request(text)
+            if det is not None:
+                params = dict(det.arguments)
+                if det.missing_fields:
+                    params["missing_fields"] = list(det.missing_fields)
+                params.setdefault("prompt_version", PROMPT_VERSION)
+                params.setdefault("confidence", out.confidence)
+                return IntentResult(intent=AgentIntent.CREATE_PARTY, parameters=params)
+            # LLM invented name? validate or null out
+            name = args.get("name")
+            if name is not None and not PartyNameValidator.is_valid(str(name)):
+                args = dict(args)
+                role = args.get("role") or "PLAINTIFF"
+                field = {
+                    "PLAINTIFF": "plaintiff_name",
+                    "DEFENDANT": "defendant_name",
+                    "THIRD_PARTY": "third_party_name",
+                }.get(str(role), "name")
+                args["name"] = None
+                args["missing_fields"] = [field]
+                args["role"] = role
+                return IntentResult(intent=AgentIntent.CREATE_PARTY, parameters=args)
+
+        if (
+            det_full is not None
+            and det_full.intent == AgentIntent.CONFIRM_PARTY
+            and det_full.targets
+        ):
+            merged = dict(result.parameters or {})
+            merged.update(det_full.parameters or {})
+            return IntentResult(
+                intent=AgentIntent.CONFIRM_PARTY,
+                targets=list(det_full.targets),
+                parameters=merged,
+            )
+
         # Explicit numbered confirms: if LLM is fuzzy/misses target, fall back to
         # deterministic parse (never for ambiguous affirmations).
         _no_target_ok = {
@@ -168,15 +244,70 @@ class LLMIntentRouter:
             AgentIntent.REJECT_CLAIM_DIRECTION,
             AgentIntent.AMEND_CLAIM_DIRECTION,
         }
-        if result.intent == AgentIntent.UNKNOWN or (
+        if result.intent in {
+            AgentIntent.UNKNOWN,
+            AgentIntent.CASE_CONVERSATION,
+        } or (
             result.intent in _HIGH_RISK
             and not result.targets
             and result.intent not in _no_target_ok
         ):
             fallback = _deterministic_fallback(text, ctx)
-            if fallback is not None:
-                return fallback
+            if fallback is not None and fallback.intent not in {
+                AgentIntent.CASE_CONVERSATION,
+                AgentIntent.UNKNOWN,
+            }:
+                # Prefer actionable incomplete/complete mutations over conversation
+                if result.intent in {
+                    AgentIntent.UNKNOWN,
+                    AgentIntent.CASE_CONVERSATION,
+                } or fallback.targets or (fallback.parameters or {}).get(
+                    "missing_fields"
+                ):
+                    return fallback
+            # Incomplete action detection before conversation/UNKNOWN
+            from backend.agent.action_safety import detect_incomplete_mutation
+
+            incomplete = detect_incomplete_mutation(text)
+            if incomplete is not None:
+                params = dict(incomplete.arguments)
+                if incomplete.missing_fields:
+                    params["missing_fields"] = list(incomplete.missing_fields)
+                params["routing_status"] = "INCOMPLETE"
+                params.setdefault("prompt_version", PROMPT_VERSION)
+                return IntentResult(
+                    intent=incomplete.intent,
+                    targets=list(incomplete.targets),
+                    parameters=params,
+                )
+            # Free-form questions / discussion → conversation (not dead-end UNKNOWN)
+            if (
+                result.intent == AgentIntent.UNKNOWN
+                and _should_route_to_conversation(text, ctx)
+            ):
+                return IntentResult(
+                    intent=AgentIntent.CASE_CONVERSATION,
+                    parameters={
+                        "reason": "free_form_case_discussion",
+                        "prompt_version": PROMPT_VERSION,
+                    },
+                )
         return result
+def _should_route_to_conversation(text: str, ctx: IntentParseContext) -> bool:
+    """Route free-form discussion to CASE_CONVERSATION; keep short gate OKs as UNKNOWN."""
+    _ = ctx
+    t = text.strip()
+    if not t:
+        return False
+    if _AMBIGUOUS.match(t):
+        return False
+    # Invalid garbage short tokens stay UNKNOWN
+    if len(t) <= 2 and t in {"?", "？", ".", "。", "嗯", "啊"}:
+        return False
+    # Substantive case talk / questions
+    if len(t) >= 4:
+        return True
+    return False
 
 
 def _deterministic_fallback(
@@ -189,21 +320,9 @@ def _deterministic_fallback(
     det = DeterministicIntentRouter().parse(text, context=ctx)
     if det.intent == AgentIntent.UNKNOWN:
         return None
-    _no_target_ok = {
-        AgentIntent.APPROVE_DRAFT,
-        AgentIntent.CREATE_PARTY,
-        AgentIntent.CONFIRM_CLAIM_DIRECTION,
-        AgentIntent.REJECT_CLAIM_DIRECTION,
-        AgentIntent.AMEND_CLAIM_DIRECTION,
-    }
-    if (
-        det.intent in _HIGH_RISK
-        and not det.targets
-        and det.intent not in _no_target_ok
-    ):
-        return None
+    # Incomplete high-risk actions (empty targets) are valid proposals —
+    # Safety Gate will ask for slots. Do NOT drop them.
     return det
-
 
 def _build_user_prompt(message: str, ctx: IntentParseContext) -> str:
     return (

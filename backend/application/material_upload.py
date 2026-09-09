@@ -12,6 +12,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from backend.application.material_extraction import MaterialExtractionService
+from backend.application.material_usability import MaterialUsabilityPolicy
 from backend.domain.errors import ValidationError
 from backend.domain.services import DomainService
 from backend.infrastructure.config import get_settings
@@ -23,6 +24,7 @@ ALLOWED_EXT = {
     ".docx": (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     ),
+    ".md": "text/markdown",
 }
 
 
@@ -32,6 +34,9 @@ class UploadResult:
     extraction_status: str | None
     extraction_error: str | None
     success: bool
+    usable: bool
+    message: str
+    needs_ocr: bool = False
 
 
 def sanitize_filename(filename: str) -> str:
@@ -75,7 +80,7 @@ class MaterialUploadService:
         safe = sanitize_filename(filename)
         ext = Path(safe).suffix.lower()
         if ext not in ALLOWED_EXT:
-            raise ValidationError("only .pdf and .docx are supported")
+            raise ValidationError("only .pdf, .docx and .md are supported")
         mime = ALLOWED_EXT[ext]
         digest = hashlib.sha256(data).hexdigest()
         storage_key = f"{case_id}/{uuid.uuid4().hex[:12]}_{safe}"
@@ -91,9 +96,31 @@ class MaterialUploadService:
         )
         outcome = self.extraction.extract_material(material.id, actor_id=actor_id)
         ec = outcome.extracted_content
+        usable = MaterialUsabilityPolicy(self.session).is_material_usable(
+            material.id, case_id=case_id
+        )
+        if outcome.success and usable:
+            message = "文件已上传并读取成功，已进入案件材料。"
+        else:
+            reason = getattr(ec, "error_detail", None) if ec else None
+            detail = f"\n原因：{reason}" if reason else ""
+            ocr_hint = (
+                "\n扫描件将尝试 CamScanner 转 Markdown；失败时请登录 CLI 后重试，"
+                "或上传 .md / .docx / 带文字层 PDF。"
+                if outcome.needs_ocr
+                else ""
+            )
+            message = (
+                "文件已上传，但 AI 暂时无法读取。"
+                "该文件尚未进入案件材料，也不会参与证据整理和案件分析。"
+                f"{detail}{ocr_hint}"
+            )
         return UploadResult(
             material=material,
             extraction_status=ec.status if ec else None,
             extraction_error=getattr(ec, "error_detail", None) if ec else None,
             success=outcome.success,
+            usable=usable,
+            message=message,
+            needs_ocr=outcome.needs_ocr,
         )

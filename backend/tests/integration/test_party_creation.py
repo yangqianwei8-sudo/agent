@@ -206,7 +206,7 @@ def test_j_ambiguous_does_not_create(
         intent_engine=DeterministicIntentRouter(),
     )
     resp = agent.handle_message(case_id=case.id, message="原告可能是智图公司")
-    assert resp.intent == AgentIntent.UNKNOWN
+    assert resp.intent == AgentIntent.CASE_CONVERSATION
     count = db_session.scalar(
         select(func.count()).select_from(CaseParty).where(CaseParty.case_id == case.id)
     )
@@ -359,7 +359,7 @@ def test_deterministic_intent_create_party_phrases() -> None:
     assert router.parse("录入原告：智图公司").intent == AgentIntent.CREATE_PARTY
     assert router.parse("新增被告星海公司").intent == AgentIntent.CREATE_PARTY
     assert router.parse("添加第三人：丙方").parameters["role"] == "THIRD_PARTY"
-    assert router.parse("原告可能是智图公司").intent == AgentIntent.UNKNOWN
+    assert router.parse("原告可能是智图公司").intent == AgentIntent.CASE_CONVERSATION
 
 
 def test_workspace_html_has_add_party_entry(client: TestClient) -> None:

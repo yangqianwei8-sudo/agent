@@ -91,7 +91,7 @@ class TargetResolver:
             return all_current[index - 1]
         return facts[index - 1]
 
-    def resolve_party_by_display_index(self, index: int):
+    def resolve_party_by_display_index(self, index: int, *, role: str | None = None):
         from backend.models import CaseParty
 
         parties = list(
@@ -104,6 +104,8 @@ class TargetResolver:
                 .order_by(CaseParty.created_at.asc(), CaseParty.party_key.asc())
             )
         )
+        if role:
+            parties = [p for p in parties if p.role == role]
         if index < 1 or index > len(parties):
             raise AgentError(
                 f"当事人编号 {index} 不存在",

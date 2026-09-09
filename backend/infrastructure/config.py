@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 60
     llm_max_retries: int = 2
 
+    # CamScanner CLI — scanned PDF → Markdown
+    # Docs: https://www.camscanner.com/agent-docs/zh/platforms/for-agents/cli/
+    camscanner_cli_enabled: bool = True
+    camscanner_cli_command: str = ""  # e.g. "npx camscanner-cli" or absolute path
+    camscanner_cli_cwd: str = ""  # project root with node_modules; empty = process cwd
+    camscanner_cli_timeout_seconds: int = 300
+    camscanner_max_upload_bytes: int = 40 * 1024 * 1024
+    camscanner_temp_dir: str = ""  # empty = system temp; use D:\... when C: is low on space
+
 
 @lru_cache
 def get_settings() -> Settings:

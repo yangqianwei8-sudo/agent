@@ -1,0 +1,447 @@
+{
+  "case_id": "a0def455-123d-430a-a872-5b941874d63c",
+  "conversation_id": "bbbc3060-e18c-4683-b1bc-85337dc20576",
+  "ok": true,
+  "notes": [],
+  "seed_fact_key": "b3f68f8c-e588-4ffb-a681-e1302de96623",
+  "turns": [
+    {
+      "turn": 1,
+      "message": "你帮我录入原告与被告啊",
+      "http": 200,
+      "intent": "CREATE_PARTY",
+      "safety_result": "INCOMPLETE",
+      "missing_fields": [
+        "plaintiff_name",
+        "defendant_name"
+      ],
+      "pending_action": {
+        "pending_action": "CREATE_PARTIES",
+        "requested_roles": [
+          "PLAINTIFF",
+          "DEFENDANT"
+        ],
+        "missing_fields": [
+          "plaintiff_name",
+          "defendant_name"
+        ],
+        "parties": []
+      },
+      "reply": "可以。请告诉我原告和被告的具体名称。\n\n例如：\n原告：四川维海科技有限公司\n被告：四川富茂置业有限公司",
+      "before": {
+        "parties": 0,
+        "decisions": 0,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "after": {
+        "parties": 0,
+        "decisions": 0,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "mutation_delta": {},
+      "invalid_party_names": [],
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ],
+        "node": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 2,
+      "message": "原告是四川维海科技有限公司",
+      "http": 200,
+      "intent": "CREATE_PARTY",
+      "safety_result": "INCOMPLETE",
+      "missing_fields": [
+        "defendant_name"
+      ],
+      "pending_action": {
+        "pending_action": "CREATE_PARTIES",
+        "requested_roles": [
+          "PLAINTIFF",
+          "DEFENDANT"
+        ],
+        "missing_fields": [
+          "defendant_name"
+        ],
+        "parties": [
+          {
+            "role": "PLAINTIFF",
+            "name": "四川维海科技有限公司"
+          }
+        ]
+      },
+      "reply": "好的，还差一些信息。已收到原告：四川维海科技有限公司\n请告诉我被告的具体名称。",
+      "before": {
+        "parties": 0,
+        "decisions": 0,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "after": {
+        "parties": 0,
+        "decisions": 0,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "mutation_delta": {},
+      "invalid_party_names": [],
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ],
+        "node": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 3,
+      "message": "被告是四川富茂置业有限公司",
+      "http": 200,
+      "intent": "CREATE_PARTY",
+      "safety_result": "VALID",
+      "missing_fields": [],
+      "pending_action": null,
+      "reply": "已录入原告“四川维海科技有限公司”、被告“四川富茂置业有限公司”，当前为待确认状态。请在确认无误后明确确认该当事人。",
+      "before": {
+        "parties": 0,
+        "decisions": 0,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "after": {
+        "parties": 2,
+        "decisions": 0,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "mutation_delta": {
+        "parties": {
+          "before": 0,
+          "after": 2
+        }
+      },
+      "invalid_party_names": [],
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ],
+        "node": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 4,
+      "message": "这个被告应该没问题吧",
+      "http": 200,
+      "intent": "CASE_CONVERSATION",
+      "safety_result": null,
+      "missing_fields": [],
+      "pending_action": null,
+      "reply": "目前材料提示被告为四川富茂置业有限公司，这是分析判断，尚未由律师确认。现有材料【证据1】合同主体摘录显示甲方为四川富茂置业有限公司，乙方为四川维海科技有限公司，因此被告主体与合同甲方一致，初步看被告主体适格。但需注意，合同主体摘录仅为片段，未提供完整合同内容，无法确认合同是否有效签署、履行情况等。此外，被告是否应承担责任还需结合原告诉请及证据进一步判断。这是基于现有材料的诉讼策略分析，不是已确认案件事实。\n\n### 不确定性\n- 被告主体身份尚未由律师确认，目前仅为AI候选。\n- 合同内容仅见主体摘录，未提供完整条款，无法判断具体权利义务。\n\n### 缺失信息\n- 完整合同文本，以确认合同条款",
+      "before": {
+        "parties": 2,
+        "decisions": 0,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "after": {
+        "parties": 2,
+        "decisions": 0,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "mutation_delta": {},
+      "invalid_party_names": [],
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ],
+        "node": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 5,
+      "message": "确认被告1",
+      "http": 200,
+      "intent": "CONFIRM_PARTY",
+      "safety_result": "VALID",
+      "missing_fields": [],
+      "pending_action": null,
+      "reply": "已确认当事人：DEFENDANT 四川富茂置业有限公司",
+      "before": {
+        "parties": 2,
+        "decisions": 0,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "after": {
+        "parties": 2,
+        "decisions": 1,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "mutation_delta": {
+        "decisions": {
+          "before": 0,
+          "after": 1
+        }
+      },
+      "invalid_party_names": [],
+      "human_decision_delta": 1,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ],
+        "node": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 6,
+      "message": "帮我把证据接受一下",
+      "http": 200,
+      "intent": "UNKNOWN",
+      "safety_result": null,
+      "missing_fields": [],
+      "pending_action": null,
+      "reply": "我还不能确定你要执行哪项操作。可以直接问我案件事实、证据、风险或诉讼策略；若要推进案件，请说「继续」或明确的确认指令。",
+      "before": {
+        "parties": 2,
+        "decisions": 1,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "after": {
+        "parties": 2,
+        "decisions": 1,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "mutation_delta": {},
+      "invalid_party_names": [],
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ],
+        "node": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 7,
+      "message": "接受证据1",
+      "http": 200,
+      "intent": "ACCEPT_EVIDENCE",
+      "safety_result": "VALID",
+      "missing_fields": [],
+      "pending_action": null,
+      "reply": "已接受证据1 (v1)",
+      "before": {
+        "parties": 2,
+        "decisions": 1,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "after": {
+        "parties": 2,
+        "decisions": 2,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "mutation_delta": {
+        "decisions": {
+          "before": 1,
+          "after": 2
+        }
+      },
+      "invalid_party_names": [],
+      "human_decision_delta": 1,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ],
+        "node": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 8,
+      "message": "我觉得那个事实可以",
+      "http": 200,
+      "intent": "CASE_CONVERSATION",
+      "safety_result": null,
+      "missing_fields": [],
+      "pending_action": null,
+      "reply": "好的，您提到“那个事实可以”，我理解您可能是指事实1（双方签订了咨询服务合同）。目前该事实状态为“AI候选”，尚未由您确认。如果您确认该事实，请明确说“确认事实1”。在您确认之前，我不会将其视为已确认事实。\n\n目前材料提示：事实1“双方签订了咨询服务合同”与【证据1】合同主体摘录一致，该摘录显示合同名称为“设计优化咨询服务合同”，甲方为四川富茂置业有限公司，乙方为四川维海科技有限公司。这是分析判断，尚未由律师确认。\n\n现有材料不足以判断合同是否有效签署、履行情况等，因为仅提供了合同主体摘录，未提供完整合同文本。\n\n请确认是否要确认事实1，或提供更多信息。\n\n### 不确定性\n- 事实1尚未由律",
+      "before": {
+        "parties": 2,
+        "decisions": 2,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "after": {
+        "parties": 2,
+        "decisions": 2,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "mutation_delta": {},
+      "invalid_party_names": [],
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ],
+        "node": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 9,
+      "message": "确认事实1",
+      "http": 200,
+      "intent": "CONFIRM_FACT",
+      "safety_result": "VALID",
+      "missing_fields": [],
+      "pending_action": null,
+      "reply": "已确认事实：双方签订了咨询服务合同。",
+      "before": {
+        "parties": 2,
+        "decisions": 2,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "after": {
+        "parties": 2,
+        "decisions": 3,
+        "evidence": 1,
+        "facts": 1,
+        "claims": 0,
+        "drafts": 0,
+        "wf_status": null,
+        "wf_node": null
+      },
+      "mutation_delta": {
+        "decisions": {
+          "before": 2,
+          "after": 3
+        }
+      },
+      "invalid_party_names": [],
+      "human_decision_delta": 1,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ],
+        "node": [
+          null,
+          null
+        ]
+      }
+    }
+  ]
+}

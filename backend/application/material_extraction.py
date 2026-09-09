@@ -15,10 +15,12 @@ from backend.domain.errors import ValidationError
 from backend.domain.services import DomainService
 from backend.infrastructure.config import get_settings
 from backend.models import ExtractedContent, SourceSpan
+from backend.tools.camscanner_pdf_to_md import CamScannerPdfToMd
 from backend.tools.docx_parser import DocxParser
 from backend.tools.dto import ParseFailureDTO, ParseSuccessDTO
 from backend.tools.errors import UnsupportedFormatError
 from backend.tools.image_ocr import ImageOcr
+from backend.tools.markdown_parser import MarkdownParser
 from backend.tools.pdf_parser import PdfParser
 from backend.tools.storage import ObjectStorage
 
@@ -40,14 +42,20 @@ class MaterialExtractionService:
         storage: ObjectStorage | None = None,
         pdf_parser: PdfParser | None = None,
         docx_parser: DocxParser | None = None,
+        markdown_parser: MarkdownParser | None = None,
         image_ocr: ImageOcr | None = None,
+        camscanner: CamScannerPdfToMd | None = None,
     ) -> None:
         self.session = session
         self.domain = DomainService(session)
         self.storage = storage or ObjectStorage()
         self.pdf_parser = pdf_parser or PdfParser()
         self.docx_parser = docx_parser or DocxParser()
+        self.markdown_parser = markdown_parser or MarkdownParser()
         self.image_ocr = image_ocr or ImageOcr()
+        self.camscanner = camscanner or CamScannerPdfToMd(
+            markdown_parser=self.markdown_parser
+        )
         self.settings = get_settings()
 
     def extract_material(
@@ -104,28 +112,31 @@ class MaterialExtractionService:
 
         if isinstance(result, ParseFailureDTO):
             if result.needs_ocr and not force_ocr:
-                # Hand off to OCR path if caller provided page images, else fail with needs_ocr
+                # Prefer page-image OCR stub path when caller supplied images.
                 if ocr_page_images is not None:
                     result = self.image_ocr.parse_scanned_pdf_pages(ocr_page_images)
                 else:
-                    return self._persist_failure(
-                        material_id=material_id,
-                        actor_id=actor_id,
-                        method=result.extraction_method,
-                        version=result.extraction_version,
-                        error_code=result.error_code,
-                        error_detail=result.error_detail,
-                        previous_extracted_content_id=previous_extracted_content_id,
-                        needs_ocr=True,
-                        meta=result.meta,
-                    )
+                    # Scanned PDF → CamScanner CLI → Markdown → same parse path as .md
+                    result = self.camscanner.convert(data, source_name=material.filename)
+                    if isinstance(result, ParseFailureDTO):
+                        return self._persist_failure(
+                            material_id=material_id,
+                            actor_id=actor_id,
+                            method=result.extraction_method,
+                            version=extraction_version or result.extraction_version,
+                            error_code=result.error_code,
+                            error_detail=result.error_detail,
+                            previous_extracted_content_id=previous_extracted_content_id,
+                            needs_ocr=True,
+                            meta=result.meta,
+                        )
 
         if isinstance(result, ParseFailureDTO):
             return self._persist_failure(
                 material_id=material_id,
                 actor_id=actor_id,
                 method=result.extraction_method,
-                version=result.extraction_version,
+                version=extraction_version or result.extraction_version,
                 error_code=result.error_code,
                 error_detail=result.error_detail,
                 previous_extracted_content_id=previous_extracted_content_id,
@@ -174,6 +185,9 @@ class MaterialExtractionService:
 
         if filename.endswith(".docx") or "wordprocessingml" in mime:
             return self.docx_parser.parse(data, filename=filename)
+
+        if filename.endswith(".md") or mime in {"text/markdown", "text/x-markdown"}:
+            return self.markdown_parser.parse(data, filename=filename)
 
         if filename.endswith(".pdf") or mime == "application/pdf":
             return self.pdf_parser.parse(data)

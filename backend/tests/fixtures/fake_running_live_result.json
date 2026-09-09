@@ -1,0 +1,104 @@
+{
+  "continue_actions": [
+    {
+      "msg": "继续",
+      "why": "N3 complete → must execute N4 Analyst+LLM → N5",
+      "intent": "CONTINUE",
+      "node": "N5_CONFIRM_PARTIES",
+      "status": "WAITING_USER",
+      "error": "HUMAN_GATE_REQUIRED",
+      "duration_s": 9.9,
+      "message": "证据确认已经完成。\n\nAI 已根据你确认的证据完成案件分析，提出 4 条事实候选。\n\n当前没有当事人记录，无法通过 N5。请在「当事人」区域点击「新增当事人」，或对 Agent 说「录入原告：…」「录入被告：…」。\n\n现在需要你确认本案当事人。可在「当事人」区域新增，并说「确认当事人1」。"
+    },
+    {
+      "msg": "继续",
+      "why": "N5 complete → N6",
+      "intent": "CONTINUE",
+      "node": "N6_CONFIRM_FACTS",
+      "status": "WAITING_USER",
+      "error": "HUMAN_GATE_REQUIRED",
+      "duration_s": 1.99,
+      "message": "当事人确认完成。现在需要你确认案件事实。\n\n当前有 4 个 Fact Candidate 尚未确认/拒绝，不能因「继续」自动确认。\n1. 星海地产开发有限公司与智图设计优化咨询有限公司于2025年3月1日签订咨询服务合同，约定服务范围为方案优化与施工图精细化 (v1)\n2. 星海地产开发有限公司向智图设计优化咨询有限公司支付了300000元，付款用途为咨询服务费首期。 (v1)\n3. 智图设计优化咨询有限公司于2025年6月15日向星海地产开发有限公司交付设计优化成果，签收人确认已收到全部约定成果文件。 (v1)\n4. 智图设计优化咨询有限公司向星海地产开发有限公司发出付款通知书，通知其支付咨"
+    },
+    {
+      "msg": "继续",
+      "why": "N6 complete or propose next",
+      "intent": "CONTINUE",
+      "node": "N6_CONFIRM_FACTS",
+      "status": "WAITING_USER",
+      "error": "HUMAN_GATE_REQUIRED",
+      "duration_s": 1.58,
+      "message": "当前有 1 个 Fact Candidate 尚未确认/拒绝，不能因「继续」自动确认。\n1. 智图设计优化咨询有限公司于2025年6月15日向星海地产开发有限公司交付设计优化成果，签收人确认已收到全部约定成果文件。 (v1)\n请说「确认事实1」或「拒绝事实2」。\n\n现在需要你确认或拒绝事实候选。可说「确认事实1」或「拒绝事实1」。"
+    },
+    {
+      "msg": "继续",
+      "why": "N6 complete or propose next",
+      "intent": "CONTINUE",
+      "node": "N7_CONFIRM_CLAIMS",
+      "status": "WAITING_USER",
+      "error": null,
+      "duration_s": 5.9,
+      "message": "事实确认已经完成。接下来将生成诉讼请求建议。\n\n已生成 1 条诉讼请求建议，等待律师确认。可以说「查看诉讼请求」「确认诉讼请求1」。\n\n现在需要你确认诉讼请求。可说「确认诉讼请求1」。"
+    },
+    {
+      "msg": "继续",
+      "why": "N7 complete → must execute N8 Writer → N9",
+      "intent": "CONTINUE",
+      "node": "N9_REVIEW",
+      "status": "WAITING_USER",
+      "error": "HUMAN_GATE_REQUIRED",
+      "duration_s": 12.52,
+      "message": "诉讼请求确认已经完成。\n\n起诉状草稿已生成（第 1 版）。现在需要你审核草稿；说「查看起诉状」或「批准这份起诉状」。\n\n当前停在 N9 草稿审核。草稿 v1 状态=DRAFT。「继续」不会自动批准。请说「查看起诉状」或「批准这份起诉状」。\n\n现在需要你审核起诉状草稿。可说「查看起诉状」或「批准这份起诉状」。"
+    },
+    {
+      "msg": "继续",
+      "why": "N9 complete after approve → SUCCEEDED",
+      "intent": "CONTINUE",
+      "node": "N9_REVIEW",
+      "status": "SUCCEEDED",
+      "error": null,
+      "duration_s": 1.95,
+      "message": "N9 审核完成，工作流状态：SUCCEEDED。\n\n案件工作流已全部完成。"
+    }
+  ],
+  "case_id": "2f48fb29-8722-413c-b6f5-f961650f95e5",
+  "after_start_node": "N3_CONFIRM_EVIDENCE",
+  "n3_continue_duration_s": 9.9,
+  "after_n3_continue_node": "N5_CONFIRM_PARTIES",
+  "after_n3_continue_message": "证据确认已经完成。\n\nAI 已根据你确认的证据完成案件分析，提出 4 条事实候选。\n\n当前没有当事人记录，无法通过 N5。请在「当事人」区域点击「新增当事人」，或对 Agent 说「录入原告：…」「录入被告：…」。\n\n现在需要你确认本案当事人。可在「当事人」区域新增，并说「确认当事人1」。",
+  "n4_node_runs": [
+    {
+      "status": "SUCCEEDED",
+      "started_at": "2026-09-09 21:34:38.940575+08:00",
+      "ended_at": "2026-09-09 21:34:46.854433+08:00",
+      "skill_code": "CaseAnalystSkill",
+      "skill_status": "SUCCEEDED"
+    }
+  ],
+  "after_n7_continue_node": "N9_REVIEW",
+  "n8_node_runs": [
+    {
+      "status": "SUCCEEDED",
+      "skill_code": "PleadingWriterSkill",
+      "skill_status": "SUCCEEDED"
+    }
+  ],
+  "hao_intent": "UNKNOWN",
+  "final_workflow": {
+    "status": "SUCCEEDED",
+    "current_node": "N9_REVIEW",
+    "current_node_label": "N9 律师审核",
+    "waiting_reason": null,
+    "pending_count": null,
+    "blocking_reason": null,
+    "instance_id": "a0cdb533-ade9-45cb-8214-a8084cd2b99d"
+  },
+  "continue_count": 6,
+  "after_approve_continue": {
+    "node": "N9_REVIEW",
+    "status": "SUCCEEDED",
+    "message": "N9 审核完成，工作流状态：SUCCEEDED。\n\n案件工作流已全部完成。"
+  },
+  "zombie_running_in_case": [],
+  "verdict": "PASS"
+}

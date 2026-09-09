@@ -1,0 +1,365 @@
+{
+  "case_id": "829dcf5d-15d8-4efd-807f-171534507e67",
+  "conversation_id": "fbf89a22-656b-4da2-b45c-069e39a1f5e6",
+  "ok": true,
+  "notes": [],
+  "turns": [
+    {
+      "turn": 1,
+      "message": "把证据接受一下",
+      "http": 200,
+      "intent": "ACCEPT_EVIDENCE",
+      "routing_status": "INCOMPLETE",
+      "safety_result": "INCOMPLETE",
+      "missing_fields": [
+        "target"
+      ],
+      "pending_action": {
+        "pending_action": "ACCEPT_EVIDENCE",
+        "missing_fields": [
+          "target"
+        ],
+        "targets": [],
+        "parameters": {
+          "routing_status": "INCOMPLETE"
+        },
+        "role": null
+      },
+      "recent_focus": null,
+      "reply": "可以。你想接受哪一份证据？\n例如：证据2、证据3",
+      "mutation_delta": {},
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 2,
+      "message": "2",
+      "http": 200,
+      "intent": "ACCEPT_EVIDENCE",
+      "routing_status": "READY",
+      "safety_result": "VALID",
+      "missing_fields": [],
+      "pending_action": null,
+      "recent_focus": null,
+      "reply": "已接受证据2 (v1)",
+      "mutation_delta": {
+        "decisions": {
+          "before": 2,
+          "after": 3
+        },
+        "evidence_accepted": {
+          "before": 1,
+          "after": 2
+        }
+      },
+      "human_decision_delta": 1,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 3,
+      "message": "事实也确认一下",
+      "http": 200,
+      "intent": "CONFIRM_FACT",
+      "routing_status": "INCOMPLETE",
+      "safety_result": "INCOMPLETE",
+      "missing_fields": [
+        "target"
+      ],
+      "pending_action": {
+        "pending_action": "CONFIRM_FACT",
+        "missing_fields": [
+          "target"
+        ],
+        "targets": [],
+        "parameters": {
+          "routing_status": "INCOMPLETE"
+        },
+        "role": null
+      },
+      "recent_focus": null,
+      "reply": "可以。你想确认哪一条事实？\n例如：事实1",
+      "mutation_delta": {},
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 4,
+      "message": "哪一条？",
+      "http": 200,
+      "intent": "CASE_CONVERSATION",
+      "routing_status": "CONVERSATION",
+      "safety_result": null,
+      "missing_fields": [],
+      "pending_action": {
+        "role": null,
+        "targets": [],
+        "parameters": {
+          "routing_status": "INCOMPLETE"
+        },
+        "missing_fields": [
+          "target"
+        ],
+        "pending_action": "CONFIRM_FACT"
+      },
+      "recent_focus": null,
+      "reply": "律师您好，您问的是“哪一条”，结合上下文，您可能是在问刚才对话中提到的“事实确认”具体指哪一条。目前材料中列出的事实有两条：\n\n- **事实1**：候选事实1：双方存在合同关系相关陈述足够长。状态为“候选”，尚未由律师确认。\n- **事实2**：候选事实2：双方存在合同关系相关陈述足够长。状态为“已确认”，即目前已确认的事实。\n\n如果您指的是“事实确认”操作，那么目前可确认的是**事实2**（已确认状态），而**事实1**仍为候选，需要您明确指示是否确认。\n\n请注意，我作为只读助手，不会自动修改任何事实状态，所有确认操作均需您明确指示。\n\n### 不确定",
+      "mutation_delta": {},
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 5,
+      "message": "事实1",
+      "http": 200,
+      "intent": "CONFIRM_FACT",
+      "routing_status": "READY",
+      "safety_result": "VALID",
+      "missing_fields": [],
+      "pending_action": null,
+      "recent_focus": null,
+      "reply": "已确认事实：候选事实1：双方存在合同关系相关陈述足够长。",
+      "mutation_delta": {},
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 6,
+      "message": "帮我录入一个被告",
+      "http": 200,
+      "intent": "CREATE_PARTY",
+      "routing_status": "INCOMPLETE",
+      "safety_result": "INCOMPLETE",
+      "missing_fields": [
+        "defendant_name"
+      ],
+      "pending_action": {
+        "pending_action": "CREATE_PARTIES",
+        "requested_roles": [
+          "DEFENDANT"
+        ],
+        "missing_fields": [
+          "defendant_name"
+        ],
+        "parties": []
+      },
+      "recent_focus": {
+        "entity_type": "FACT",
+        "display_number": "1"
+      },
+      "reply": "可以。请告诉我被告的具体名称。",
+      "mutation_delta": {
+        "decisions": {
+          "before": 3,
+          "after": 4
+        },
+        "facts_confirmed": {
+          "before": 1,
+          "after": 2
+        }
+      },
+      "human_decision_delta": 1,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 7,
+      "message": "四川富茂置业有限公司",
+      "http": 200,
+      "intent": "CREATE_PARTY",
+      "routing_status": "READY",
+      "safety_result": "VALID",
+      "missing_fields": [],
+      "pending_action": null,
+      "recent_focus": {
+        "entity_type": "FACT",
+        "display_number": "1"
+      },
+      "reply": "已录入被告“四川富茂置业有限公司”，当前为待确认状态。请在确认无误后明确确认该当事人。",
+      "mutation_delta": {
+        "parties": {
+          "before": 0,
+          "after": 1
+        }
+      },
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 8,
+      "message": "证据3能证明什么？",
+      "http": 200,
+      "intent": "CASE_CONVERSATION",
+      "routing_status": "CONVERSATION",
+      "safety_result": null,
+      "missing_fields": [],
+      "pending_action": null,
+      "recent_focus": {
+        "entity_type": "EVIDENCE",
+        "display_number": "3"
+      },
+      "reply": "证据3目前处于“待确认”状态，尚未被律师接受。其摘录内容为“合同摘录。甲方四川富茂置业有限公司。乙方四川维海科技有限公司。”，与证据1、证据2的摘录相同。因此，目前材料提示证据3可能用于证明双方（甲方四川富茂置业有限公司、乙方四川维海科技有限公司）之间存在合同关系，但这是分析判断，尚未由律师确认。由于证据3尚未被接受，其具体证明力需在律师确认接受后才能进一步分析。现有材料不足以判断证据3能证明除合同关系外的其他具体内容。\n\n### 不确定性\n- 证据3的完整内容未提供，仅凭摘录无法判断其具体证明事项。\n- 证据3与证据1、证据2的摘录相同，但可能包含不同",
+      "mutation_delta": {},
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 9,
+      "message": "把它接受了",
+      "http": 200,
+      "intent": "ACCEPT_EVIDENCE",
+      "routing_status": "READY",
+      "safety_result": "VALID",
+      "missing_fields": [],
+      "pending_action": null,
+      "recent_focus": {
+        "entity_type": "EVIDENCE",
+        "display_number": "3"
+      },
+      "reply": "已接受证据3 (v1)",
+      "mutation_delta": {
+        "decisions": {
+          "before": 4,
+          "after": 5
+        },
+        "evidence_accepted": {
+          "before": 2,
+          "after": 3
+        }
+      },
+      "human_decision_delta": 1,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 10,
+      "message": "帮我改事实2",
+      "http": 200,
+      "intent": "AMEND_FACT",
+      "routing_status": "INCOMPLETE",
+      "safety_result": "INCOMPLETE",
+      "missing_fields": [
+        "new_statement"
+      ],
+      "pending_action": {
+        "pending_action": "AMEND_FACT",
+        "missing_fields": [
+          "new_statement"
+        ],
+        "targets": [
+          "2"
+        ],
+        "parameters": {
+          "target_text": "事实2"
+        },
+        "role": null
+      },
+      "recent_focus": {
+        "entity_type": "FACT",
+        "display_number": "2"
+      },
+      "reply": "可以。你希望把事实2修改成什么内容？",
+      "mutation_delta": {},
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 11,
+      "message": "改成被告已支付10万元，尚欠20万元",
+      "http": 200,
+      "intent": "AMEND_FACT",
+      "routing_status": "READY",
+      "safety_result": "VALID",
+      "missing_fields": [],
+      "pending_action": null,
+      "recent_focus": {
+        "entity_type": "FACT",
+        "display_number": "2"
+      },
+      "reply": "已修改事实为：被告已支付10万元，尚欠20万元",
+      "mutation_delta": {
+        "decisions": {
+          "before": 5,
+          "after": 6
+        }
+      },
+      "human_decision_delta": 1,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    },
+    {
+      "turn": 12,
+      "message": "算了，先不改",
+      "http": 200,
+      "intent": "CASE_CONVERSATION",
+      "routing_status": "CONVERSATION",
+      "safety_result": null,
+      "missing_fields": [],
+      "pending_action": null,
+      "recent_focus": {
+        "entity_type": "FACT",
+        "display_number": "2"
+      },
+      "reply": "好的，律师。您表示“先不改”，我理解为您暂时不打算对当前案件内容做进一步修改。目前案件状态保持只读，我不会对任何事实、证据或当事人状态进行变更。\n\n当前已确认的信息包括：\n- 事实1：双方存在合同关系相关陈述足够长（已确认）。\n- 事实2：被告已支付10万元，尚欠20万元（已确认）。\n- 证据1、证据2、证据3均已接受（ACCEPTED）。\n\n被告“四川富茂置业有限公司”目前为候选状态，尚未由您确认。\n\n如果您后续需要修改或确认任何内容，请明确指示，我将基于您的指示提供分析，但不会自动执行任何变更。\n\n### 不确定性\n- 律师“先不改”的具体含义不明确",
+      "mutation_delta": {},
+      "human_decision_delta": 0,
+      "workflow_delta": {
+        "status": [
+          null,
+          null
+        ]
+      }
+    }
+  ]
+}

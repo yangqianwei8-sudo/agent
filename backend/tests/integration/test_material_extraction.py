@@ -151,6 +151,36 @@ def test_docx_paragraph_table_page_null(
     assert "Fee | 100000" in (outcome.extracted_content.full_text or "")
 
 
+def test_markdown_preserves_raw_and_spans(
+    db_session: Session, storage: ObjectStorage, owner_id: uuid.UUID, actor_id: uuid.UUID
+) -> None:
+    data = (
+        "# 合同摘要\n\n"
+        "甲方：**设计公司**\n\n"
+        "| 项目 | 金额 |\n| --- | --- |\n| 服务费 | 100000 |\n"
+    ).encode()
+    material_id = _register(
+        db_session,
+        storage,
+        owner_id=owner_id,
+        actor_id=actor_id,
+        filename="合同摘要.md",
+        mime="text/markdown",
+        data=data,
+    )
+    svc = MaterialExtractionService(db_session, storage=storage)
+    outcome = svc.extract_material(material_id, actor_id=actor_id)
+    assert outcome.success is True
+    assert outcome.extracted_content.extraction_method == "markdown_text"
+    text = outcome.extracted_content.full_text or ""
+    assert "# 合同摘要" in text
+    assert "甲方：**设计公司**" in text
+    assert any(s.paragraph is not None for s in outcome.spans)
+    assert all(s.page is None for s in outcome.spans)
+    for span in outcome.spans:
+        assert text[span.character_start : span.character_end] == span.quote
+
+
 def test_doc_rejected() -> None:
     with pytest.raises(UnsupportedFormatError):
         DocxParser().parse(b"fake", filename="legacy.doc")

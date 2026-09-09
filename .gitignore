@@ -32,6 +32,7 @@ Thumbs.db
 data/
 uploads/
 storage/
+node_modules/
 
 # Acceptance run artifacts (regenerable)
 backend/tests/acceptance/last_acceptance_log.txt

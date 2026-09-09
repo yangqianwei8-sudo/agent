@@ -34,6 +34,10 @@ def _seed_case_with_materials(
     texts = texts or [
         "合同约定服务费总价为1000000元。",
         "被告已支付300000元。",
+        "原告已向被告交付设计成果并经签收。",
+        "合同约定成果提交后付款，付款条件已成就。",
+        "尚欠服务费700000元已到期。",
+        "合同约定由被告住所地人民法院管辖。",
     ]
     materials = []
     for i, text in enumerate(texts):
@@ -172,12 +176,8 @@ def test_f_continue_n2_organizer(
         db_session, owner_id=owner_id, actor_id=actor_id
     )
     agent = _agent(db_session, actor_id)
-    r, cid = _start_and_reach(agent, case.id, "N2_ORGANIZE")
-    # may already be past N2 if auto-continued — drive carefully
-    while r.current_node in {"N0_CREATE", "N1_PARSE"}:
-        r = _say(agent, case.id, "继续", cid)
-    assert r.current_node == "N2_ORGANIZE"
-    r = _say(agent, case.id, "继续", cid)
+    r = _say(agent, case.id, "开始处理这个案件")
+    # START auto-runs N0→N1→N2 and stops at N3; Organizer must have executed.
     assert r.current_node == "N3_CONFIRM_EVIDENCE"
     assert r.workflow_status == "WAITING_USER"
     assert db_session.scalars(
@@ -236,9 +236,8 @@ def test_i_continue_n6_does_not_confirm_facts(
     )
     for it in items:
         r = _say(agent, case.id, f"接受证据{it.number}", cid)
-    r = _say(agent, case.id, "继续", cid)  # complete N3 → N4
-    if r.current_node == "N4_ANALYZE":
-        r = _say(agent, case.id, "继续", cid)
+    r = _say(agent, case.id, "继续", cid)  # N3→N4→N5 in one CONTINUE
+    assert r.current_node == "N5_CONFIRM_PARTIES"
     # Confirm parties
     for i, _ in enumerate(parties, start=1):
         _say(agent, case.id, f"确认当事人{i}", cid)
@@ -412,8 +411,7 @@ def test_p_q_confirm_reject_fact(
     ):
         _say(agent, case.id, f"接受证据{it.number}", cid)
     r = _say(agent, case.id, "继续", cid)
-    if r.current_node == "N4_ANALYZE":
-        r = _say(agent, case.id, "继续", cid)
+    assert r.current_node == "N5_CONFIRM_PARTIES"
     for i, _ in enumerate(parties, start=1):
         _say(agent, case.id, f"确认当事人{i}", cid)
     r = _say(agent, case.id, "继续", cid)
@@ -445,8 +443,7 @@ def test_x_y_z_pause_resume_human_gate(
     ):
         _say(agent, case.id, f"接受证据{it.number}", cid)
     r = _say(agent, case.id, "继续", cid)
-    if r.current_node == "N4_ANALYZE":
-        r = _say(agent, case.id, "继续", cid)
+    assert r.current_node == "N5_CONFIRM_PARTIES"
     for i, _ in enumerate(parties, start=1):
         _say(agent, case.id, f"确认当事人{i}", cid)
     r = _say(agent, case.id, "继续", cid)
@@ -498,8 +495,10 @@ def test_aa_retry_waiting_retry(
     inst = db_session.scalars(
         select(WorkflowInstance).where(WorkflowInstance.case_id == case.id)
     ).one()
-    # Fail current node retryably
-    node_run = runtime.list_node_runs(inst.id)[-1]
+    # START stops at N3 WAITING_USER without a NodeRun — resume to create RUNNING, then fail.
+    resumed = runtime.resume_instance(inst.id, command_id=uuid.uuid4())
+    assert resumed.node_run is not None
+    node_run = resumed.node_run
     runtime.fail_node(node_run.id, error_code="TEST", error_detail="x", retryable=True)
     inst = runtime.get_instance(inst.id)
     assert inst.status == "WAITING_RETRY"
@@ -565,31 +564,29 @@ def test_e2e_happy_path_to_succeeded(
     for it in items:
         r = _say(agent, case.id, f"接受证据{it.number}", cid)
 
-    r = _say(agent, case.id, "继续", cid)  # N3 complete → N4
-    if r.current_node == "N4_ANALYZE":
-        r = _say(agent, case.id, "继续", cid)  # Analyst → N5
+    r = _say(agent, case.id, "继续", cid)  # N3→N4→N5 in one CONTINUE
+    assert r.current_node == "N5_CONFIRM_PARTIES"
 
     for i, _ in enumerate(parties, start=1):
         r = _say(agent, case.id, f"确认当事人{i}", cid)
     r = _say(agent, case.id, "继续", cid)  # N5 → N6
 
-    # Confirm all candidate facts
+    # Confirm all candidate facts (display index among all current facts)
     from backend.models import Fact
 
-    facts = list(
-        db_session.scalars(
-            select(Fact)
-            .where(
-                Fact.case_id == case.id,
-                Fact.is_current.is_(True),
-                Fact.status == "CANDIDATE",
+    for _ in range(40):
+        all_facts = list(
+            db_session.scalars(
+                select(Fact)
+                .where(Fact.case_id == case.id, Fact.is_current.is_(True))
+                .order_by(Fact.created_at.asc(), Fact.fact_key.asc())
             )
-            .order_by(Fact.created_at.asc())
         )
-    )
-    assert facts
-    for i, _ in enumerate(facts, start=1):
-        r = _say(agent, case.id, f"确认事实{i}", cid)
+        pending = [f for f in all_facts if f.status == "CANDIDATE"]
+        if not pending:
+            break
+        idx = next(i for i, f in enumerate(all_facts, start=1) if f.status == "CANDIDATE")
+        r = _say(agent, case.id, f"确认事实{idx}", cid)
 
     r = _say(agent, case.id, "继续", cid)  # N6 complete → N7
     # N7 propose
@@ -599,11 +596,8 @@ def test_e2e_happy_path_to_succeeded(
     r = _say(agent, case.id, "确认诉讼请求1", cid)
     assert r.intent == AgentIntent.CONFIRM_CLAIM_DIRECTION
 
-    r = _say(agent, case.id, "继续", cid)  # N7 complete → N8
-    if r.current_node == "N8_WRITE":
-        r = _say(agent, case.id, "生成起诉状", cid)
-
-    assert r.current_node == "N9_REVIEW"
+    r = _say(agent, case.id, "继续", cid)  # N7 confirm → N8 Writer → N9
+    assert r.current_node == "N9_REVIEW", r.message
     draft = db_session.scalars(
         select(DocumentDraft).where(DocumentDraft.case_id == case.id)
     ).first()
@@ -664,8 +658,7 @@ def test_pause_resume_e2e_restart_agent(
     ):
         _say(agent, case.id, f"接受证据{it.number}", cid)
     r = _say(agent, case.id, "继续", cid)
-    if r.current_node == "N4_ANALYZE":
-        r = _say(agent, case.id, "继续", cid)
+    assert r.current_node == "N5_CONFIRM_PARTIES"
     for i, _ in enumerate(parties, start=1):
         _say(agent, case.id, f"确认当事人{i}", cid)
     r = _say(agent, case.id, "继续", cid)

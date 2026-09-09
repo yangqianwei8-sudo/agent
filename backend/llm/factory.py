@@ -111,5 +111,21 @@ def build_pleading_writer_engine(
     return LLMPleadingWriterEngine(client or get_llm_client())
 
 
+def build_conversation_engine(
+    *,
+    settings: Settings | None = None,
+    client: LLMClient | None = None,
+):
+    from backend.llm.case_conversation import (
+        DeterministicCaseConversationEngine,
+        LLMCaseConversationEngine,
+    )
+
+    s = settings or get_settings()
+    if not is_real_llm_mode(s):
+        return DeterministicCaseConversationEngine()
+    return LLMCaseConversationEngine(client or get_llm_client())
+
+
 def clear_llm_caches() -> None:
     get_llm_client.cache_clear()

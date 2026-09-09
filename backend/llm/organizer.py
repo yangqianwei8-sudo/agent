@@ -116,8 +116,8 @@ def _looks_filename_only(raw: dict[str, Any]) -> bool:
     title = str(raw.get("title") or "")
     summary = str(raw.get("summary") or "")
     blob = f"{title} {summary}".lower()
-    if any(x in blob for x in (".pdf", ".docx", "文件名", "filename")) and (
-        len(summary.strip()) < 8 or summary.strip().lower().endswith((".pdf", ".docx"))
+    if any(x in blob for x in (".pdf", ".docx", ".md", "文件名", "filename")) and (
+        len(summary.strip()) < 8 or summary.strip().lower().endswith((".pdf", ".docx", ".md"))
     ):
         return True
     return False

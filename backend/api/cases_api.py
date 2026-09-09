@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from backend.application.material_management import MaterialManagementService
 from backend.application.material_upload import MaterialUploadService
 from backend.application.party_management import PartyManagementService
 from backend.application.workspace import WorkspaceQueryService
@@ -45,6 +46,12 @@ class CreatePartyBody(BaseModel):
     status: str | None = None
     confirmed: bool | None = None
     layer: str | None = None
+
+
+class VoidMaterialBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=500)
 
 
 @router.get("")
@@ -157,5 +164,148 @@ async def api_upload_material(
         "extraction_status": result.extraction_status,
         "extraction_error": result.extraction_error,
         "success": result.success,
+        "usable": result.usable,
+        "in_material_pool": result.usable,
+        "message": result.message,
+        "needs_ocr": result.needs_ocr,
         "max_material_bytes": get_settings().max_material_bytes,
+    }
+
+
+@router.post("/{case_id}/materials/{material_id}/void")
+def api_void_material(
+    case_id: UUID,
+    material_id: UUID,
+    body: VoidMaterialBody | None = None,
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> dict[str, Any]:
+    case = session.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    payload = body or VoidMaterialBody()
+    try:
+        material = MaterialManagementService(session).void_material(
+            case_id=case_id,
+            material_id=material_id,
+            actor_id=case.owner_user_id,
+            reason=payload.reason,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    except DomainError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    return {
+        "material_id": str(material.id),
+        "filename": material.filename,
+        "life_status": material.life_status,
+        "void_reason": material.void_reason,
+    }
+
+
+@router.post("/{case_id}/void-pool/add-pending")
+def api_void_pool_add_pending(
+    case_id: UUID,
+    body: VoidMaterialBody | None = None,
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> dict[str, Any]:
+    """增加：将全部「待处理」材料移入作废池。"""
+    case = session.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    payload = body or VoidMaterialBody()
+    try:
+        result = MaterialManagementService(session).void_all_pending(
+            case_id=case_id,
+            actor_id=case.owner_user_id,
+            reason=payload.reason,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    except DomainError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    return {
+        "count": result.count,
+        "material_ids": [str(i) for i in result.affected_ids],
+    }
+
+
+@router.post("/{case_id}/void-pool/clear")
+def api_void_pool_clear(
+    case_id: UUID,
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> dict[str, Any]:
+    """清空：从作废池列表中清除（软隐藏，不物理删文件）。"""
+    case = session.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    try:
+        result = MaterialManagementService(session).clear_void_pool(
+            case_id=case_id,
+            actor_id=case.owner_user_id,
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    return {
+        "count": result.count,
+        "material_ids": [str(i) for i in result.affected_ids],
+    }
+
+
+@router.post("/{case_id}/materials/{material_id}/reparse")
+def api_reparse_material(
+    case_id: UUID,
+    material_id: UUID,
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> dict[str, Any]:
+    case = session.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    try:
+        result = MaterialManagementService(session).reparse_material(
+            case_id=case_id,
+            material_id=material_id,
+            actor_id=case.owner_user_id,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    except DomainError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    ec = result.outcome.extracted_content
+    if result.usable:
+        message = "重新解析成功，文件已进入案件材料。"
+    else:
+        reason = getattr(ec, "error_detail", None) if ec else None
+        message = (
+            "重新解析仍失败，文件继续留在待处理文件中。"
+            + (f" 原因：{reason}" if reason else "")
+        )
+        if result.outcome.needs_ocr:
+            message += " 扫描件可走 CamScanner 转 Markdown，或上传可读取版本。"
+    return {
+        "material_id": str(result.material.id),
+        "filename": result.material.filename,
+        "parse_status": result.material.parse_status,
+        "extraction_status": ec.status if ec else None,
+        "extraction_error": getattr(ec, "error_detail", None) if ec else None,
+        "extracted_content_id": str(ec.id) if ec else None,
+        "previous_extracted_content_id": (
+            str(result.previous_extracted_content_id)
+            if result.previous_extracted_content_id
+            else None
+        ),
+        "success": result.outcome.success,
+        "usable": result.usable,
+        "in_material_pool": result.usable,
+        "needs_ocr": result.outcome.needs_ocr,
+        "message": message,
     }

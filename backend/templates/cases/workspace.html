@@ -17,6 +17,8 @@
       <div><strong>Workflow</strong> <span id="wf-status">{{ workspace.workflow.status or "未启动" }}</span></div>
       <div><strong>当前节点</strong> <span id="wf-node">{{ workspace.workflow.current_node_label or "—" }}</span></div>
       <div><strong>待处理</strong> <span id="wf-pending">{{ workspace.workflow.pending_count or 0 }}</span></div>
+      <div><strong>起诉准备度</strong> <span id="readiness-status">{{ workspace.pleading_readiness.display_status if workspace.pleading_readiness else "—" }}</span></div>
+      <div class="block" id="readiness-blockers"></div>
       <div class="block" id="wf-blocking">{{ workspace.workflow.blocking_reason or "" }}</div>
     </div>
   </header>
@@ -26,17 +28,35 @@
       <div class="card">
         <h2>案件材料</h2>
         <form id="upload-form" class="upload-row">
-          <input type="file" id="upload-file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
-          <button class="btn primary" type="submit">上传 PDF/DOCX</button>
+          <input type="file" id="upload-file" accept=".pdf,.docx,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown" />
+          <button class="btn primary" type="submit">上传 PDF/DOCX/MD</button>
         </form>
-        <p class="muted">仅支持 .pdf / .docx；同名再传会新增材料，不会覆盖。</p>
+        <div id="parse-loading" class="agent-loading parse-loading" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <span data-parse-loading-text>正在解析文件，扫描件可能需要较长时间……</span>
+        </div>
+        <div id="upload-feedback" class="muted" hidden></div>
         <div id="upload-error" class="error" hidden></div>
+        <div id="material-disclosure" class="notice" hidden></div>
+        <h3 class="subhead">案件材料 <span id="usable-count" class="muted"></span></h3>
         <table class="table" id="materials-table">
           <thead>
-            <tr><th>文件名</th><th>类型</th><th>上传时间</th><th>解析状态</th><th>方法</th></tr>
+            <tr><th>文件名</th><th>格式</th><th>上传时间</th><th>解析状态</th><th>页数</th><th></th></tr>
           </thead>
           <tbody></tbody>
         </table>
+        <h3 class="subhead">待处理文件 <span id="pending-count" class="muted"></span></h3>
+        <p class="muted">这些文件已保留上传记录，但 AI 暂时无法读取，本轮分析不会使用它们。</p>
+        <div id="pending-materials-panel"></div>
+        <div class="pool-toolbar">
+          <h3 class="subhead">作废池 <span id="void-count" class="muted"></span></h3>
+          <div class="row-actions">
+            <button type="button" class="btn small" id="btn-void-pool-add" title="将全部待处理文件移入作废池">增加</button>
+            <button type="button" class="btn small danger" id="btn-void-pool-clear" title="清空作废池列表">清空</button>
+          </div>
+        </div>
+        <p class="muted">作废后不再进入案件材料池；可从待处理/材料表单项作废，或点「增加」批量移入。点「清空」仅从列表隐藏，不物理删除磁盘文件。</p>
+        <div id="void-materials-panel"></div>
       </div>
 
       <div class="card">
@@ -113,12 +133,12 @@
       </div>
       <div id="agent-meta" class="agent-meta muted"></div>
       <details class="agent-diag-wrap muted">
-        <summary>技术详情</summary>
+        <summary>开发诊断</summary>
         <div id="agent-diag"></div>
       </details>
       <div id="chat-error" class="error" hidden></div>
       <form id="chat-form" class="chat-form">
-        <textarea id="chat-input" rows="3" placeholder="例如：继续 / 录入原告：某某公司 / 确认当事人1 / 批准这份起诉状"></textarea>
+        <textarea id="chat-input" rows="3" placeholder="可以问我案件事实、证据、风险、诉讼策略，也可以直接让我执行明确操作（例如：确认事实2 / 继续）"></textarea>
         <button class="btn primary" type="submit">发送</button>
       </form>
     </section>

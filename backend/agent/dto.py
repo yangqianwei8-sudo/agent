@@ -14,6 +14,7 @@ class AgentErrorCode(StrEnum):
     AMBIGUOUS_TARGET = "AMBIGUOUS_TARGET"
     INVALID_WORKFLOW_STATE = "INVALID_WORKFLOW_STATE"
     HUMAN_GATE_REQUIRED = "HUMAN_GATE_REQUIRED"
+    PLEADING_NOT_READY = "PLEADING_NOT_READY"
     NOT_FOUND = "NOT_FOUND"
     COMMAND_REPLAY = "COMMAND_REPLAY"
     INTERNAL_ERROR = "INTERNAL_ERROR"
@@ -48,6 +49,7 @@ class AgentIntent(StrEnum):
     SHOW_FACTS = "SHOW_FACTS"
     SHOW_CLAIMS = "SHOW_CLAIMS"
     SHOW_DRAFT = "SHOW_DRAFT"
+    CASE_CONVERSATION = "CASE_CONVERSATION"
     UNKNOWN = "UNKNOWN"
 
 
@@ -85,6 +87,11 @@ class AgentResponse(BaseModel):
     error_code: AgentErrorCode | None = None
     command_id: UUID | None = None
     idempotent_replay: bool = False
+    safety_result: str | None = None
+    missing_fields: list[str] = Field(default_factory=list)
+    pending_action: dict[str, Any] | None = None
+    routing_status: str | None = None
+    recent_focus: dict[str, Any] | None = None
 
 
 class AgentError(Exception):
