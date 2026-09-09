@@ -8,6 +8,8 @@
 
 Documents:
 
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md) — 律师日常办案使用手册
+- [docs/QUICK_START.md](docs/QUICK_START.md) — 每天启动（1 分钟）
 - [docs/V1_FINAL_ACCEPTANCE.md](docs/V1_FINAL_ACCEPTANCE.md)
 - [docs/V1_TECH_DEBT.md](docs/V1_TECH_DEBT.md)
 - [docs/V1_1_BACKLOG.md](docs/V1_1_BACKLOG.md)

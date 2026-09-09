@@ -111,7 +111,6 @@ def main() -> None:
             ).mappings()
         )
         body = json.dumps(draft["body"] if draft else {}, ensure_ascii=False)
-        sections = draft["sections"] if draft else {}
         result = {
             "case_id": CID,
             "workflow": dict(wf) if wf else None,

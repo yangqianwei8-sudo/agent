@@ -1,0 +1,25 @@
+{
+  "case_id": "f9012fc5-122a-4376-a22c-077e3b873b82",
+  "workflow": {
+    "status": "WAITING_USER",
+    "current_node": "N5_CONFIRM_PARTIES",
+    "current_node_label": "N5 确认当事人",
+    "waiting_reason": "PARTY",
+    "pending_count": null,
+    "blocking_reason": null,
+    "instance_id": "94120e24-0ea4-4e54-a150-a8fa43136172"
+  },
+  "parties": [],
+  "hao_intent": "UNKNOWN",
+  "confirm_party1": {
+    "intent": "CONFIRM_PARTY",
+    "error": "NOT_FOUND",
+    "message": "当事人编号 1 不存在"
+  },
+  "continue_n5": {
+    "node": "N5_CONFIRM_PARTIES",
+    "error": "HUMAN_GATE_REQUIRED",
+    "message": "当前没有当事人记录，无法通过 N5。请先由分析流程创建当事人候选。"
+  },
+  "seed_used": false
+}
