@@ -51,8 +51,7 @@ HELPER="$ROOT/deploy/git-credential-github.sh"
 chmod +x "$HELPER" "$ROOT/deploy/load-env.sh" 2>/dev/null || true
 
 # Local repo config — never store token in config files.
-git config --local credential.helper ""
-git config --local --add credential.helper "$HELPER"
+git config --local --replace-all credential.helper "$HELPER"
 git config --local credential.useHttpPath true
 git config --local core.askPass /bin/false
 
