@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: lawyer-agent-orchestrator
+spec:
+  selector:
+    app: lawyer-agent-orchestrator
+  ports:
+    - port: 8000
+      targetPort: 8000

@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lawyer-agent-orchestrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lawyer-agent-orchestrator
+  template:
+    metadata:
+      labels:
+        app: lawyer-agent-orchestrator
+    spec:
+      containers:
+        - name: app
+          image: ghcr.io/yangqianwei8-sudo/agent:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: lawyer-agent-secrets
+            - configMapRef:
+                name: lawyer-agent-config
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+          volumeMounts:
+            - name: state
+              mountPath: /app/data
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: lawyer-agent-autonomous-state

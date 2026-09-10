@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lawyer-agent-config
+data:
+  AUTONOMOUS_DEV_ENABLED: "true"
+  AUTONOMOUS_WORKER_MODE: deterministic
+  AUTONOMOUS_REPO_ROOT: /app
+  AUTONOMOUS_STATE_DB_PATH: /app/data/autonomous_dev.db
+  GITHUB_REPO: yangqianwei8-sudo/agent

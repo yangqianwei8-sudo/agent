@@ -1,0 +1,47 @@
+"""Autonomous dev configuration — secrets from env only."""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class AutonomousDevSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    autonomous_dev_enabled: bool = False
+    github_webhook_secret: str = ""
+    github_token: str = ""
+    cursor_api_key: str = ""
+    autonomous_worker_mode: str = "deterministic"  # deterministic | live | cursor_sdk
+    autonomous_repo_root: str = "."
+    autonomous_state_db_path: str = "data/autonomous_dev.db"
+    github_repo: str = "yangqianwei8-sudo/agent"
+    watchdog_interval_seconds: int = 3600
+    webhook_public_url: str = ""
+
+    @property
+    def repo_root(self) -> Path:
+        return Path(self.autonomous_repo_root).resolve()
+
+    @property
+    def state_db_path(self) -> Path:
+        p = Path(self.autonomous_state_db_path)
+        if not p.is_absolute():
+            p = self.repo_root / p
+        return p
+
+
+@lru_cache
+def get_autonomous_settings() -> AutonomousDevSettings:
+    return AutonomousDevSettings()
+
+
+def clear_autonomous_settings_cache() -> None:
+    get_autonomous_settings.cache_clear()

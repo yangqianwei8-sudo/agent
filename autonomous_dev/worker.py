@@ -1,0 +1,223 @@
+"""Cursor/Code Agent worker — executes one GitHub Issue as SSOT."""
+
+from __future__ import annotations
+
+import logging
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
+from autonomous_dev.config import AutonomousDevSettings
+from autonomous_dev.github_client import GitHubClient
+from autonomous_dev.product_decision import ProductDecisionPacket
+from autonomous_dev.state import StateStore, TaskRecord, TaskStatus
+
+logger = logging.getLogger(__name__)
+
+PRODUCT_DECISION_MARKER = "[PRODUCT-DECISION]"
+
+
+@dataclass
+class WorkerResult:
+    task_id: int
+    status: TaskStatus
+    commit_sha: str | None = None
+    error: str | None = None
+    product_decision: ProductDecisionPacket | None = None
+
+
+class Worker:
+    def __init__(
+        self,
+        settings: AutonomousDevSettings,
+        store: StateStore,
+        *,
+        repo_root: Path | None = None,
+    ) -> None:
+        self.settings = settings
+        self.store = store
+        self.repo_root = repo_root or settings.repo_root
+        self._github = GitHubClient(settings)
+
+    def run_task(self, task: TaskRecord, *, issue_body: str = "") -> WorkerResult:
+        self.store.update_task(task.id, status=TaskStatus.RUNNING)
+        self._github.sync_worker_running(task.issue_number)
+        try:
+            if PRODUCT_DECISION_MARKER in issue_body:
+                packet = self._build_product_decision_packet(task, issue_body)
+                self._github.sync_product_decision(task.issue_number)
+                self._github.add_comment(task.issue_number, packet.to_markdown())
+                self.store.update_task(
+                    task.id,
+                    status=TaskStatus.PRODUCT_DECISION,
+                    error=packet.to_markdown()[:2000],
+                )
+                return WorkerResult(
+                    task_id=task.id,
+                    status=TaskStatus.PRODUCT_DECISION,
+                    product_decision=packet,
+                )
+
+            if self.settings.autonomous_worker_mode == "cursor_sdk":
+                commit_sha = self._run_cursor_agent(task, issue_body)
+            else:
+                self._git_fetch()
+                self._ensure_clean_or_resolve()
+                self._apply_harmless_change(task.issue_number)
+                self._run_tests()
+                commit_sha = self._commit_and_push(task.issue_number)
+                self._verify_push(commit_sha)
+
+            updated = self.store.update_task(
+                task.id,
+                status=TaskStatus.RUNNING,
+                commit_sha=commit_sha,
+            )
+            return WorkerResult(
+                task_id=updated.id,
+                status=TaskStatus.RUNNING,
+                commit_sha=commit_sha,
+            )
+        except Exception as exc:  # noqa: BLE001 — worker boundary
+            logger.exception("worker failed task=%s", task.id)
+            self._github.sync_needs_fix(task.issue_number)
+            self.store.update_task(
+                task.id,
+                status=TaskStatus.NEEDS_FIX,
+                error=str(exc)[:2000],
+            )
+            return WorkerResult(
+                task_id=task.id,
+                status=TaskStatus.NEEDS_FIX,
+                error=str(exc),
+            )
+        finally:
+            self.store.release_lock()
+
+    def _build_product_decision_packet(
+        self, task: TaskRecord, issue_body: str
+    ) -> ProductDecisionPacket:
+        return ProductDecisionPacket(
+            question="Should the lawyer workflow boundary change for this task?",
+            why_owner_required="Issue body contains [PRODUCT-DECISION] marker.",
+            option_a="Proceed with proposed workflow change",
+            impact_a="May affect lawyer confirmation boundaries.",
+            option_b="Keep current workflow unchanged",
+            impact_b="Task remains blocked until re-scoped.",
+            recommended_option="Option B until owner confirms.",
+            blocked_task=f"Issue #{task.issue_number}",
+        )
+
+    def _git_env(self) -> dict[str, str]:
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        token = self.settings.github_token
+        if token:
+            env["GIT_CONFIG_COUNT"] = "1"
+            env["GIT_CONFIG_KEY_0"] = "url.https://x-access-token:"
+            env["GIT_CONFIG_VALUE_0"] = (
+                f"https://x-access-token:{token}@github.com/.insteadOf https://github.com/"
+            )
+        return env
+
+    def _run(self, cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        logger.info("worker cmd: %s", " ".join(cmd))
+        return subprocess.run(
+            cmd,
+            cwd=self.repo_root,
+            capture_output=True,
+            text=True,
+            check=check,
+            env=self._git_env(),
+        )
+
+    def _run_cursor_agent(self, task: TaskRecord, issue_body: str) -> str:
+        if not self.settings.cursor_api_key:
+            raise RuntimeError("CURSOR_API_KEY required for cursor_sdk mode")
+        from cursor_sdk import Agent, AgentOptions, CursorAgentError, LocalAgentOptions
+
+        prompt = (
+            f"Execute GitHub Issue #{task.issue_number} as sole SSOT.\n\n"
+            f"{issue_body}\n\n"
+            "Rules: run tests, git add -A, commit, push origin main, "
+            "verify HEAD==origin/main, stop. No next product phase."
+        )
+        try:
+            result = Agent.prompt(
+                prompt,
+                AgentOptions(
+                    api_key=self.settings.cursor_api_key,
+                    model="composer-2.5",
+                    local=LocalAgentOptions(cwd=str(self.repo_root)),
+                ),
+            )
+            if result.status == "error":
+                raise RuntimeError(f"cursor agent failed: {result.result}")
+        except CursorAgentError as exc:
+            raise RuntimeError(str(exc)) from exc
+        head = self._run(["git", "rev-parse", "HEAD"], check=True)
+        return head.stdout.strip()
+
+    def _git_fetch(self) -> None:
+        if self.settings.autonomous_worker_mode == "deterministic":
+            return
+        self._run(["git", "fetch", "origin", "main"])
+
+    def _ensure_clean_or_resolve(self) -> None:
+        status = self._run(["git", "status", "--porcelain"], check=True)
+        if status.stdout.strip():
+            if self.settings.autonomous_worker_mode == "deterministic":
+                self._run(["git", "checkout", "--", "."], check=False)
+                self._run(["git", "clean", "-fd", "data/"], check=False)
+                return
+            raise RuntimeError(f"working tree not clean: {status.stdout.strip()[:500]}")
+
+    def _apply_harmless_change(self, issue_number: int) -> None:
+        marker = self.repo_root / "autonomous_dev" / "acceptance_marker.txt"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(
+            f"worker-run issue={issue_number} at={datetime.now(UTC).isoformat()}\n",
+            encoding="utf-8",
+        )
+
+    def _run_tests(self) -> None:
+        if self.settings.autonomous_worker_mode != "deterministic":
+            self._run([sys.executable, "-m", "pytest", "-q"], check=True)
+            return
+        self._run(
+            [sys.executable, "-m", "pytest", "backend/tests/test_health.py", "-q"],
+            check=True,
+        )
+
+    def _commit_and_push(self, issue_number: int) -> str:
+        self._run(["git", "add", "-A"])
+        msg = f"chore: autonomous worker update for issue #{issue_number}"
+        diff = self._run(["git", "diff", "--cached", "--quiet"], check=False)
+        if diff.returncode == 0:
+            head = self._run(["git", "rev-parse", "HEAD"], check=True)
+            return head.stdout.strip()
+
+        self._run(["git", "commit", "-m", msg])
+        head = self._run(["git", "rev-parse", "HEAD"], check=True)
+        commit_sha = head.stdout.strip()
+
+        if self.settings.autonomous_worker_mode == "deterministic":
+            return commit_sha
+
+        if not self.settings.github_token:
+            raise RuntimeError("GITHUB_TOKEN required for live push")
+
+        self._run(["git", "push", "origin", "main"])
+        return commit_sha
+
+    def _verify_push(self, local_head: str) -> None:
+        if self.settings.autonomous_worker_mode == "deterministic":
+            return
+        remote = self._run(["git", "rev-parse", "origin/main"], check=True)
+        if remote.stdout.strip() != local_head:
+            raise RuntimeError(
+                f"push verification failed local={local_head} origin={remote.stdout.strip()}"
+            )
