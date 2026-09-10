@@ -101,6 +101,38 @@ def test_case_d_material_rewrite_new_identity() -> None:
     assert pay_v1 != term_v2
 
 
+def test_case_f_amount_amendment_same_identity() -> None:
+    direction = uuid.uuid4()
+    key_map = assign_claim_keys_for_direction(
+        direction,
+        [
+            (
+                1,
+                [
+                    {
+                        "claim_type": "PAYMENT",
+                        "description": "支付服务费",
+                        "amount": 1_000_000,
+                        "currency": "CNY",
+                    }
+                ],
+            ),
+            (
+                2,
+                [
+                    {
+                        "claim_type": "PAYMENT",
+                        "description": "支付服务费",
+                        "amount": 1_200_000,
+                        "currency": "CNY",
+                    }
+                ],
+            ),
+        ],
+    )
+    assert key_map[(1, 0)] == key_map[(2, 0)]
+
+
 def test_case_e_uncertain_match_splits() -> None:
     direction = uuid.uuid4()
     prev_items = [_item("PAYMENT", "诉请甲", amount=100000, index=0)]

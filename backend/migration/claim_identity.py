@@ -61,6 +61,9 @@ def text_similarity(a: str, b: str) -> float:
 def amounts_compatible(
     prev: float | None, curr: float | None, *, text_sim: float
 ) -> bool:
+    if text_sim >= 0.92:
+        # Same/near-same statement — amount-only lawyer amend stays same claim.
+        return True
     if prev is None and curr is None:
         return True
     if prev is None or curr is None:
@@ -323,3 +326,196 @@ def insert_claims_from_claim_directions(
 
                 conn.execute(sa.text(sql), params)
                 prev_row_id[(str(claim_key), row.version)] = claim_id
+
+
+def _claim_semantic_key(
+    *,
+    legacy_claim_direction_key: uuid.UUID,
+    version: int,
+    claim_type: str,
+    statement: str,
+    amount: float | None,
+) -> tuple[str, int, str, str, float | None]:
+    rounded = round(float(amount), 6) if amount is not None else None
+    return (
+        str(legacy_claim_direction_key),
+        version,
+        claim_type,
+        normalize_statement(statement),
+        rounded,
+    )
+
+
+def remediate_legacy_claim_identity(conn: Any) -> None:
+    """Rebuild legacy Claim rows with stable identity and remap dependent links."""
+    import sqlalchemy as sa
+
+    old_claims = conn.execute(
+        sa.text(
+            """
+            SELECT claim_key, version, claim_type, statement, amount,
+                   legacy_claim_direction_key
+            FROM claims
+            WHERE legacy_claim_direction_key IS NOT NULL
+            """
+        )
+    ).fetchall()
+    if not old_claims:
+        rows = conn.execute(
+            sa.text(
+                """
+                SELECT id, claim_direction_key, case_id, version, is_current, status,
+                       payload, confirm_decision_id, stale, stale_reason, stale_at,
+                       created_at, updated_at, supersedes_id
+                FROM claim_directions
+                ORDER BY claim_direction_key, version
+                """
+            )
+        ).fetchall()
+        insert_claims_from_claim_directions(
+            conn, list(rows), include_provenance_columns=True
+        )
+        return
+
+    old_keys = {str(r.claim_key) for r in old_claims}
+    key_list = ", ".join(f"'{k}'" for k in old_keys)
+
+    issue_links = conn.execute(
+        sa.text(
+            f"""
+            SELECT id, case_id, claim_key, claim_version, issue_key,
+                   issue_version, role, status, created_at
+            FROM claim_issue_links
+            WHERE claim_key IN ({key_list})
+            """
+        )
+    ).fetchall()
+    fact_links = conn.execute(
+        sa.text(
+            f"""
+            SELECT id, case_id, claim_key, claim_version, fact_key,
+                   fact_version, role, status, created_at
+            FROM claim_fact_links
+            WHERE claim_key IN ({key_list})
+            """
+        )
+    ).fetchall()
+
+    conn.execute(
+        sa.text(
+            f"DELETE FROM claim_issue_links WHERE claim_key IN ({key_list})"
+        )
+    )
+    conn.execute(
+        sa.text(f"DELETE FROM claim_fact_links WHERE claim_key IN ({key_list})")
+    )
+    conn.execute(
+        sa.text("DELETE FROM claims WHERE legacy_claim_direction_key IS NOT NULL")
+    )
+
+    rows = conn.execute(
+        sa.text(
+            """
+            SELECT id, claim_direction_key, case_id, version, is_current, status,
+                   payload, confirm_decision_id, stale, stale_reason, stale_at,
+                   created_at, updated_at, supersedes_id
+            FROM claim_directions
+            ORDER BY claim_direction_key, version
+            """
+        )
+    ).fetchall()
+    insert_claims_from_claim_directions(
+        conn, list(rows), include_provenance_columns=True
+    )
+
+    new_claims = conn.execute(
+        sa.text(
+            """
+            SELECT claim_key, version, claim_type, statement, amount,
+                   legacy_claim_direction_key
+            FROM claims
+            WHERE legacy_claim_direction_key IS NOT NULL
+            """
+        )
+    ).fetchall()
+    new_by_semantic = {
+        _claim_semantic_key(
+            legacy_claim_direction_key=r.legacy_claim_direction_key,
+            version=r.version,
+            claim_type=r.claim_type,
+            statement=r.statement,
+            amount=r.amount,
+        ): r.claim_key
+        for r in new_claims
+    }
+
+    remap: dict[tuple[str, int], uuid.UUID] = {}
+    for old in old_claims:
+        semantic = _claim_semantic_key(
+            legacy_claim_direction_key=old.legacy_claim_direction_key,
+            version=old.version,
+            claim_type=old.claim_type,
+            statement=old.statement,
+            amount=old.amount,
+        )
+        new_key = new_by_semantic.get(semantic)
+        if new_key is not None:
+            remap[(str(old.claim_key), old.version)] = new_key
+
+    for link in issue_links:
+        new_key = remap.get((str(link.claim_key), link.claim_version))
+        if new_key is None:
+            continue
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO claim_issue_links (
+                    id, case_id, claim_key, claim_version, issue_key,
+                    issue_version, role, status, created_at
+                ) VALUES (
+                    :id, :case_id, :claim_key, :claim_version, :issue_key,
+                    :issue_version, :role, :status, :created_at
+                )
+                """
+            ),
+            {
+                "id": link.id,
+                "case_id": link.case_id,
+                "claim_key": new_key,
+                "claim_version": link.claim_version,
+                "issue_key": link.issue_key,
+                "issue_version": link.issue_version,
+                "role": link.role,
+                "status": link.status,
+                "created_at": link.created_at,
+            },
+        )
+
+    for link in fact_links:
+        new_key = remap.get((str(link.claim_key), link.claim_version))
+        if new_key is None:
+            continue
+        conn.execute(
+            sa.text(
+                """
+                INSERT INTO claim_fact_links (
+                    id, case_id, claim_key, claim_version, fact_key,
+                    fact_version, role, status, created_at
+                ) VALUES (
+                    :id, :case_id, :claim_key, :claim_version, :fact_key,
+                    :fact_version, :role, :status, :created_at
+                )
+                """
+            ),
+            {
+                "id": link.id,
+                "case_id": link.case_id,
+                "claim_key": new_key,
+                "claim_version": link.claim_version,
+                "fact_key": link.fact_key,
+                "fact_version": link.fact_version,
+                "role": link.role,
+                "status": link.status,
+                "created_at": link.created_at,
+            },
+        )
