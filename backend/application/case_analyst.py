@@ -185,13 +185,24 @@ class CaseAnalystService:
                 actor_id=actor_id,
             )
             result.issue_ids.append(row.id)
+            self._apply_issue_link_proposals(
+                domain=domain,
+                case_id=case_id,
+                issue=row,
+                proposal=issue,
+                actor_id=actor_id,
+                result=result,
+            )
 
         for theory in engine_result.legal_theories:
+            supporting_ids = self._sanitize_theory_fact_refs(
+                domain, case_id, theory.supporting_fact_refs
+            )
             row = LegalTheory(
                 case_id=case_id,
                 theory_summary=theory.theory_summary,
                 norms_suggested_json=None,
-                supporting_fact_ids=None,
+                supporting_fact_ids=supporting_ids or None,
                 layer="CANDIDATE",
                 analyst_run_id=skill_exec.id if skill_exec else None,
             )
@@ -204,6 +215,134 @@ class CaseAnalystService:
             result.skill_execution_id = skill_exec.id
 
         return result
+
+    def _apply_issue_link_proposals(
+        self,
+        *,
+        domain: DomainService,
+        case_id: UUID,
+        issue,
+        proposal,
+        actor_id: UUID,
+        result: AnalystApplyResult,
+    ) -> None:
+        """Apply analyst link proposals to CANDIDATE issue — never confirms issue."""
+        for fp in proposal.fact_link_proposals:
+            fact = domain.repo.get_fact_version(fp.fact_key, fp.fact_version)
+            if fact is None or fact.case_id != case_id:
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "issue_fact_link",
+                        "error": "fact version not found",
+                    }
+                )
+                continue
+            if fact.status != "CONFIRMED":
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "issue_fact_link",
+                        "error": "only CONFIRMED facts may link to issues",
+                    }
+                )
+                continue
+            try:
+                domain.link_fact_to_issue(
+                    case_id=case_id,
+                    issue_key=issue.issue_key,
+                    issue_version=issue.version,
+                    fact_key=fp.fact_key,
+                    fact_version=fp.fact_version,
+                    role=fp.role,
+                    actor_id=actor_id,
+                )
+            except ValidationError as exc:
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "issue_fact_link",
+                        "error": exc.message,
+                        "code": exc.code,
+                    }
+                )
+
+        for ep in proposal.evidence_link_proposals or []:
+            ev = domain.repo.get_evidence_version(
+                ep.evidence_item_id, ep.evidence_item_version
+            )
+            if ev is None or ev.case_id != case_id:
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "issue_evidence_link",
+                        "error": "evidence version not found",
+                    }
+                )
+                continue
+            if ev.acceptance != "ACCEPTED":
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "issue_evidence_link",
+                        "error": "only ACCEPTED evidence may link to issues",
+                    }
+                )
+                continue
+            try:
+                domain.link_evidence_to_issue(
+                    case_id=case_id,
+                    issue_key=issue.issue_key,
+                    issue_version=issue.version,
+                    evidence_item_id=ep.evidence_item_id,
+                    evidence_item_version=ep.evidence_item_version,
+                    role=ep.role,
+                    explanation=ep.explanation,
+                    actor_id=actor_id,
+                )
+            except ValidationError as exc:
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "issue_evidence_link",
+                        "error": exc.message,
+                        "code": exc.code,
+                    }
+                )
+
+        # Legacy related_evidence_refs → CONTEXT links
+        for ref in proposal.related_evidence_refs:
+            ev = domain.repo.get_evidence_version(
+                ref.evidence_item_id, ref.evidence_item_version
+            )
+            if ev is None or ev.case_id != case_id or ev.acceptance != "ACCEPTED":
+                continue
+            try:
+                domain.link_evidence_to_issue(
+                    case_id=case_id,
+                    issue_key=issue.issue_key,
+                    issue_version=issue.version,
+                    evidence_item_id=ref.evidence_item_id,
+                    evidence_item_version=ref.evidence_item_version,
+                    role="CONTEXT",
+                    actor_id=actor_id,
+                )
+            except ValidationError:
+                pass
+
+    @staticmethod
+    def _sanitize_theory_fact_refs(domain: DomainService, case_id: UUID, refs) -> list[str]:
+        """LegalTheory may only reference confirmed facts in the same case."""
+        out: list[str] = []
+        for ref in refs:
+            fact = domain.repo.get_fact_version(ref.fact_key, ref.fact_version)
+            if (
+                fact is not None
+                and fact.case_id == case_id
+                and fact.status == "CONFIRMED"
+            ):
+                out.append(str(ref.fact_key))
+        return out
 
     def is_party_gate_complete(self, case_id: UUID) -> bool:
         """N5: no CANDIDATE left; at least one CONFIRMED; REJECTED is resolved."""

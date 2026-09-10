@@ -79,13 +79,39 @@ class FactProposal(BaseModel):
         return value
 
 
+class IssueLinkFactProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fact_key: UUID
+    fact_version: int = Field(ge=1)
+    role: str = Field(pattern=r"^(SUPPORT|ADVERSE|CONTEXT)$")
+
+
+class IssueLinkEvidenceProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_item_id: UUID
+    evidence_item_version: int = Field(ge=1)
+    role: str = Field(pattern=r"^(SUPPORT|ADVERSE|CONTEXT)$")
+    explanation: str | None = Field(default=None, max_length=2000)
+
+
 class IssueProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     proposal_id: UUID
     statement: str = Field(min_length=1, max_length=5000)
     related_evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+    fact_link_proposals: list[IssueLinkFactProposal] = Field(default_factory=list)
+    evidence_link_proposals: list[IssueLinkEvidenceProposal] = Field(default_factory=list)
     analyst_reason: str = Field(default="", max_length=2000)
+
+
+class LegalTheoryFactRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fact_key: UUID
+    fact_version: int = Field(ge=1)
 
 
 class LegalTheoryProposal(BaseModel):
@@ -94,6 +120,7 @@ class LegalTheoryProposal(BaseModel):
     proposal_id: UUID
     theory_summary: str = Field(min_length=1, max_length=5000)
     related_evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+    supporting_fact_refs: list[LegalTheoryFactRef] = Field(default_factory=list)
     analyst_reason: str = Field(default="", max_length=2000)
 
 

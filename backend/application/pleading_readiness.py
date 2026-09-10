@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.application.issue_matrix import IssueMatrixService
 from backend.application.material_usability import MaterialUsabilityPolicy
 from backend.domain.enums import ClaimType, PartyRole
 from backend.models import (
@@ -353,6 +354,8 @@ class PleadingReadinessService:
                     )
                     missing.append("ClaimDirection 金额与事实一致")
 
+        self._check_issue_readiness(case_id, warnings, missing, next_actions)
+
         status = (
             ReadinessStatus.READY if not blockers else ReadinessStatus.NOT_READY
         )
@@ -418,6 +421,58 @@ class PleadingReadinessService:
             for a in result.suggested_next_actions[:5]:
                 lines.append(f"• {a}")
         return "\n".join(lines)
+
+    def _check_issue_readiness(
+        self,
+        case_id: UUID,
+        warnings: list[ReadinessIssue],
+        missing: list[str],
+        next_actions: list[str],
+    ) -> None:
+        """Issue-aware readiness hints — warnings only, conservative blockers."""
+        matrix = IssueMatrixService(self.session).build(case_id)
+        if matrix.candidate_issue_count and not matrix.confirmed_issue_count:
+            warnings.append(
+                ReadinessIssue(
+                    code=ReadinessIssueCode.ISSUE_ONLY_CANDIDATE.value,
+                    severity="WARNING",
+                    message="存在 AI 候选争点，但尚无律师确认的争点。",
+                    suggested_action="请审阅并确认关键争点后，再依赖争点分析推进起诉准备。",
+                )
+            )
+            missing.append("CONFIRMED issue")
+            next_actions.append("确认至少一个关键争点")
+        elif not matrix.confirmed_issue_count and not matrix.candidate_issue_count:
+            warnings.append(
+                ReadinessIssue(
+                    code=ReadinessIssueCode.NO_CONFIRMED_ISSUE.value,
+                    severity="WARNING",
+                    message="尚未建立律师确认的争点矩阵。",
+                    suggested_action="完成案情分析并确认争点后再评估起诉准备度。",
+                )
+            )
+
+        for item in matrix.items:
+            if item.status != "CONFIRMED":
+                continue
+            critical = item.fact_gaps or item.evidence_gaps
+            if not critical:
+                continue
+            warnings.append(
+                ReadinessIssue(
+                    code=ReadinessIssueCode.ISSUE_CRITICAL_GAP.value,
+                    severity="WARNING",
+                    message=(
+                        f"已确认争点「{item.statement[:40]}…」存在证明缺口提示。"
+                        if len(item.statement) > 40
+                        else f"已确认争点「{item.statement}」存在证明缺口提示。"
+                    ),
+                    suggested_action="补充关联事实或证据后再推进起诉状起草。",
+                    related_fact_keys=[
+                        g.related_fact_key for g in critical if g.related_fact_key
+                    ],
+                )
+            )
 
     # ----- loaders -----
 
