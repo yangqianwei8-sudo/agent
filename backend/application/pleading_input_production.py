@@ -59,6 +59,120 @@ def _stable_hash(parts: list[str]) -> str:
     return hashlib.sha256("|".join(sorted(parts)).encode("utf-8")).hexdigest()
 
 
+def _formal_ref_sets(
+    claims_in: list[ClaimInput],
+    issues_in: list[IssueInput],
+    facts_in: list[FactInput],
+    evidence_in: list[EvidenceInput],
+) -> tuple[
+    set[tuple[str, int]],
+    set[tuple[str, int]],
+    set[tuple[str, int]],
+    set[tuple[str, int]],
+]:
+    """Formal refs derived only from final structured arrays — not loose DB queries."""
+    formal_claim_refs = {(c.claim_key, c.claim_version) for c in claims_in}
+    formal_issue_refs = {(i.issue_key, i.issue_version) for i in issues_in}
+    formal_fact_refs = {(f.fact_key, f.fact_version) for f in facts_in}
+    formal_evidence_refs = {
+        (e.evidence_item_id, e.evidence_item_version) for e in evidence_in
+    }
+    return formal_claim_refs, formal_issue_refs, formal_fact_refs, formal_evidence_refs
+
+
+def _relation_ref_keys(
+    claim_issue: list[ClaimIssueRelation],
+    claim_fact: list[ClaimFactRelation],
+    issue_fact: list[IssueFactRelation],
+    fact_evidence: list[FactEvidenceRelation],
+) -> list[str]:
+    refs: list[str] = []
+    for r in claim_issue:
+        refs.append(
+            f"claim-issue:{r.claim_key}@v{r.claim_version}:"
+            f"{r.issue_key}@v{r.issue_version}:{r.role}"
+        )
+    for r in claim_fact:
+        refs.append(
+            f"claim-fact:{r.claim_key}@v{r.claim_version}:"
+            f"{r.fact_key}@v{r.fact_version}:{r.role}"
+        )
+    for r in issue_fact:
+        refs.append(
+            f"issue-fact:{r.issue_key}@v{r.issue_version}:"
+            f"{r.fact_key}@v{r.fact_version}:{r.role}"
+        )
+    for r in fact_evidence:
+        refs.append(
+            f"fact-evidence:{r.fact_key}@v{r.fact_version}:"
+            f"{r.evidence_item_id}@v{r.evidence_item_version}:{r.role}"
+        )
+    return refs
+
+
+def assert_closed_relation_graph(inp: PleadingStructuredInput) -> None:
+    """Every relation edge must reference objects present in this snapshot."""
+    formal_claim_refs, formal_issue_refs, formal_fact_refs, formal_evidence_refs = (
+        _formal_ref_sets(inp.claims, inp.issues, inp.facts, inp.evidence)
+    )
+
+    def _check_active(status: str, label: str) -> None:
+        if status != "ACTIVE":
+            raise ValidationError(f"blocking: non-ACTIVE {label} relation in snapshot")
+
+    for r in inp.claim_issue_relations:
+        _check_active(r.status, "claim-issue")
+        if (r.claim_key, r.claim_version) not in formal_claim_refs:
+            raise ValidationError(
+                f"blocking: orphan claim-issue relation for claim "
+                f"{r.claim_key}@v{r.claim_version}"
+            )
+        if (r.issue_key, r.issue_version) not in formal_issue_refs:
+            raise ValidationError(
+                f"blocking: orphan claim-issue relation for issue "
+                f"{r.issue_key}@v{r.issue_version}"
+            )
+
+    for r in inp.claim_fact_relations:
+        _check_active(r.status, "claim-fact")
+        if (r.claim_key, r.claim_version) not in formal_claim_refs:
+            raise ValidationError(
+                f"blocking: orphan claim-fact relation for claim "
+                f"{r.claim_key}@v{r.claim_version}"
+            )
+        if (r.fact_key, r.fact_version) not in formal_fact_refs:
+            raise ValidationError(
+                f"blocking: orphan claim-fact relation for fact "
+                f"{r.fact_key}@v{r.fact_version}"
+            )
+
+    for r in inp.issue_fact_relations:
+        _check_active(r.status, "issue-fact")
+        if (r.issue_key, r.issue_version) not in formal_issue_refs:
+            raise ValidationError(
+                f"blocking: orphan issue-fact relation for issue "
+                f"{r.issue_key}@v{r.issue_version}"
+            )
+        if (r.fact_key, r.fact_version) not in formal_fact_refs:
+            raise ValidationError(
+                f"blocking: orphan issue-fact relation for fact "
+                f"{r.fact_key}@v{r.fact_version}"
+            )
+
+    for r in inp.fact_evidence_relations:
+        _check_active(r.status, "fact-evidence")
+        if (r.fact_key, r.fact_version) not in formal_fact_refs:
+            raise ValidationError(
+                f"blocking: orphan fact-evidence relation for fact "
+                f"{r.fact_key}@v{r.fact_version}"
+            )
+        if (r.evidence_item_id, r.evidence_item_version) not in formal_evidence_refs:
+            raise ValidationError(
+                f"blocking: orphan fact-evidence relation for evidence "
+                f"{r.evidence_item_id}@v{r.evidence_item_version}"
+            )
+
+
 class PleadingStructuredInputProductionBuilder:
     """Production SSOT builder — Claim Domain first, ClaimDirection legacy fallback."""
 
@@ -96,6 +210,8 @@ class PleadingStructuredInputProductionBuilder:
         for item in issue_matrix.items:
             if item.status != "CONFIRMED":
                 continue
+            if item.stale_state.get("stale"):
+                continue
             issues_in.append(
                 IssueInput(
                     issue_key=item.issue_key,
@@ -109,7 +225,19 @@ class PleadingStructuredInputProductionBuilder:
         facts_in = self._build_facts_in(case_id, facts)
         evidence_in = self._build_evidence_in(case_id, evidence)
         claims_in = self._build_claims_in(claim_rows, view_by_key)
-        relations = self._build_relations(case_id, facts, evidence)
+        (
+            formal_claim_refs,
+            formal_issue_refs,
+            formal_fact_refs,
+            formal_evidence_refs,
+        ) = _formal_ref_sets(claims_in, issues_in, facts_in, evidence_in)
+        relations = self._build_relations(
+            case_id,
+            formal_claim_refs=formal_claim_refs,
+            formal_issue_refs=formal_issue_refs,
+            formal_fact_refs=formal_fact_refs,
+            formal_evidence_refs=formal_evidence_refs,
+        )
 
         warnings = list(claim_warnings)
         if claim_source == "LEGACY_CLAIM_DIRECTION":
@@ -127,8 +255,19 @@ class PleadingStructuredInputProductionBuilder:
             _ref_key("evidence", e.evidence_item_id, e.evidence_item_version)
             for e in evidence_in
         ]
+        relation_refs = _relation_ref_keys(
+            relations["claim_issue"],
+            relations["claim_fact"],
+            relations["issue_fact"],
+            relations["fact_evidence"],
+        )
         conf_hash = _stable_hash(
-            party_refs + claim_refs + issue_refs + fact_refs + evidence_refs
+            party_refs
+            + claim_refs
+            + issue_refs
+            + fact_refs
+            + evidence_refs
+            + relation_refs
         )
 
         snapshot = SnapshotMeta(
@@ -156,7 +295,7 @@ class PleadingStructuredInputProductionBuilder:
             writer_structured.claims_payload = self._claims_domain_payload(claims_in)
         writer_structured.warnings = list(set(writer_structured.warnings + warnings))
 
-        return PleadingStructuredInput(
+        structured = PleadingStructuredInput(
             case_id=str(case_id),
             parties=[
                 PartyInput(
@@ -180,6 +319,8 @@ class PleadingStructuredInputProductionBuilder:
             snapshot_meta=snapshot,
             writer_structured=writer_structured,
         )
+        assert_closed_relation_graph(structured)
+        return structured
 
     @staticmethod
     def assert_formal_boundaries(inp: PleadingStructuredInput) -> None:
@@ -192,6 +333,7 @@ class PleadingStructuredInputProductionBuilder:
             return
         if not inp.claims:
             raise ValidationError("blocking: no confirmed claim in structured input")
+        assert_closed_relation_graph(inp)
 
     def summary(self, case_id: UUID) -> dict[str, Any]:
         try:
@@ -440,27 +582,30 @@ class PleadingStructuredInputProductionBuilder:
     def _build_relations(
         self,
         case_id: UUID,
-        facts: list[ConfirmedFactView],
-        evidence: list[AcceptedEvidenceView],
+        *,
+        formal_claim_refs: set[tuple[str, int]],
+        formal_issue_refs: set[tuple[str, int]],
+        formal_fact_refs: set[tuple[str, int]],
+        formal_evidence_refs: set[tuple[str, int]],
     ) -> dict[str, list]:
-        fact_keys = {(f.fact_key, f.fact_version) for f in facts}
-        ev_keys = {(e.evidence_item_id, e.evidence_item_version) for e in evidence}
-
         claim_issue: list[ClaimIssueRelation] = []
         for link in self.session.scalars(
             select(ClaimIssueLink).where(
                 ClaimIssueLink.case_id == case_id, ClaimIssueLink.status == "ACTIVE"
             )
         ):
-            claim = self.repo.get_relief_claim_version(link.claim_key, link.claim_version)
-            if claim is None or claim.status != "CONFIRMED":
+            claim_ref = (str(link.claim_key), link.claim_version)
+            issue_ref = (str(link.issue_key), link.issue_version)
+            if claim_ref not in formal_claim_refs:
+                continue
+            if issue_ref not in formal_issue_refs:
                 continue
             claim_issue.append(
                 ClaimIssueRelation(
-                    claim_key=str(link.claim_key),
-                    claim_version=link.claim_version,
-                    issue_key=str(link.issue_key),
-                    issue_version=link.issue_version,
+                    claim_key=claim_ref[0],
+                    claim_version=claim_ref[1],
+                    issue_key=issue_ref[0],
+                    issue_version=issue_ref[1],
                     role=link.role,
                     status=link.status,
                 )
@@ -472,14 +617,18 @@ class PleadingStructuredInputProductionBuilder:
                 ClaimFactLink.case_id == case_id, ClaimFactLink.status == "ACTIVE"
             )
         ):
-            if (link.fact_key, link.fact_version) not in fact_keys:
+            claim_ref = (str(link.claim_key), link.claim_version)
+            fact_ref = (str(link.fact_key), link.fact_version)
+            if claim_ref not in formal_claim_refs:
+                continue
+            if fact_ref not in formal_fact_refs:
                 continue
             claim_fact.append(
                 ClaimFactRelation(
-                    claim_key=str(link.claim_key),
-                    claim_version=link.claim_version,
-                    fact_key=str(link.fact_key),
-                    fact_version=link.fact_version,
+                    claim_key=claim_ref[0],
+                    claim_version=claim_ref[1],
+                    fact_key=fact_ref[0],
+                    fact_version=fact_ref[1],
                     role=link.role,
                     status=link.status,
                 )
@@ -491,42 +640,44 @@ class PleadingStructuredInputProductionBuilder:
                 IssueFactLink.case_id == case_id, IssueFactLink.status == "ACTIVE"
             )
         ):
-            if (link.fact_key, link.fact_version) not in fact_keys:
+            issue_ref = (str(link.issue_key), link.issue_version)
+            fact_ref = (str(link.fact_key), link.fact_version)
+            if issue_ref not in formal_issue_refs:
                 continue
-            issue = self.repo.get_issue_version(link.issue_key, link.issue_version)
-            if issue is None or issue.status != "CONFIRMED":
+            if fact_ref not in formal_fact_refs:
                 continue
             issue_fact.append(
                 IssueFactRelation(
-                    issue_key=str(link.issue_key),
-                    issue_version=link.issue_version,
-                    fact_key=str(link.fact_key),
-                    fact_version=link.fact_version,
+                    issue_key=issue_ref[0],
+                    issue_version=issue_ref[1],
+                    fact_key=fact_ref[0],
+                    fact_version=fact_ref[1],
                     role=link.role,
                     status=link.status,
                 )
             )
 
         fact_evidence: list[FactEvidenceRelation] = []
-        for f in facts:
+        for fact_key, fact_version in sorted(formal_fact_refs):
             row = self.session.scalars(
                 select(Fact).where(
-                    Fact.fact_key == f.fact_key, Fact.version == f.fact_version
+                    Fact.fact_key == fact_key, Fact.version == fact_version
                 )
             ).first()
-            if row is None:
+            if row is None or row.case_id != case_id:
                 continue
             for link in self.repo.list_fact_links(row.id):
                 if link.status != "ACTIVE":
                     continue
-                if (link.evidence_item_id, link.evidence_item_version) not in ev_keys:
+                ev_ref = (str(link.evidence_item_id), link.evidence_item_version)
+                if ev_ref not in formal_evidence_refs:
                     continue
                 fact_evidence.append(
                     FactEvidenceRelation(
-                        fact_key=str(f.fact_key),
-                        fact_version=f.fact_version,
-                        evidence_item_id=str(link.evidence_item_id),
-                        evidence_item_version=link.evidence_item_version,
+                        fact_key=fact_key,
+                        fact_version=fact_version,
+                        evidence_item_id=ev_ref[0],
+                        evidence_item_version=ev_ref[1],
                         role=link.link_role,
                         status=link.status,
                         source_span_id=str(link.source_span_id)

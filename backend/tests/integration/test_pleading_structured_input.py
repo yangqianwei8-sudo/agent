@@ -9,12 +9,22 @@ from sqlalchemy.orm import Session
 
 from backend.application.pleading_input_production import (
     PleadingStructuredInputProductionBuilder,
+    assert_closed_relation_graph,
 )
 from backend.application.pleading_writer import PleadingWriterService
+from backend.domain.errors import ValidationError
 from backend.main import app
-from backend.models import DocumentDraft, DraftCitation
+from backend.models import (
+    ClaimFactLink,
+    ClaimIssueLink,
+    DocumentDraft,
+    DraftCitation,
+    Issue,
+)
 from backend.schemas.case_analyst import EvidenceRef
 from backend.schemas.claim_direction_proposal import FactRef
+from backend.schemas.pleading_structured_input import ClaimIssueRelation
+from backend.skills.pleading_writer import ConfirmedFactView
 from backend.tests.integration.test_pleading_writer import _seed_writer_world
 
 
@@ -243,3 +253,254 @@ def test_workspace_pleading_input_summary(api_client, db_session, owner_id, acto
     summary = ws.get("pleading_input_summary")
     assert summary["confirmed_claim_count"] == 1
     assert summary["confirmation_set_hash"]
+
+
+def _build_production_input(db_session, case_id):
+    builder = PleadingStructuredInputProductionBuilder(db_session)
+    return builder.build(
+        case_id=case_id,
+        parties=builder._load_confirmed_parties(case_id),
+        facts=builder._load_confirmed_facts_for_case(case_id),
+        evidence=builder._load_accepted_evidence_for_case(case_id),
+    )
+
+
+def test_superseded_claim_relation_excluded(db_session, owner_id, actor_id):
+    svc, case, _, facts, _, confirmed, issue_cur = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    v1 = confirmed.version
+    v2 = svc.amend_claim(
+        confirmed.claim_key,
+        statement="修订诉请",
+        actor_id=actor_id,
+    )
+    svc.link_fact_to_claim(
+        case_id=case.id,
+        claim_key=v2.claim_key,
+        claim_version=v2.version,
+        fact_key=facts[1].fact_key,
+        fact_version=facts[1].version,
+        role="BASIS",
+        actor_id=actor_id,
+    )
+    inp = _build_production_input(db_session, case.id)
+    assert len(inp.claims) == 1
+    assert inp.claims[0].claim_version == v2.version
+    assert all(r.claim_version != v1 for r in inp.claim_issue_relations)
+    assert all(r.claim_version != v1 for r in inp.claim_fact_relations)
+    assert all(r.claim_version == v2.version for r in inp.claim_issue_relations)
+
+
+def test_old_claim_version_relation_excluded(db_session, owner_id, actor_id):
+    svc, case, _, _, _, confirmed, _ = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    old_version = confirmed.version
+    svc.amend_claim(confirmed.claim_key, statement="再次修订", actor_id=actor_id)
+    inp = _build_production_input(db_session, case.id)
+    claim_versions = {r.claim_version for r in inp.claim_issue_relations}
+    assert old_version not in claim_versions
+
+
+def test_candidate_claim_relation_excluded(db_session, owner_id, actor_id):
+    svc, case, _, facts, _, confirmed, issue_cur = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    candidate = svc.propose_claim(
+        case_id=case.id,
+        claim_type="PAYMENT",
+        title="候选诉请",
+        statement="候选",
+    )
+    db_session.add(
+        ClaimIssueLink(
+            case_id=case.id,
+            claim_key=candidate.claim_key,
+            claim_version=candidate.version,
+            issue_key=issue_cur.issue_key,
+            issue_version=issue_cur.version,
+            role="BASIS",
+            status="ACTIVE",
+        )
+    )
+    db_session.flush()
+    inp = _build_production_input(db_session, case.id)
+    assert len(inp.claims) == 1
+    assert inp.claims[0].claim_key == str(confirmed.claim_key)
+    assert all(
+        r.claim_key != str(candidate.claim_key) for r in inp.claim_issue_relations
+    )
+
+
+def test_superseded_issue_relation_excluded(db_session, owner_id, actor_id):
+    svc, case, _, facts, _, confirmed, issue_cur = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    v1 = issue_cur.version
+    v2 = svc.amend_issue(
+        issue_cur.issue_key,
+        new_statement="修订争点",
+        actor_id=actor_id,
+    )
+    svc.link_fact_to_issue(
+        case_id=case.id,
+        issue_key=v2.issue_key,
+        issue_version=v2.version,
+        fact_key=facts[2].fact_key,
+        fact_version=facts[2].version,
+        role="CONTEXT",
+        actor_id=actor_id,
+    )
+    inp = _build_production_input(db_session, case.id)
+    assert len(inp.issues) == 1
+    assert inp.issues[0].issue_version == v2.version
+    assert all(r.issue_version != v1 for r in inp.claim_issue_relations)
+    assert all(r.issue_version != v1 for r in inp.issue_fact_relations)
+
+
+def test_stale_issue_relation_excluded(db_session, owner_id, actor_id):
+    svc, case, _, _, _, _, issue_cur = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    issue_row = db_session.scalars(
+        select(Issue).where(
+            Issue.issue_key == issue_cur.issue_key,
+            Issue.version == issue_cur.version,
+        )
+    ).first()
+    assert issue_row is not None
+    issue_row.stale = True
+    db_session.flush()
+    inp = _build_production_input(db_session, case.id)
+    assert inp.issues == []
+    assert inp.claim_issue_relations == []
+
+
+def test_relation_to_fact_not_in_formal_set_excluded(db_session, owner_id, actor_id):
+    _, case, _, facts, evidences, _, _ = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    builder = PleadingStructuredInputProductionBuilder(db_session)
+    subset = [
+        ConfirmedFactView(
+            fact_key=facts[0].fact_key,
+            fact_version=facts[0].version,
+            statement=facts[0].statement,
+            evidence_refs=[],
+        )
+    ]
+    inp = builder.build(
+        case_id=case.id,
+        parties=builder._load_confirmed_parties(case.id),
+        facts=subset,
+        evidence=builder._load_accepted_evidence_for_case(case.id),
+    )
+    linked_facts = {r.fact_key for r in inp.claim_fact_relations} | {
+        r.fact_key for r in inp.issue_fact_relations
+    }
+    assert str(facts[0].fact_key) in linked_facts or not linked_facts
+    assert str(facts[-1].fact_key) not in linked_facts
+
+
+def test_relation_to_evidence_not_in_formal_set_excluded(db_session, owner_id, actor_id):
+    _, case, party_keys, facts, evidences, _, _ = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    builder = PleadingStructuredInputProductionBuilder(db_session)
+    ev_subset = builder._load_accepted_evidence_for_case(case.id)[:1]
+    inp = builder.build(
+        case_id=case.id,
+        parties=builder._load_confirmed_parties(case.id),
+        facts=builder._load_confirmed_facts_for_case(case.id),
+        evidence=ev_subset,
+    )
+    ev_ids = {r.evidence_item_id for r in inp.fact_evidence_relations}
+    assert all(eid == str(ev_subset[0].evidence_item_id) for eid in ev_ids)
+
+
+def test_orphan_relation_causes_hard_failure(db_session, owner_id, actor_id):
+    inp = _build_production_input(
+        db_session,
+        _seed_production_world(db_session, owner_id, actor_id)[1].id,
+    )
+    orphan = inp.model_copy(
+        update={
+            "claim_issue_relations": inp.claim_issue_relations
+            + [
+                ClaimIssueRelation(
+                    claim_key="00000000-0000-0000-0000-000000000099",
+                    claim_version=99,
+                    issue_key=inp.issues[0].issue_key,
+                    issue_version=inp.issues[0].issue_version,
+                    role="BASIS",
+                    status="ACTIVE",
+                )
+            ]
+        }
+    )
+    with pytest.raises(ValidationError, match="orphan claim-issue"):
+        assert_closed_relation_graph(orphan)
+
+
+def test_valid_current_claim_issue_fact_evidence_graph_preserved(
+    db_session, owner_id, actor_id
+):
+    _, case, _, facts, _, confirmed, issue_cur = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    inp = _build_production_input(db_session, case.id)
+    assert any(
+        r.claim_key == str(confirmed.claim_key)
+        and r.issue_key == str(issue_cur.issue_key)
+        for r in inp.claim_issue_relations
+    )
+    assert any(r.role == "AMOUNT_BASIS" for r in inp.claim_fact_relations)
+    assert any(r.role == "SUPPORT" for r in inp.issue_fact_relations)
+    assert inp.fact_evidence_relations
+    assert_closed_relation_graph(inp)
+
+
+def test_hash_changes_on_relation_role_change(db_session, owner_id, actor_id):
+    _, case, _, _, _, _, _ = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    h1 = _build_production_input(db_session, case.id).snapshot_meta.confirmation_set_hash
+    link = db_session.scalars(
+        select(ClaimIssueLink).where(ClaimIssueLink.case_id == case.id)
+    ).first()
+    assert link is not None
+    link.role = "LIMITATION"
+    db_session.flush()
+    h2 = _build_production_input(db_session, case.id).snapshot_meta.confirmation_set_hash
+    assert h1 != h2
+
+
+def test_stale_claim_relation_excluded_via_superseded_version(
+    db_session, owner_id, actor_id
+):
+    svc, case, _, _, _, confirmed, _ = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    v1_key = (str(confirmed.claim_key), confirmed.version)
+    svc.amend_claim(confirmed.claim_key, statement="v2", actor_id=actor_id)
+    inp = _build_production_input(db_session, case.id)
+    for rel in inp.claim_fact_relations + inp.claim_issue_relations:
+        assert (rel.claim_key, rel.claim_version) != v1_key
+
+
+def test_inactive_link_excluded(db_session, owner_id, actor_id):
+    _, case, _, _, _, _, _ = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    link = db_session.scalars(
+        select(ClaimFactLink).where(ClaimFactLink.case_id == case.id)
+    ).first()
+    assert link is not None
+    link.status = "VOID"
+    db_session.flush()
+    inp = _build_production_input(db_session, case.id)
+    assert not any(
+        r.fact_key == str(link.fact_key) and r.role == link.role
+        for r in inp.claim_fact_relations
+    )

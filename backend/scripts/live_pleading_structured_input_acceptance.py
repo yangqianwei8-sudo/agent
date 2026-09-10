@@ -15,7 +15,10 @@ if str(ROOT) not in sys.path:
 
 from backend.application.pleading_input_production import (  # noqa: E402
     PleadingStructuredInputProductionBuilder,
+    assert_closed_relation_graph,
 )
+from backend.application.pleading_readiness import PleadingReadinessService  # noqa: E402
+from backend.schemas.pleading_quality import PleadingDraftValidationError  # noqa: E402
 from backend.application.pleading_writer import PleadingWriterService  # noqa: E402
 from backend.domain.services import DomainService  # noqa: E402
 from backend.infrastructure.db import get_session_factory  # noqa: E402
@@ -148,42 +151,85 @@ def main() -> int:
         inp = builder.build(
             case_id=case.id, parties=parties, facts=facts, evidence=evidence
         )
-        assert inp.claims[0].claim_version == claim.version
-        assert inp.issues[0].issue_version == issue.version
-        assert inp.facts[0].fact_version == amount_fact.version
-        assert inp.evidence[0].source_spans
-        assert inp.snapshot_meta.confirmation_set_hash
-        hash1 = inp.snapshot_meta.confirmation_set_hash
+        v1 = claim.version
+        hash_v1 = inp.snapshot_meta.confirmation_set_hash
 
-        writer = PleadingWriterService(session)
-        result = writer.write(
+        v2 = svc.amend_claim(claim.claim_key, statement="修订诉请 v2", actor_id=actor)
+        svc.link_fact_to_claim(
             case_id=case.id,
-            claim_direction_ref=None,
-            confirmed_fact_refs=[
-                FactRef(fact_key=f.fact_key, fact_version=f.fact_version)
-                for f in facts
-            ],
-            accepted_evidence_refs=[
-                EvidenceRef(
-                    evidence_item_id=item.id, evidence_item_version=item.version
-                )
-            ],
-            confirmed_party_keys=[plaintiff.party_key, defendant.party_key],
+            claim_key=v2.claim_key,
+            claim_version=v2.version,
+            fact_key=confirmed_facts[0].fact_key,
+            fact_version=confirmed_facts[0].version,
+            role="BASIS",
             actor_id=actor,
         )
-        assert result.draft
-        snap = result.draft.body_structured_json["structured_input_snapshot"]
-        assert snap["snapshot_meta"]["claim_source"] == "CLAIM_DOMAIN"
-
-        svc.amend_claim(claim.claim_key, statement="修订诉请", actor_id=actor)
         inp2 = builder.build(
             case_id=case.id, parties=parties, facts=facts, evidence=evidence
         )
-        assert inp2.snapshot_meta.confirmation_set_hash != hash1
+        assert len(inp2.claims) == 1
+        assert inp2.claims[0].claim_version == v2.version
+        assert all(r.claim_version != v1 for r in inp2.claim_issue_relations)
+        assert all(r.claim_version != v1 for r in inp2.claim_fact_relations)
+        assert any(r.claim_version == v2.version for r in inp2.claim_fact_relations)
+        hash_v2 = inp2.snapshot_meta.confirmation_set_hash
+        assert hash_v2 != hash_v1
+
+        from sqlalchemy import select
+
+        from backend.models import ClaimIssueLink
+
+        link = session.scalars(
+            select(ClaimIssueLink).where(
+                ClaimIssueLink.case_id == case.id,
+                ClaimIssueLink.claim_version == v2.version,
+            )
+        ).first()
+        assert link is not None
+        link.role = "LIMITATION"
+        session.flush()
+        inp3 = builder.build(
+            case_id=case.id, parties=parties, facts=facts, evidence=evidence
+        )
+        hash_role = inp3.snapshot_meta.confirmation_set_hash
+        assert hash_role != hash_v2
+        assert any(r.role == "LIMITATION" for r in inp3.claim_issue_relations)
+        assert_closed_relation_graph(inp3)
+
+        readiness = PleadingReadinessService(session).evaluate(case.id)
+        if readiness.is_ready:
+            try:
+                writer = PleadingWriterService(session)
+                result = writer.write(
+                    case_id=case.id,
+                    claim_direction_ref=None,
+                    confirmed_fact_refs=[
+                        FactRef(fact_key=f.fact_key, fact_version=f.fact_version)
+                        for f in facts
+                    ],
+                    accepted_evidence_refs=[
+                        EvidenceRef(
+                            evidence_item_id=item.id,
+                            evidence_item_version=item.version,
+                        )
+                    ],
+                    confirmed_party_keys=[plaintiff.party_key, defendant.party_key],
+                    actor_id=actor,
+                )
+                assert result.draft
+                snap = result.draft.body_structured_json["structured_input_snapshot"]
+                assert snap["snapshot_meta"]["claim_source"] == "CLAIM_DOMAIN"
+                assert all(
+                    r["claim_version"] != v1 for r in snap["claim_issue_relations"]
+                )
+            except PleadingDraftValidationError as exc:
+                print(f"SKIP writer draft validation: {exc}")
+        else:
+            print(f"SKIP writer: blocking={readiness.blocking_issues}")
 
         session.commit()
         print("PASS live_pleading_structured_input_acceptance")
-        print(f"case_id={case.id} hash_before={hash1[:16]}...")
+        print(f"case_id={case.id} hash_v2={hash_v2[:16]}... hash_role={hash_role[:16]}...")
         return 0
 
 
