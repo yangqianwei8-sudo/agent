@@ -192,7 +192,17 @@ class Worker:
             check=True,
         )
 
+    def _ensure_git_identity(self) -> None:
+        if not self._run(["git", "config", "user.email"], check=False).stdout.strip():
+            self._run(
+                ["git", "config", "user.email", "autonomous-dev@sealos.local"],
+                check=False,
+            )
+        if not self._run(["git", "config", "user.name"], check=False).stdout.strip():
+            self._run(["git", "config", "user.name", "autonomous-dev-bot"], check=False)
+
     def _commit_and_push(self, issue_number: int) -> str:
+        self._ensure_git_identity()
         self._run(["git", "add", "-A"])
         msg = f"chore: autonomous worker update for issue #{issue_number}"
         diff = self._run(["git", "diff", "--cached", "--quiet"], check=False)
