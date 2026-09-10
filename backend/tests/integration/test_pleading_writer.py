@@ -738,7 +738,7 @@ def test_ac_ad_ae_party_placeholders_and_blocking(
         actor_id=actor_id,
     )
     text = result.draft.body_structured_json["full_text"]  # type: ignore[union-attr]
-    assert "【待律师补充：住所地】" in text
+    assert "【待补充】" in text
     assert "91110000MA00000000" in text
 
     with pytest.raises(ValidationError, match="PLAINTIFF and DEFENDANT"):
@@ -773,8 +773,8 @@ def test_af_ag_ah_legal_boundary(
         actor_id=actor_id,
     )
     text = result.draft.body_structured_json["full_text"]  # type: ignore[union-attr]
-    assert "依据相关法律规定" in text
-    assert "第" not in text or "《民法典》第" not in text
+    assert "依据相关法律规定" not in text
+    assert "《民法典》第" not in text
 
     bad = PleadingWriterEngineResult(
         title="民事起诉状",

@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from backend.llm.client import LLMClient
 from backend.llm.errors import LLMError, LLMSchemaValidationError
 from backend.llm.prompts import PLEADING_WRITER_PROMPT_VERSION, PLEADING_WRITER_SYSTEM
+from backend.schemas.pleading_quality import StructuredPleadingInput, ValidationIssue
 from backend.schemas.pleading_writer import (
     ClaimDirectionRef,
     ClaimLine,
@@ -43,12 +44,15 @@ class LLMPleadingWriterEngine:
         facts: list[ConfirmedFactView],
         claim: ClaimDirectionView,
         evidence: list[AcceptedEvidenceView],
+        structured: StructuredPleadingInput | None = None,
     ) -> PleadingWriterEngineResult:
         allowed_facts = {(str(f.fact_key), int(f.fact_version)) for f in facts}
         allowed_ev = {
             (str(e.evidence_item_id), int(e.evidence_item_version)) for e in evidence
         }
-        user_prompt = _build_prompt(inp, parties, facts, claim, evidence)
+        user_prompt = _build_prompt(
+            inp, parties, facts, claim, evidence, structured=structured
+        )
 
         try:
             result = self.client.complete_json(
@@ -74,7 +78,12 @@ class LLMPleadingWriterEngine:
             raise LLMSchemaValidationError("writer root must be object")
 
         base = self._fallback.write(
-            inp, parties=parties, facts=facts, claim=claim, evidence=evidence
+            inp,
+            parties=parties,
+            facts=facts,
+            claim=claim,
+            evidence=evidence,
+            structured=structured,
         )
 
         try:
@@ -107,6 +116,29 @@ class LLMPleadingWriterEngine:
             raise LLMSchemaValidationError("invented interest scheme forbidden")
 
         return engine_result
+
+    def repair(
+        self,
+        inp: PleadingWriterInput,
+        *,
+        parties: list[PartyView],
+        facts: list[ConfirmedFactView],
+        claim: ClaimDirectionView,
+        evidence: list[AcceptedEvidenceView],
+        structured: StructuredPleadingInput | None,
+        errors: list[ValidationIssue],
+        prior: PleadingWriterEngineResult,
+    ) -> PleadingWriterEngineResult:
+        """One-shot repair: fall back to deterministic quality renderer."""
+        _ = (inp, errors, prior)
+        return self._fallback.write(
+            inp,
+            parties=parties,
+            facts=facts,
+            claim=claim,
+            evidence=evidence,
+            structured=structured,
+        )
 
 
 def _assemble(
@@ -152,55 +184,20 @@ def _assemble(
     ).model_dump(mode="json")
 
     data.setdefault("title", base.title)
-    data.setdefault("parties_section", base.parties_section)
-    data.setdefault("court_section", base.court_section)
-    data.setdefault("signature_section", base.signature_section)
+    data["parties_section"] = base.parties_section
+    data["court_section"] = base.court_section
+    data["signature_section"] = base.signature_section
     data.setdefault("evidence_section", base.evidence_section)
 
-    blocks = data.get("fact_blocks")
-    if not isinstance(blocks, list) or not blocks:
-        data["fact_blocks"] = [b.model_dump(mode="json") for b in base.fact_blocks]
-        data["facts_and_reasons_section"] = base.facts_and_reasons_section
-    else:
-        cleaned_blocks = []
-        for block in blocks:
-            if not isinstance(block, dict):
-                continue
-            b = dict(block)
-            frefs = _clean_fact_refs(b.get("fact_refs"), allowed_facts)
-            if not frefs:
-                continue
-            b["fact_refs"] = frefs
-            b["evidence_refs"] = _clean_ev_refs(b.get("evidence_refs"), allowed_ev)
-            cleaned_blocks.append(b)
-        if not cleaned_blocks:
-            raise LLMSchemaValidationError("no valid fact_blocks after ref filter")
-        data["fact_blocks"] = cleaned_blocks
-        if not data.get("facts_and_reasons_section"):
-            data["facts_and_reasons_section"] = base.facts_and_reasons_section
+    # Facts/narrative always from deterministic quality renderer (confirmed-only).
+    data["fact_blocks"] = [b.model_dump(mode="json") for b in base.fact_blocks]
+    data["facts_and_reasons_section"] = base.facts_and_reasons_section
 
-    edir = data.get("evidence_directory")
-    if not isinstance(edir, list) or not edir:
-        data["evidence_directory"] = [
-            e.model_dump(mode="json") for e in base.evidence_directory
-        ]
-    else:
-        cleaned_e = []
-        for item in edir:
-            if not isinstance(item, dict):
-                continue
-            eid, ev = item.get("evidence_item_id"), item.get("evidence_item_version")
-            if isinstance(ev, str) and ev.isdigit():
-                ev = int(ev)
-                item = {**item, "evidence_item_version": ev}
-            if eid is None or not isinstance(ev, int):
-                continue
-            if (str(eid), int(ev)) not in allowed_ev:
-                continue
-            cleaned_e.append(item)
-        if not cleaned_e:
-            raise LLMSchemaValidationError("no valid evidence_directory refs")
-        data["evidence_directory"] = cleaned_e
+    # Always use material-level grouped directory from deterministic base.
+    data["evidence_directory"] = [
+        e.model_dump(mode="json") for e in base.evidence_directory
+    ]
+    data["evidence_section"] = base.evidence_section
 
     used_facts: list[dict[str, Any]] = []
     seen_f: set[tuple[str, int]] = set()
@@ -301,6 +298,8 @@ def _build_prompt(
     facts: list[ConfirmedFactView],
     claim: ClaimDirectionView,
     evidence: list[AcceptedEvidenceView],
+    *,
+    structured: StructuredPleadingInput | None = None,
 ) -> str:
     party_rows = [
         {
@@ -339,13 +338,15 @@ def _build_prompt(
         }
         for e in evidence
     ]
+    structured_blob = structured.model_dump(mode="json") if structured else {}
     return (
         f"case_id={inp.case_id}\n"
-        f"claim_direction_key={claim.claim_direction_key}\n"
-        f"claim_direction_version={claim.claim_direction_version}\n"
         f"claim_payload={json.dumps(claim.payload, ensure_ascii=False)}\n"
+        f"structured_input={json.dumps(structured_blob, ensure_ascii=False)}\n"
         f"parties={json.dumps(party_rows, ensure_ascii=False)}\n"
         f"facts={json.dumps(fact_rows, ensure_ascii=False)}\n"
         f"evidence={json.dumps(ev_rows, ensure_ascii=False)}\n"
-        "claims 必须与 claim_payload.claims 完全一致（类型/金额/币种）。请输出 JSON。"
+        "claims 必须与 claim_payload.claims 完全一致（类型/金额/币种）。"
+        "fact_blocks 只能使用 structured_input 中已确认事实，按律师逻辑排序。"
+        "禁止 UUID、假设性表述、编造法院/法条号。请输出 JSON。"
     )

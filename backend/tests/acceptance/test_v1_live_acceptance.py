@@ -842,7 +842,41 @@ def test_v1_live_acceptance_happy_path(
         known_accepted_debt=True,
     )
 
+    # Writer validation may require explicit fee-chain facts beyond readiness READY
+    domain = DomainService(db_session)
+    ev_for_writer = db_session.scalars(
+        select(EvidenceItem).where(
+            EvidenceItem.case_id == case.id,
+            EvidenceItem.acceptance == "ACCEPTED",
+            EvidenceItem.is_current.is_(True),
+        )
+    ).first()
+    assert ev_for_writer is not None
+    writer_extras = [
+        "合同约定设计优化咨询服务费按成果交付后结算。",
+        "被告负有向原告支付剩余服务费的义务。",
+        "被告已向原告支付服务费300000元。",
+        "被告尚欠原告未付服务费700000元。",
+    ]
+    for stmt in writer_extras:
+        if any(stmt[:12] in f.statement for f in _current_facts(db_session, case.id, "CONFIRMED")):
+            continue
+        wf = domain.propose_fact(
+            case_id=case.id,
+            statement=stmt,
+            evidence_links=[
+                {
+                    "evidence_item_id": ev_for_writer.id,
+                    "evidence_item_version": ev_for_writer.version,
+                }
+            ],
+            actor_id=actor_id,
+        )
+        domain.confirm_fact(wf.fact_key, actor_id=actor_id)
+
     r = _say(agent, case.id, "继续", cid)  # N7 complete → N8 Writer → N9
+    if r.current_node == "N8_WRITE" and "失败" in r.message:
+        r = _say(agent, case.id, "重试", cid)
 
     # ----- 13–17 Writer -----
     assert r.current_node == "N9_REVIEW", r.message

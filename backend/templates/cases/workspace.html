@@ -2,68 +2,143 @@
 {% block title %}{{ title }} — 工作台{% endblock %}
 {% block content %}
 <section class="workspace" data-case-id="{{ case_id }}">
-  <header class="ws-header">
-    <div>
-      <h1 id="case-title">{{ workspace.case.title }}</h1>
-      <p class="muted" id="case-meta">
-        {{ workspace.case.status }}
-        {% if workspace.case.goal_summary %} · {{ workspace.case.goal_summary }}{% endif %}
+  <nav class="breadcrumb" aria-label="面包屑">
+    <a href="/cases">案件列表</a>
+    <span class="breadcrumb-sep">/</span>
+    <span id="case-title-crumb">{{ workspace.case.title }}</span>
+  </nav>
+  <header class="ws-header case-summary-header">
+    <div class="ws-title-block">
+      <div class="ws-title-row">
+        <h1 id="case-title">{{ workspace.case.title }}</h1>
+        <span class="status-pill" id="case-status-pill">{{ workspace.case.status }}</span>
+      </div>
+      <div class="case-summary-grid" id="case-summary-grid">
+        <div><span class="summary-label">原告</span><span id="summary-plaintiff">—</span></div>
+        <div><span class="summary-label">被告</span><span id="summary-defendant">—</span></div>
+        <div><span class="summary-label">当前阶段</span><span id="summary-stage">—</span></div>
+        <div><span class="summary-label">起诉准备度</span><span id="summary-readiness" class="readiness">—</span></div>
+        <div><span class="summary-label">待处理</span><span id="summary-todo-count">0 项</span></div>
+        <div><span class="summary-label">最近更新</span><span id="summary-updated" class="muted">—</span></div>
+      </div>
+      <p class="muted ws-goal" id="case-meta">
+        {% if workspace.case.goal_summary %}{{ workspace.case.goal_summary }}{% else %}案件工作台{% endif %}
       </p>
     </div>
-    <div class="status-card" id="workflow-card">
-      <div><strong>AI Mode</strong> <span id="ai-mode">{{ workspace.ai.ai_mode if workspace.ai else "Deterministic" }}</span>
-        {% if workspace.ai and workspace.ai.model %}<span class="muted" id="ai-model"> · {{ workspace.ai.model }}</span>{% else %}<span id="ai-model"></span>{% endif %}
-      </div>
-      <div><strong>Workflow</strong> <span id="wf-status">{{ workspace.workflow.status or "未启动" }}</span></div>
-      <div><strong>当前节点</strong> <span id="wf-node">{{ workspace.workflow.current_node_label or "—" }}</span></div>
-      <div><strong>待处理</strong> <span id="wf-pending">{{ workspace.workflow.pending_count or 0 }}</span></div>
-      <div><strong>起诉准备度</strong> <span id="readiness-status">{{ workspace.pleading_readiness.display_status if workspace.pleading_readiness else "—" }}</span></div>
-      <div class="block" id="readiness-blockers"></div>
-      <div class="block" id="wf-blocking">{{ workspace.workflow.blocking_reason or "" }}</div>
+    <div class="header-actions">
+      <button type="button" class="btn ghost" id="btn-refresh" title="刷新工作台数据">↻ 刷新</button>
+      <button type="button" class="btn primary" id="btn-header-continue" data-work-action="CONTINUE" hidden>继续处理</button>
     </div>
   </header>
 
+  <section class="card stage-card" id="stage-card">
+    <div class="stage-grid">
+      <div><span class="summary-label">当前阶段</span><strong id="stage-label">—</strong></div>
+      <div><span class="summary-label">阶段状态</span><strong id="stage-status-label">—</strong></div>
+      <div class="stage-next"><span class="summary-label">下一步</span><p id="stage-next-text">—</p></div>
+    </div>
+  </section>
+
+  <section class="card next-action-card" id="next-action-card">
+    <div class="next-action-inner">
+      <div>
+        <span class="summary-label">建议下一步</span>
+        <strong id="next-action-label">—</strong>
+        <p class="muted" id="next-action-desc"></p>
+      </div>
+      <button type="button" class="btn primary" id="btn-next-action" hidden>立即处理</button>
+    </div>
+  </section>
+
+  <nav class="section-nav" aria-label="工作台分区">
+    <a href="#section-action-center" class="section-nav-link" data-nav="action-center">待我处理 <span class="nav-badge pending" data-nav-badge="action-center"></span></a>
+    <a href="#section-materials" class="section-nav-link" data-nav="materials">材料 <span class="nav-badge" data-nav-badge="materials"></span></a>
+    <a href="#section-evidence" class="section-nav-link" data-nav="evidence">证据 <span class="nav-badge" data-nav-badge="evidence"></span></a>
+    <a href="#section-facts" class="section-nav-link" data-nav="facts">事实 <span class="nav-badge" data-nav-badge="facts"></span></a>
+    <a href="#section-parties" class="section-nav-link" data-nav="parties">当事人 <span class="nav-badge" data-nav-badge="parties"></span></a>
+    <a href="#section-claim" class="section-nav-link" data-nav="claim">诉请 <span class="nav-badge" data-nav-badge="claim"></span></a>
+    <a href="#section-readiness" class="section-nav-link" data-nav="readiness">起诉准备 <span class="nav-badge" data-nav-badge="readiness"></span></a>
+    <a href="#section-draft" class="section-nav-link" data-nav="draft">起诉状 <span class="nav-badge" data-nav-badge="draft"></span></a>
+    <a href="#section-timeline" class="section-nav-link" data-nav="timeline">工作记录</a>
+  </nav>
+
   <div class="ws-grid">
     <section class="ws-left">
-      <div class="card">
-        <h2>案件材料</h2>
-        <form id="upload-form" class="upload-row">
-          <input type="file" id="upload-file" accept=".pdf,.docx,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown" />
-          <button class="btn primary" type="submit">上传 PDF/DOCX/MD</button>
+      <div class="card section-card" id="section-action-center">
+        <div class="card-head">
+          <h2><span class="section-icon" aria-hidden="true">✅</span> 待我处理 <span id="action-center-count" class="count-badge"></span></h2>
+          <button type="button" class="btn-icon collapse-toggle" data-collapse="section-action-center" aria-label="折叠/展开">▾</button>
+        </div>
+        <div class="card-body"><div id="action-center-panel"></div></div>
+      </div>
+      <div class="card section-card" id="section-materials">
+        <div class="card-head">
+          <h2><span class="section-icon" aria-hidden="true">📁</span> 案件材料</h2>
+          <button type="button" class="btn-icon collapse-toggle" data-collapse="section-materials" aria-label="折叠/展开">▾</button>
+        </div>
+        <div class="card-body">
+        <form id="upload-form" class="upload-zone" aria-label="上传案件材料">
+          <input type="file" id="upload-file" hidden accept=".pdf,.docx,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown" />
+          <div class="upload-zone-inner">
+            <div class="upload-icon" aria-hidden="true">⬆</div>
+            <p class="upload-title">拖拽文件到此处，或点击选择</p>
+            <p class="upload-hint muted">支持 PDF、DOCX、Markdown</p>
+            <button class="btn primary" type="submit">上传文件</button>
+          </div>
         </form>
         <div id="parse-loading" class="agent-loading parse-loading" hidden>
           <span class="spinner" aria-hidden="true"></span>
           <span data-parse-loading-text>正在解析文件，扫描件可能需要较长时间……</span>
         </div>
-        <div id="upload-feedback" class="muted" hidden></div>
+        <div id="upload-feedback" class="feedback ok" hidden></div>
         <div id="upload-error" class="error" hidden></div>
         <div id="material-disclosure" class="notice" hidden></div>
-        <h3 class="subhead">案件材料 <span id="usable-count" class="muted"></span></h3>
-        <table class="table" id="materials-table">
-          <thead>
-            <tr><th>文件名</th><th>格式</th><th>上传时间</th><th>解析状态</th><th>页数</th><th></th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-        <h3 class="subhead">待处理文件 <span id="pending-count" class="muted"></span></h3>
-        <p class="muted">这些文件已保留上传记录，但 AI 暂时无法读取，本轮分析不会使用它们。</p>
-        <div id="pending-materials-panel"></div>
-        <div class="pool-toolbar">
-          <h3 class="subhead">作废池 <span id="void-count" class="muted"></span></h3>
-          <div class="row-actions">
-            <button type="button" class="btn small" id="btn-void-pool-add" title="将全部待处理文件移入作废池">增加</button>
-            <button type="button" class="btn small danger" id="btn-void-pool-clear" title="清空作废池列表">清空</button>
+
+        <div class="subsection">
+          <h3 class="subhead">已读取材料 <span id="usable-count" class="count-badge"></span></h3>
+          <div class="table-wrap">
+            <table class="table" id="materials-table">
+              <thead>
+                <tr><th>文件名</th><th>格式</th><th>上传时间</th><th>解析状态</th><th>页数</th><th></th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
           </div>
         </div>
-        <p class="muted">作废后不再进入案件材料池；可从待处理/材料表单项作废，或点「增加」批量移入。点「清空」仅从列表隐藏，不物理删除磁盘文件。</p>
-        <div id="void-materials-panel"></div>
+
+        <details class="subsection collapsible" id="pending-section">
+          <summary>
+            <span>待处理文件 <span id="pending-count" class="count-badge"></span></span>
+          </summary>
+          <p class="muted subsection-hint">这些文件已保留上传记录，但 AI 暂时无法读取，本轮分析不会使用它们。</p>
+          <div id="pending-materials-panel"></div>
+        </details>
+
+        <details class="subsection collapsible" id="void-section">
+          <summary class="pool-summary">
+            <span>作废池 <span id="void-count" class="count-badge"></span></span>
+            <span class="row-actions pool-actions" onclick="event.stopPropagation()">
+              <button type="button" class="btn small ghost" id="btn-void-pool-add" title="将全部待处理文件移入作废池">批量移入</button>
+              <button type="button" class="btn small danger" id="btn-void-pool-clear" title="清空作废池列表">清空</button>
+            </span>
+          </summary>
+          <p class="muted subsection-hint">作废后不再进入案件材料池；可从待处理/材料表单项作废，或点「批量移入」。点「清空」仅从列表隐藏，不物理删除磁盘文件。</p>
+          <div id="void-materials-panel"></div>
+        </details>
+        </div>
       </div>
 
-      <div class="card">
-        <h2>当事人</h2>
-        <div class="party-create">
-          <button type="button" class="btn small" id="btn-toggle-party-form">+ 新增当事人</button>
-          <form id="party-form" class="party-form" hidden>
+      <div class="card section-card" id="section-parties">
+        <div class="card-head">
+          <h2><span class="section-icon" aria-hidden="true">👥</span> 当事人</h2>
+          <div class="card-head-actions">
+            <button type="button" class="btn small primary" id="btn-toggle-party-form">+ 新增当事人</button>
+            <button type="button" class="btn-icon collapse-toggle" data-collapse="section-parties" aria-label="折叠/展开">▾</button>
+          </div>
+        </div>
+        <div class="card-body">
+        <form id="party-form" class="party-form" hidden>
+          <div class="form-grid">
             <label>角色
               <select id="party-role" required>
                 <option value="">请选择</option>
@@ -75,86 +150,191 @@
             <label>名称
               <input id="party-name" type="text" maxlength="500" placeholder="当事人名称" required />
             </label>
-            <details class="party-optional">
-              <summary>可选信息</summary>
+          </div>
+          <details class="party-optional">
+            <summary>可选信息</summary>
+            <div class="form-grid">
               <label>地址 <input id="party-address" type="text" maxlength="500" /></label>
               <label>法定代表人 <input id="party-legal-rep" type="text" maxlength="200" /></label>
               <label>统一社会信用代码 <input id="party-credit-code" type="text" maxlength="64" /></label>
               <label>联系方式 <input id="party-contact" type="text" maxlength="200" /></label>
-            </details>
-            <div class="row-actions">
-              <button class="btn small primary" type="submit">保存候选</button>
-              <button class="btn small" type="button" id="btn-cancel-party-form">取消</button>
             </div>
-            <div id="party-form-error" class="error" hidden></div>
-          </form>
-        </div>
+          </details>
+          <div class="row-actions">
+            <button class="btn small primary" type="submit">保存候选</button>
+            <button class="btn small ghost" type="button" id="btn-cancel-party-form">取消</button>
+          </div>
+          <div id="party-form-error" class="error" hidden></div>
+        </form>
         <div id="parties-panel"></div>
+        </div>
       </div>
 
-      <div class="card">
-        <h2>证据 Evidence</h2>
-        <div id="evidence-panel"></div>
+      <div class="card section-card" id="section-evidence">
+        <div class="card-head">
+          <h2><span class="section-icon" aria-hidden="true">📋</span> 证据</h2>
+          <button type="button" class="btn-icon collapse-toggle" data-collapse="section-evidence" aria-label="折叠/展开">▾</button>
+        </div>
+        <div class="card-body"><div id="evidence-panel"></div></div>
       </div>
 
-      <div class="card">
-        <h2>事实 Facts</h2>
-        <div id="facts-panel"></div>
+      <div class="card section-card" id="section-facts">
+        <div class="card-head">
+          <h2><span class="section-icon" aria-hidden="true">📌</span> 事实</h2>
+          <button type="button" class="btn-icon collapse-toggle" data-collapse="section-facts" aria-label="折叠/展开">▾</button>
+        </div>
+        <div class="card-body"><div id="facts-panel"></div></div>
       </div>
 
-      <div class="card">
-        <h2>诉讼请求 Claim</h2>
-        <div id="claim-panel"></div>
+      <div class="card section-card" id="section-claim">
+        <div class="card-head">
+          <h2><span class="section-icon" aria-hidden="true">⚖</span> 诉讼请求</h2>
+          <button type="button" class="btn-icon collapse-toggle" data-collapse="section-claim" aria-label="折叠/展开">▾</button>
+        </div>
+        <div class="card-body"><div id="claim-panel"></div></div>
       </div>
 
-      <div class="card">
-        <h2>起诉状 Draft</h2>
-        <div id="draft-panel"></div>
+      <div class="card section-card" id="section-readiness">
+        <div class="card-head">
+          <h2><span class="section-icon" aria-hidden="true">🎯</span> 起诉准备度</h2>
+          <button type="button" class="btn-icon collapse-toggle" data-collapse="section-readiness" aria-label="折叠/展开">▾</button>
+        </div>
+        <div class="card-body">
+          <p class="readiness-headline">起诉准备度：<span id="readiness-status" class="readiness">—</span></p>
+          <div class="block alert-block" id="readiness-blockers"></div>
+        </div>
       </div>
+
+      <div class="card section-card" id="section-draft">
+        <div class="card-head">
+          <h2><span class="section-icon" aria-hidden="true">📝</span> 起诉状</h2>
+          <button type="button" class="btn-icon collapse-toggle" data-collapse="section-draft" aria-label="折叠/展开">▾</button>
+        </div>
+        <div class="card-body"><div id="draft-panel"></div></div>
+      </div>
+
+      <div class="card section-card" id="section-timeline">
+        <div class="card-head">
+          <h2><span class="section-icon" aria-hidden="true">🕐</span> 案件工作记录</h2>
+          <button type="button" class="btn-icon collapse-toggle" data-collapse="section-timeline" aria-label="折叠/展开">▾</button>
+        </div>
+        <div class="card-body"><div id="timeline-panel"></div></div>
+      </div>
+
+      <details class="card dev-diagnostics" id="dev-diagnostics">
+        <summary>开发诊断（技术信息）</summary>
+        <div class="card-body">
+          <div id="workflow-stepper" class="workflow-stepper" aria-label="工作流进度"></div>
+          <div class="metric-grid compact">
+            <div class="metric"><span class="metric-label">工作流</span><span class="metric-value" id="wf-status">{{ workspace.workflow.status or "未启动" }}</span></div>
+            <div class="metric"><span class="metric-label">节点</span><span class="metric-value" id="wf-node">{{ workspace.workflow.current_node or "—" }}</span></div>
+            <div class="metric"><span class="metric-label">AI</span><span class="metric-value" id="ai-mode">{{ workspace.ai.ai_mode if workspace.ai else "Deterministic" }}</span></div>
+          </div>
+          <div class="block warn-block" id="wf-blocking">{{ workspace.workflow.blocking_reason or "" }}</div>
+        </div>
+      </details>
     </section>
 
-    <section class="ws-right card chat">
-      <h2>Agent 对话</h2>
+    <section class="ws-right card chat agent-panel">
+      <div class="chat-header">
+        <h2>Agent 对话</h2>
+        <p class="muted chat-subtitle">询问案件进展，或执行确认/继续等操作</p>
+      </div>
       <div class="quick-actions" id="quick-actions">
-        <button type="button" data-msg="状态">状态</button>
-        <button type="button" data-msg="继续">继续</button>
-        <button type="button" data-msg="暂停">暂停</button>
-        <button type="button" data-msg="恢复">恢复</button>
-        <button type="button" data-msg="查看证据">查看证据</button>
-        <button type="button" data-msg="查看事实">查看事实</button>
-        <button type="button" data-msg="查看诉讼请求">查看诉讼请求</button>
-        <button type="button" data-msg="查看起诉状">查看起诉状</button>
-        <button type="button" data-msg="开始处理这个案件">开始处理</button>
+        <div class="quick-group">
+          <span class="quick-label">流程</span>
+          <button type="button" data-msg="状态">状态</button>
+          <button type="button" data-msg="继续">继续</button>
+          <button type="button" data-msg="暂停">暂停</button>
+          <button type="button" data-msg="恢复">恢复</button>
+          <button type="button" data-msg="开始处理这个案件">开始处理</button>
+        </div>
+        <div class="quick-group">
+          <span class="quick-label">查看</span>
+          <button type="button" data-msg="查看证据">证据</button>
+          <button type="button" data-msg="查看事实">事实</button>
+          <button type="button" data-msg="查看诉讼请求">诉讼请求</button>
+          <button type="button" data-msg="查看起诉状">起诉状</button>
+        </div>
       </div>
       <div id="chat-log" class="chat-log"></div>
       <div id="agent-loading" class="agent-loading" hidden>
         <span class="spinner" aria-hidden="true"></span>
         <span data-loading-text>AI 正在处理案件……请勿重复提交。</span>
       </div>
-      <div id="agent-meta" class="agent-meta muted"></div>
+      <div id="agent-meta" class="agent-meta" hidden></div>
       <details class="agent-diag-wrap muted">
         <summary>开发诊断</summary>
         <div id="agent-diag"></div>
       </details>
       <div id="chat-error" class="error" hidden></div>
       <form id="chat-form" class="chat-form">
-        <textarea id="chat-input" rows="3" placeholder="可以问我案件事实、证据、风险、诉讼策略，也可以直接让我执行明确操作（例如：确认事实2 / 继续）"></textarea>
-        <button class="btn primary" type="submit">发送</button>
+        <div class="chat-input-wrap">
+          <textarea id="chat-input" rows="2" placeholder="可以问我案件事实、证据、风险、诉讼策略，也可以直接让我执行明确操作（例如：确认事实2 / 继续）"></textarea>
+          <span class="chat-hint muted">Enter 发送 · Shift+Enter 换行 · / 聚焦输入</span>
+        </div>
+        <button class="btn primary send-btn" type="submit" aria-label="发送消息">
+          <span class="send-icon" aria-hidden="true">➤</span>
+          <span>发送</span>
+        </button>
       </form>
     </section>
   </div>
 </section>
 
-<dialog id="draft-modal">
-  <form method="dialog">
-    <h3>起诉状全文</h3>
-    <pre id="draft-body"></pre>
-    <button class="btn">关闭</button>
+<div id="toast-root" class="toast-root" aria-live="polite"></div>
+<div class="fab-group" id="fab-group">
+  <button type="button" class="fab" id="fab-top" title="回到顶部" hidden>↑</button>
+  <button type="button" class="fab primary" id="fab-chat" title="跳转到对话">💬</button>
+</div>
+
+<dialog id="confirm-dialog" class="modal confirm-dialog">
+  <form method="dialog" class="modal-inner">
+    <div class="modal-head">
+      <h3 id="confirm-title">确认操作</h3>
+    </div>
+    <p id="confirm-message" class="confirm-message"></p>
+    <div class="confirm-actions">
+      <button type="submit" class="btn primary" id="confirm-ok" value="ok">确认</button>
+      <button type="submit" class="btn ghost" value="cancel">取消</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="evidence-modal" class="modal">
+  <form method="dialog" class="modal-inner">
+    <div class="modal-head">
+      <h3 id="evidence-modal-title">证据原文</h3>
+      <button class="btn small ghost modal-close" value="cancel">关闭</button>
+    </div>
+    <div id="evidence-modal-body" class="evidence-modal-body"></div>
+  </form>
+</dialog>
+
+<dialog id="draft-modal" class="modal">
+  <form method="dialog" class="modal-inner draft-modal-inner">
+    <div class="modal-head">
+      <h3>起诉状</h3>
+      <div class="modal-actions">
+        <button type="button" class="btn small ghost" id="btn-copy-draft">复制当前页</button>
+        <button class="btn small ghost modal-close" value="cancel">关闭</button>
+      </div>
+    </div>
+    <div class="draft-tabs" role="tablist">
+      <button type="button" class="draft-tab active" data-draft-tab="body">正文</button>
+      <button type="button" class="draft-tab" data-draft-tab="evidence">证据目录</button>
+      <button type="button" class="draft-tab" data-draft-tab="citations">引用依据</button>
+      <button type="button" class="draft-tab" data-draft-tab="pending">待补信息</button>
+    </div>
+    <pre id="draft-body" class="draft-pane active" data-draft-pane="body"></pre>
+    <pre id="draft-evidence" class="draft-pane" data-draft-pane="evidence" hidden></pre>
+    <pre id="draft-citations" class="draft-pane" data-draft-pane="citations" hidden></pre>
+    <pre id="draft-pending" class="draft-pane" data-draft-pane="pending" hidden></pre>
   </form>
 </dialog>
 
 <script>
   window.__WORKSPACE_BOOT__ = {{ workspace_json | safe }};
 </script>
-<script src="/static/lawyer_agent/workspace.js"></script>
+<script src="/static/lawyer_agent/workspace.js?v=5"></script>
 {% endblock %}

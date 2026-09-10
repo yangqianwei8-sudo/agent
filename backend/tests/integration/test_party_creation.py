@@ -269,7 +269,8 @@ def test_l_hao_does_not_confirm(
 
 def test_m_ui_confirm_still_agent_message() -> None:
     js = STATIC_JS.read_text(encoding="utf-8")
-    assert "确认当事人${p.display_index}" in js
+    assert "data-work-action" in js and "CONFIRM_PARTY" in js
+    assert "/api/cases/${caseId}/actions" in js
     assert "/api/cases/${caseId}/parties" in js
     assert "confirm_party" not in js
     assert "/parties/${" not in js or "confirm" not in js

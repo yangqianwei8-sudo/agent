@@ -53,6 +53,7 @@ from backend.models import (
     SkillExecution,
     SystemCommand,
 )
+from backend.schemas.pleading_quality import PleadingDraftValidationError
 from backend.schemas.pleading_readiness import PleadingNotReadyError, ReadinessStatus
 from backend.workflow.errors import WorkflowConflictError, WorkflowError
 from backend.workflow.runtime import WorkflowRuntime
@@ -272,6 +273,16 @@ class CommandHandler:
                         ],
                     }
                 ],
+            )
+        except PleadingDraftValidationError as exc:
+            lines = ["起诉状生成失败，质量校验未通过："]
+            for i, issue in enumerate(exc.result.errors[:6], start=1):
+                lines.append(f"{i}. {issue.message}")
+            return HandlerResult(
+                message="\n".join(lines),
+                intent=intent.intent,
+                error_code=AgentErrorCode.VALIDATION_ERROR,
+                routing_status="WAITING_USER",
             )
         except LLMError as exc:
             # Conversation failures must NOT fail workflow machine nodes

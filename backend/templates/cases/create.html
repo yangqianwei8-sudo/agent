@@ -2,20 +2,24 @@
 {% block title %}创建案件{% endblock %}
 {% block content %}
 <section class="page-head">
-  <h1>创建案件</h1>
+  <div>
+    <h1>创建案件</h1>
+    <p class="muted page-subtitle">填写基本信息后进入工作台上传材料</p>
+  </div>
+  <a class="btn ghost" href="/cases">← 返回列表</a>
 </section>
-<form class="card form" method="post" action="/cases/new">
+<form class="card form create-form" method="post" action="/cases/new">
   <label>
-    案件名称 *
-    <input name="title" required maxlength="500" placeholder="例如：咨询服务费纠纷" />
+    案件名称 <span class="required">*</span>
+    <input name="title" required maxlength="500" placeholder="例如：咨询服务费纠纷" autofocus />
   </label>
   <label>
     案由 / 备注（可选）
-    <textarea name="goal_summary" rows="4" maxlength="4000" placeholder="可选：简要说明争议焦点"></textarea>
+    <textarea name="goal_summary" rows="4" maxlength="4000" placeholder="可选：简要说明争议焦点、当事人背景等"></textarea>
   </label>
   <div class="actions">
     <button class="btn primary" type="submit">创建并打开工作台</button>
-    <a class="btn" href="/cases">取消</a>
+    <a class="btn ghost" href="/cases">取消</a>
   </div>
 </form>
 {% endblock %}

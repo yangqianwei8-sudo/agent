@@ -409,8 +409,9 @@ def test_k_l_v_w_x_writer_draft_mirror_citations_d022(
     assert result.draft is not None
     assert result.draft.status == "DRAFT"
     body_claims = result.draft.body_structured_json["claims"]
-    assert len(body_claims) == 1
-    assert abs(float(body_claims[0]["amount"]) - 700000) < 1e-6
+    substantive = [c for c in body_claims if c.get("claim_type") != "PROCEDURAL"]
+    assert len(substantive) == 1
+    assert abs(float(substantive[0]["amount"]) - 700000) < 1e-6
     assert any(w["code"] == "CLAIM_FACT_VERSION_PROVENANCE_GAP" for w in result.warnings)
     cites = list(
         db_session.scalars(
@@ -540,12 +541,15 @@ def test_t_party_missing_fields_placeholder(
         **_write_args(case, parties, facts, evidences, claim, actor_id)
     )
     parties_text = result.draft.body_structured_json["sections"]["parties"]
-    assert "【待律师补充" in parties_text
+    assert "【待补充】" in parties_text
 
 
 def test_u_fabricated_law_article_rejected(
     db_session: Session, owner_id: uuid.UUID, actor_id: uuid.UUID
 ) -> None:
+    """LLM cannot inject fabricated statute into final draft (deterministic facts win)."""
+    from backend.skills.pleading_writer import looks_like_fabricated_law_citation
+
     ensure_pleading_prep_template(db_session)
     _, case, parties, facts, evidences, claim = _seed_writer_world(
         db_session, owner_id=owner_id, actor_id=actor_id
@@ -556,8 +560,11 @@ def test_u_fabricated_law_article_rejected(
         db_session,
         engine=LLMPleadingWriterEngine(FakeLLMClient(responses=[payload])),
     )
-    with pytest.raises((ValidationError, LLMSchemaValidationError)):
-        svc.write(**_write_args(case, parties, facts, evidences, claim, actor_id))
+    result = svc.write(**_write_args(case, parties, facts, evidences, claim, actor_id))
+    assert result.draft is not None
+    full_text = result.draft.body_structured_json["full_text"]
+    assert "第509条" not in full_text
+    assert not looks_like_fabricated_law_citation(full_text)
 
 
 def test_n7_n9_ambiguous_affirmations_not_confirm() -> None:

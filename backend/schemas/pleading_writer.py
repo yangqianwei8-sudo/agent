@@ -66,6 +66,9 @@ class EvidenceDirectoryItem(BaseModel):
     proof_purpose: str
     evidence_item_id: UUID
     evidence_item_version: int
+    material_id: UUID | None = None
+    material_filename: str | None = None
+    merged_evidence_refs: list[EvidenceRef] = Field(default_factory=list)
 
 
 class WriterWarning(BaseModel):

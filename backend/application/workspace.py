@@ -8,6 +8,11 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.application.case_work_product import (
+    CaseWorkProductBuilder,
+    enrich_evidence_rows,
+    enrich_fact_rows,
+)
 from backend.application.material_usability import (
     MaterialUsabilityPolicy,
     MaterialUsabilityView,
@@ -69,23 +74,33 @@ class WorkspaceQueryService:
             for m in policy.list_void_materials(case_id)
         ]
         pool = policy.pool_summary(case_id)
-        return {
+        parties = self._parties(case_id)
+        evidence = enrich_evidence_rows(self.session, self._evidence(case_id))
+        facts = enrich_fact_rows(self._facts(case_id))
+        claim = self._claim(case_id)
+        draft = self._draft(case_id)
+        readiness = self._pleading_readiness(case_id)
+        ctx = {
             "case": self._case_detail(case),
             "workflow": workflow,
-            # Lawyer "案件材料池" — SUCCEEDED only (never FAILED / pending / void)
             "materials": usable,
             "usable_materials": usable,
             "pending_materials": pending,
+            "parties": parties,
+            "evidence": evidence,
+            "facts": facts,
+            "claim_direction": claim,
+            "draft": draft,
+            "pleading_readiness": readiness,
+            "conversation": self._conversation(case_id),
+        }
+        work_product = CaseWorkProductBuilder(self.session).build(ctx)
+        return {
+            **ctx,
             "void_materials": voided,
             "material_pool": pool,
             "analysis_disclosure": pool["disclosure"],
-            "evidence": self._evidence(case_id),
-            "parties": self._parties(case_id),
-            "facts": self._facts(case_id),
-            "claim_direction": self._claim(case_id),
-            "draft": self._draft(case_id),
-            "pleading_readiness": self._pleading_readiness(case_id),
-            "conversation": self._conversation(case_id),
+            "work_product": work_product.model_dump(mode="json"),
             "node_labels": NODE_LABELS_ZH,
             "ai": ai_mode_label(),
         }
@@ -99,6 +114,34 @@ class WorkspaceQueryService:
         plaintiff = next((p["name"] for p in parties if p["role"] == "PLAINTIFF"), None)
         defendant = next((p["name"] for p in parties if p["role"] == "DEFENDANT"), None)
         wf = self._workflow_block(case.id)
+        policy = MaterialUsabilityPolicy(self.session)
+        usable = policy.list_usable_materials(case.id)
+        pending_mats = policy.list_unusable_materials(case.id)
+        evidence = self._evidence(case.id)
+        facts = self._facts(case.id)
+        claim = self._claim(case.id)
+        draft = self._draft(case.id)
+        readiness = self._pleading_readiness(case.id)
+        ctx = {
+            "case": self._case_detail(case),
+            "workflow": wf,
+            "usable_materials": [
+                self._material_row(policy.describe_material(m), pool="usable")
+                for m in usable
+            ],
+            "pending_materials": [
+                self._material_row(policy.describe_material(m), pool="pending")
+                for m in pending_mats
+            ],
+            "parties": parties,
+            "evidence": evidence,
+            "facts": facts,
+            "claim_direction": claim,
+            "draft": draft,
+            "pleading_readiness": readiness,
+            "conversation": [],
+        }
+        wp = CaseWorkProductBuilder(self.session).build(ctx)
         return {
             "id": str(case.id),
             "title": case.title,
@@ -106,6 +149,12 @@ class WorkspaceQueryService:
             "status": case.status,
             "plaintiff": plaintiff,
             "defendant": defendant,
+            "stage_label": wp.stage.stage_label,
+            "stage_status_label": wp.stage.stage_status_label,
+            "todo_count": wp.todo_summary.total_count,
+            "readiness_status": readiness.get("display_status")
+            or ("已具备" if readiness.get("status") == "READY" else "尚未具备"),
+            "next_action_label": wp.next_action.label,
             "workflow_status": wf.get("status"),
             "current_node": wf.get("current_node"),
             "current_node_label": wf.get("current_node_label"),

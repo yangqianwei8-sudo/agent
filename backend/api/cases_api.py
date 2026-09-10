@@ -9,6 +9,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from backend.agent.dto import AgentResponse
+from backend.application.case_actions import CaseActionService
 from backend.application.material_management import MaterialManagementService
 from backend.application.material_upload import MaterialUploadService
 from backend.application.party_management import PartyManagementService
@@ -54,6 +56,15 @@ class VoidMaterialBody(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class CaseActionBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_type: str = Field(min_length=1, max_length=64)
+    target: str | None = Field(default=None, max_length=64)
+    conversation_id: UUID | None = None
+    actor_id: UUID | None = None
+
+
 @router.get("")
 def api_list_cases(
     session: Session = Depends(get_db_session),  # noqa: B008
@@ -75,6 +86,32 @@ def api_create_case(
         actor_id=owner,
     )
     return {"id": str(case.id), "title": case.title}
+
+
+@router.post("/{case_id}/actions", response_model=AgentResponse)
+def api_case_action(
+    case_id: UUID,
+    body: CaseActionBody,
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> AgentResponse:
+    case = session.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    actor = body.actor_id or case.owner_user_id
+    svc = CaseActionService(session, actor_id=actor)
+    try:
+        return svc.execute(
+            case_id,
+            action_type=body.action_type,
+            target=body.target,
+            conversation_id=body.conversation_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/{case_id}/workspace")

@@ -16,7 +16,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.application.claim_direction import ClaimDirectionService
+from backend.application.pleading_draft_validator import PleadingDraftValidator
 from backend.application.pleading_readiness import PleadingReadinessService
+from backend.application.pleading_structured_input import PleadingStructuredInputBuilder
 from backend.domain.errors import NotFoundError, ValidationError
 from backend.domain.services import DomainService
 from backend.models import (
@@ -32,6 +34,7 @@ from backend.models import (
 )
 from backend.schemas.case_analyst import EvidenceRef
 from backend.schemas.claim_direction_proposal import FactRef
+from backend.schemas.pleading_quality import PleadingDraftValidationError
 from backend.schemas.pleading_writer import (
     ClaimDirectionRef,
     PleadingWriterEngineResult,
@@ -133,20 +136,63 @@ class PleadingWriterService:
             accepted_evidence_refs=evidence_refs,
             confirmed_party_keys=list(confirmed_party_keys),
         )
+        structured = PleadingStructuredInputBuilder(self.session).build(
+            parties=parties,
+            facts=facts,
+            claim=claim,
+            evidence=evidence,
+        )
+        validator = PleadingDraftValidator()
+        repair_count = 0
         try:
-            engine_result = raw_result or self.engine.write(
-                inp,
-                parties=parties,
-                facts=facts,
-                claim=claim,
-                evidence=evidence,
-            )
-            self._validate_engine_result(
-                engine_result,
-                claim=claim,
-                facts=facts,
-                evidence_refs=evidence_refs,
-            )
+            engine_result = raw_result
+            if engine_result is None:
+                engine_result = self.engine.write(
+                    inp,
+                    parties=parties,
+                    facts=facts,
+                    claim=claim,
+                    evidence=evidence,
+                    structured=structured,
+                )
+                self._validate_engine_result(
+                    engine_result,
+                    claim=claim,
+                    facts=facts,
+                    evidence_refs=evidence_refs,
+                )
+                full_text = render_civil_complaint(engine_result)
+                vresult = validator.validate(
+                    engine_result, structured, full_text=full_text
+                )
+                if not vresult.passed:
+                    repair_fn = getattr(self.engine, "repair", None)
+                    if callable(repair_fn) and repair_count < 1:
+                        repair_count = 1
+                        engine_result = repair_fn(
+                            inp,
+                            parties=parties,
+                            facts=facts,
+                            claim=claim,
+                            evidence=evidence,
+                            structured=structured,
+                            errors=vresult.errors,
+                            prior=engine_result,
+                        )
+                        self._validate_engine_result(
+                            engine_result,
+                            claim=claim,
+                            facts=facts,
+                            evidence_refs=evidence_refs,
+                        )
+                        full_text = render_civil_complaint(engine_result)
+                        vresult = validator.validate(
+                            engine_result, structured, full_text=full_text
+                        )
+                    if not vresult.passed:
+                        raise PleadingDraftValidationError(vresult)
+        except PleadingDraftValidationError:
+            raise
         except Exception as exc:  # noqa: BLE001 — engine/LLM/validation failures
             if skill_exec is not None:
                 skill_exec.status = "FAILED"
@@ -162,6 +208,15 @@ class PleadingWriterService:
 
         full_text = render_civil_complaint(engine_result)
         body = build_body_structured(engine_result, full_text=full_text)
+        body["structured_input_summary"] = {
+            "liability_bridge_required": structured.liability_bridge_required,
+            "evidence_material_count": len(structured.evidence_directory),
+        }
+        body["validation"] = {
+            "passed": True,
+            "repair_count": repair_count,
+            "issue_codes": [],
+        }
         citations = self._build_citations(engine_result, facts)
         conf_hash = self._confirmation_hash(
             parties=parties, facts=facts, claim=claim, evidence=evidence
@@ -531,11 +586,12 @@ class PleadingWriterService:
         evidence_refs: list[EvidenceRef],
     ) -> None:
         payload_claims = list(claim.payload.get("claims") or [])
-        if len(result.claims) != len(payload_claims):
+        substantive = [c for c in result.claims if c.claim_type != "PROCEDURAL"]
+        if len(substantive) != len(payload_claims):
             raise ValidationError(
-                "Writer claims count must match CONFIRMED ClaimDirection exactly"
+                "Writer substantive claims count must match CONFIRMED ClaimDirection"
             )
-        for out, src in zip(result.claims, payload_claims, strict=True):
+        for out, src in zip(substantive, payload_claims, strict=True):
             if out.claim_type != str(src.get("claim_type")):
                 raise ValidationError("Writer must not change claim_type")
             src_amount = src.get("amount")
