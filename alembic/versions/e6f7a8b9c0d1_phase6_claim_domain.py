@@ -1,16 +1,15 @@
 """phase6_claim_domain — versioned Claim + link tables, migrate from ClaimDirection."""
 
-from typing import Sequence, Union
-import uuid
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects import postgresql
+from backend.migration.claim_identity import insert_claims_from_claim_directions
 
 revision: str = "e6f7a8b9c0d1"
-down_revision: Union[str, Sequence[str], None] = "d5e6f7a8b9c0"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "d5e6f7a8b9c0"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -180,72 +179,9 @@ def upgrade() -> None:
         )
     ).fetchall()
 
-    ns = uuid.UUID("00000000-0000-4000-8000-000000000099")
-    key_map: dict[tuple, uuid.UUID] = {}
-    prev_row_id: dict[tuple, uuid.UUID] = {}
-
-    for row in rows:
-        payload = row.payload or {}
-        items = payload.get("claims") or []
-        if not items:
-            continue
-        for idx, item in enumerate(items):
-            map_key = (str(row.claim_direction_key), idx)
-            if map_key not in key_map:
-                key_map[map_key] = uuid.uuid5(ns, f"{map_key[0]}:{map_key[1]}")
-            claim_key = key_map[map_key]
-            claim_id = uuid.uuid4()
-            desc = item.get("description") or item.get("title") or "诉讼请求"
-            title = desc[:500] if len(desc) > 500 else desc
-            amount = item.get("amount")
-            amount_suggested = amount is not None and row.status == "CANDIDATE"
-            supersedes_id = prev_row_id.get((str(claim_key), row.version - 1))
-
-            conn.execute(
-                sa.text(
-                    """
-                    INSERT INTO claims (
-                        id, claim_key, case_id, version, is_current,
-                        claim_type, title, statement, amount, currency,
-                        amount_is_suggested, status, source_type,
-                        supersedes_id, confirm_decision_id,
-                        legacy_claim_direction_key, stale, stale_reason, stale_at,
-                        created_at, updated_at
-                    ) VALUES (
-                        :id, :claim_key, :case_id, :version, :is_current,
-                        :claim_type, :title, :statement, :amount, :currency,
-                        :amount_is_suggested, :status, :source_type,
-                        :supersedes_id, :confirm_decision_id,
-                        :legacy_key, :stale, :stale_reason, :stale_at,
-                        :created_at, :updated_at
-                    )
-                    """
-                ),
-                {
-                    "id": claim_id,
-                    "claim_key": claim_key,
-                    "case_id": row.case_id,
-                    "version": row.version,
-                    "is_current": row.is_current,
-                    "claim_type": item.get("claim_type") or "OTHER",
-                    "title": title,
-                    "statement": desc,
-                    "amount": amount,
-                    "currency": item.get("currency"),
-                    "amount_is_suggested": amount_suggested,
-                    "status": row.status,
-                    "source_type": "LAWYER_CREATED",
-                    "supersedes_id": supersedes_id,
-                    "confirm_decision_id": row.confirm_decision_id,
-                    "legacy_key": row.claim_direction_key,
-                    "stale": row.stale,
-                    "stale_reason": row.stale_reason,
-                    "stale_at": row.stale_at,
-                    "created_at": row.created_at,
-                    "updated_at": row.updated_at,
-                },
-            )
-            prev_row_id[(str(claim_key), row.version)] = claim_id
+    insert_claims_from_claim_directions(
+        conn, list(rows), include_provenance_columns=False
+    )
 
 
 def downgrade() -> None:

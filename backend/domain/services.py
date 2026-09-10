@@ -1285,6 +1285,9 @@ class DomainService:
             confirm_decision_id=decision.id,
             change_reason=change_reason,
             legacy_claim_direction_key=old.legacy_claim_direction_key,
+            legacy_claim_direction_version=old.legacy_claim_direction_version,
+            legacy_claim_index=old.legacy_claim_index,
+            legacy_source_ref=old.legacy_source_ref,
             analyst_run_id=old.analyst_run_id,
         )
         self.repo.add(new_claim)

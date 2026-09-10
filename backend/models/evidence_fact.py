@@ -427,6 +427,9 @@ class Claim(Base):
         ForeignKey("human_decisions.id", use_alter=True, name="fk_claims_decision"),
     )
     legacy_claim_direction_key: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    legacy_claim_direction_version: Mapped[int | None] = mapped_column(Integer)
+    legacy_claim_index: Mapped[int | None] = mapped_column(Integer)
+    legacy_source_ref: Mapped[str | None] = mapped_column(String(512))
     analyst_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     stale_reason: Mapped[str | None] = mapped_column(String(64))
