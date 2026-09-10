@@ -14,6 +14,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.application.claim_view import ClaimViewService
 from backend.application.issue_matrix import IssueMatrixService
 from backend.application.material_usability import MaterialUsabilityPolicy
 from backend.domain.enums import ClaimType, PartyRole
@@ -355,6 +356,7 @@ class PleadingReadinessService:
                     missing.append("ClaimDirection 金额与事实一致")
 
         self._check_issue_readiness(case_id, warnings, missing, next_actions)
+        self._check_claim_readiness(case_id, warnings, missing, next_actions)
 
         status = (
             ReadinessStatus.READY if not blockers else ReadinessStatus.NOT_READY
@@ -421,6 +423,54 @@ class PleadingReadinessService:
             for a in result.suggested_next_actions[:5]:
                 lines.append(f"• {a}")
         return "\n".join(lines)
+
+    def _check_claim_readiness(
+        self,
+        case_id: UUID,
+        warnings: list[ReadinessIssue],
+        missing: list[str],
+        next_actions: list[str],
+    ) -> None:
+        view = ClaimViewService(self.session).build(case_id)
+        if view.candidate_count and not view.confirmed_count:
+            warnings.append(
+                ReadinessIssue(
+                    code=ReadinessIssueCode.CLAIM_ONLY_CANDIDATE.value,
+                    severity="WARNING",
+                    message="存在 AI 候选诉讼请求，但尚无律师确认的诉请。",
+                    suggested_action="请审阅并确认诉讼请求后再推进起诉准备。",
+                )
+            )
+        elif not view.confirmed_count and not view.candidate_count:
+            warnings.append(
+                ReadinessIssue(
+                    code=ReadinessIssueCode.NO_CONFIRMED_CLAIM.value,
+                    severity="WARNING",
+                    message="尚未建立律师确认的诉讼请求。",
+                    suggested_action="确认诉讼请求及依据后再评估起诉准备度。",
+                )
+            )
+        for item in view.items:
+            if item.status != "CONFIRMED":
+                continue
+            if item.stale_state.get("stale"):
+                warnings.append(
+                    ReadinessIssue(
+                        code=ReadinessIssueCode.CLAIM_STALE.value,
+                        severity="WARNING",
+                        message=f"已确认诉请「{item.title[:40]}」已标记 stale。",
+                        suggested_action="请复核并修订 stale 诉请。",
+                    )
+                )
+            if any("lacks BASIS" in w for w in item.warnings):
+                warnings.append(
+                    ReadinessIssue(
+                        code=ReadinessIssueCode.CLAIM_WITHOUT_BASIS.value,
+                        severity="WARNING",
+                        message=f"已确认诉请「{item.title[:40]}」缺少 BASIS 争点或事实关联。",
+                        suggested_action="关联已确认争点或事实作为诉请基础。",
+                    )
+                )
 
     def _check_issue_readiness(
         self,

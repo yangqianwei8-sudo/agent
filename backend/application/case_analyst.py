@@ -74,6 +74,7 @@ class AnalystApplyResult:
     conflicts: list[dict[str, Any]] = field(default_factory=list)
     missing_evidence: list[dict[str, Any]] = field(default_factory=list)
     issue_ids: list[UUID] = field(default_factory=list)
+    claim_ids: list[UUID] = field(default_factory=list)
     legal_theory_ids: list[UUID] = field(default_factory=list)
     timeline_ids: list[UUID] = field(default_factory=list)
     fact_keys: list[UUID] = field(default_factory=list)
@@ -190,6 +191,27 @@ class CaseAnalystService:
                 case_id=case_id,
                 issue=row,
                 proposal=issue,
+                actor_id=actor_id,
+                result=result,
+            )
+
+        for claim_prop in engine_result.claims:
+            row = domain.propose_claim(
+                case_id=case_id,
+                claim_type=claim_prop.claim_type,
+                title=claim_prop.title,
+                statement=claim_prop.statement,
+                amount=claim_prop.amount,
+                currency=claim_prop.currency,
+                analyst_run_id=skill_exec.id if skill_exec else None,
+                actor_id=actor_id,
+            )
+            result.claim_ids.append(row.id)
+            self._apply_claim_link_proposals(
+                domain=domain,
+                case_id=case_id,
+                claim=row,
+                proposal=claim_prop,
                 actor_id=actor_id,
                 result=result,
             )
@@ -329,6 +351,94 @@ class CaseAnalystService:
                 )
             except ValidationError:
                 pass
+
+    def _apply_claim_link_proposals(
+        self,
+        *,
+        domain: DomainService,
+        case_id: UUID,
+        claim,
+        proposal,
+        actor_id: UUID,
+        result: AnalystApplyResult,
+    ) -> None:
+        for ip in proposal.issue_link_proposals:
+            issue = domain.repo.get_issue_version(ip.issue_key, ip.issue_version)
+            if issue is None or issue.case_id != case_id:
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "claim_issue_link",
+                        "error": "issue version not found",
+                    }
+                )
+                continue
+            if issue.status != "CONFIRMED":
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "claim_issue_link",
+                        "error": "formal links require CONFIRMED issue",
+                    }
+                )
+                continue
+            try:
+                domain.link_issue_to_claim(
+                    case_id=case_id,
+                    claim_key=claim.claim_key,
+                    claim_version=claim.version,
+                    issue_key=ip.issue_key,
+                    issue_version=ip.issue_version,
+                    role=ip.role,
+                    actor_id=actor_id,
+                )
+            except ValidationError as exc:
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "claim_issue_link",
+                        "error": exc.message,
+                    }
+                )
+
+        for fp in proposal.fact_link_proposals:
+            fact = domain.repo.get_fact_version(fp.fact_key, fp.fact_version)
+            if fact is None or fact.case_id != case_id:
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "claim_fact_link",
+                        "error": "fact version not found",
+                    }
+                )
+                continue
+            if fact.status != "CONFIRMED":
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "claim_fact_link",
+                        "error": "formal links require CONFIRMED fact",
+                    }
+                )
+                continue
+            try:
+                domain.link_fact_to_claim(
+                    case_id=case_id,
+                    claim_key=claim.claim_key,
+                    claim_version=claim.version,
+                    fact_key=fp.fact_key,
+                    fact_version=fp.fact_version,
+                    role=fp.role,
+                    actor_id=actor_id,
+                )
+            except ValidationError as exc:
+                result.rejected_proposals.append(
+                    {
+                        "proposal_id": str(proposal.proposal_id),
+                        "channel": "claim_fact_link",
+                        "error": exc.message,
+                    }
+                )
 
     @staticmethod
     def _sanitize_theory_fact_refs(domain: DomainService, case_id: UUID, refs) -> list[str]:

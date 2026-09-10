@@ -12,7 +12,10 @@ from backend.models import (
     Case,
     CaseMaterial,
     CaseParty,
+    Claim,
     ClaimDirection,
+    ClaimFactLink,
+    ClaimIssueLink,
     DocumentDraft,
     EvidenceItem,
     EvidenceItemSpan,
@@ -128,6 +131,42 @@ class Repository:
                 ClaimDirection.is_current.is_(True),
             )
         ).first()
+
+    def get_current_relief_claim(self, claim_key: UUID) -> Claim | None:
+        return self.session.scalars(
+            select(Claim).where(Claim.claim_key == claim_key, Claim.is_current.is_(True))
+        ).first()
+
+    def get_relief_claim_version(self, claim_key: UUID, version: int) -> Claim | None:
+        return self.session.scalars(
+            select(Claim).where(Claim.claim_key == claim_key, Claim.version == version)
+        ).first()
+
+    def list_claim_issue_links(
+        self, claim_key: UUID, claim_version: int
+    ) -> list[ClaimIssueLink]:
+        return list(
+            self.session.scalars(
+                select(ClaimIssueLink).where(
+                    ClaimIssueLink.claim_key == claim_key,
+                    ClaimIssueLink.claim_version == claim_version,
+                    ClaimIssueLink.status == "ACTIVE",
+                )
+            )
+        )
+
+    def list_claim_fact_links(
+        self, claim_key: UUID, claim_version: int
+    ) -> list[ClaimFactLink]:
+        return list(
+            self.session.scalars(
+                select(ClaimFactLink).where(
+                    ClaimFactLink.claim_key == claim_key,
+                    ClaimFactLink.claim_version == claim_version,
+                    ClaimFactLink.status == "ACTIVE",
+                )
+            )
+        )
 
     def get_draft(self, draft_id: UUID) -> DocumentDraft | None:
         return self.session.get(DocumentDraft, draft_id)

@@ -13,6 +13,11 @@ from sqlalchemy.orm import Session
 
 from backend.domain.enums import (
     CaseStatus,
+    ClaimFactLinkRole,
+    ClaimIssueLinkRole,
+    ClaimLinkStatus,
+    ClaimSourceType,
+    ClaimStatus,
     DecisionResult,
     DraftStatus,
     EvidenceAcceptance,
@@ -33,7 +38,10 @@ from backend.models import (
     Case,
     CaseMaterial,
     CaseParty,
+    Claim,
     ClaimDirection,
+    ClaimFactLink,
+    ClaimIssueLink,
     DocumentDraft,
     DraftCitation,
     EvidenceItem,
@@ -1061,6 +1069,343 @@ class DomainService:
         )
         return claim
 
+    # ----- Claim (versioned relief item) -----
+
+    def propose_claim(
+        self,
+        *,
+        case_id: UUID,
+        claim_type: str,
+        title: str,
+        statement: str,
+        amount: float | None = None,
+        currency: str | None = None,
+        analyst_run_id: UUID | None = None,
+        actor_id: UUID | None = None,
+    ) -> Claim:
+        """AI proposal — CANDIDATE only; amount marked suggested if present."""
+        self._require_case(case_id)
+        amount_suggested = amount is not None
+        claim = Claim(
+            claim_key=uuid.uuid4(),
+            case_id=case_id,
+            claim_type=claim_type,
+            title=title,
+            statement=statement,
+            amount=amount,
+            currency=currency,
+            amount_is_suggested=amount_suggested,
+            source_type=ClaimSourceType.AI_PROPOSED.value,
+            status=ClaimStatus.CANDIDATE.value,
+            version=1,
+            is_current=True,
+            analyst_run_id=analyst_run_id,
+        )
+        self.repo.add(claim)
+        self.repo.flush()
+        self._audit(
+            actor_id or uuid.UUID(int=0),
+            "propose_claim",
+            "claims",
+            claim.id,
+            case_id=case_id,
+            after={
+                "claim_key": str(claim.claim_key),
+                "status": claim.status,
+                "amount_is_suggested": amount_suggested,
+            },
+        )
+        return claim
+
+    def create_lawyer_claim(
+        self,
+        *,
+        case_id: UUID,
+        claim_type: str,
+        title: str,
+        statement: str,
+        actor_id: UUID,
+        amount: float | None = None,
+        currency: str | None = None,
+        decision: HumanDecision | None = None,
+    ) -> Claim:
+        self._require_case(case_id)
+        claim_key = uuid.uuid4()
+        decision = decision or self._new_decision(
+            case_id=case_id,
+            actor_id=actor_id,
+            decision_type="CREATE_CLAIM",
+            target_type="Claim",
+            target_id=claim_key,
+            result=DecisionResult.CONFIRMED.value,
+            payload={"title": title, "claim_type": claim_type},
+        )
+        self.repo.add_decision(decision)
+        self.repo.flush()
+        claim = Claim(
+            claim_key=claim_key,
+            case_id=case_id,
+            claim_type=claim_type,
+            title=title,
+            statement=statement,
+            amount=amount,
+            currency=currency,
+            amount_is_suggested=False,
+            source_type=ClaimSourceType.LAWYER_CREATED.value,
+            status=ClaimStatus.CONFIRMED.value,
+            version=1,
+            is_current=True,
+            confirm_decision_id=decision.id,
+        )
+        self.repo.add(claim)
+        self.repo.flush()
+        self._audit(
+            actor_id,
+            "create_lawyer_claim",
+            "claims",
+            claim.id,
+            case_id=case_id,
+            after={"claim_key": str(claim.claim_key), "decision_id": str(decision.id)},
+        )
+        return claim
+
+    def confirm_claim(
+        self,
+        claim_key: UUID,
+        *,
+        actor_id: UUID,
+        decision: HumanDecision | None = None,
+    ) -> Claim:
+        claim = self._require_current_relief_claim(claim_key)
+        if claim.status != ClaimStatus.CANDIDATE.value:
+            raise ConflictError("only CANDIDATE claims can be confirmed")
+        if claim.stale:
+            raise ConflictError("cannot confirm stale claim")
+        decision = decision or self._new_decision(
+            case_id=claim.case_id,
+            actor_id=actor_id,
+            decision_type="CONFIRM_CLAIM",
+            target_type="Claim",
+            target_id=claim.claim_key,
+            result=DecisionResult.CONFIRMED.value,
+            payload={"claim_key": str(claim.claim_key), "version": claim.version},
+        )
+        self.repo.add_decision(decision)
+        self.repo.flush()
+        claim.status = ClaimStatus.CONFIRMED.value
+        claim.confirm_decision_id = decision.id
+        claim.amount_is_suggested = False
+        claim.updated_at = _now()
+        self._audit(
+            actor_id,
+            "confirm_claim",
+            "claims",
+            claim.id,
+            case_id=claim.case_id,
+            after={"status": claim.status, "decision_id": str(decision.id)},
+        )
+        return claim
+
+    def reject_claim(
+        self,
+        claim_key: UUID,
+        *,
+        actor_id: UUID,
+        decision: HumanDecision | None = None,
+    ) -> Claim:
+        claim = self._require_current_relief_claim(claim_key)
+        if claim.status != ClaimStatus.CANDIDATE.value:
+            raise ConflictError("only CANDIDATE claims can be rejected")
+        decision = decision or self._new_decision(
+            case_id=claim.case_id,
+            actor_id=actor_id,
+            decision_type="REJECT_CLAIM",
+            target_type="Claim",
+            target_id=claim.claim_key,
+            result=DecisionResult.REJECTED.value,
+            payload={"claim_key": str(claim.claim_key), "version": claim.version},
+        )
+        self.repo.add_decision(decision)
+        self.repo.flush()
+        claim.status = ClaimStatus.REJECTED.value
+        claim.updated_at = _now()
+        self._audit(
+            actor_id,
+            "reject_claim",
+            "claims",
+            claim.id,
+            case_id=claim.case_id,
+            after={"status": claim.status, "decision_id": str(decision.id)},
+        )
+        return claim
+
+    def amend_claim(
+        self,
+        claim_key: UUID,
+        *,
+        title: str | None = None,
+        statement: str | None = None,
+        amount: float | None = None,
+        currency: str | None = None,
+        actor_id: UUID,
+        change_reason: str | None = None,
+        decision: HumanDecision | None = None,
+    ) -> Claim:
+        old = self._require_current_relief_claim(claim_key)
+        if old.status != ClaimStatus.CONFIRMED.value:
+            raise ConflictError("only CONFIRMED claims can be amended")
+        decision = decision or self._new_decision(
+            case_id=old.case_id,
+            actor_id=actor_id,
+            decision_type="AMEND_CLAIM",
+            target_type="Claim",
+            target_id=old.claim_key,
+            result=DecisionResult.AMENDED.value,
+            payload={"from_version": old.version},
+        )
+        self.repo.add_decision(decision)
+        self.repo.flush()
+        old.status = ClaimStatus.SUPERSEDED.value
+        old.is_current = False
+        old.updated_at = _now()
+        new_claim = Claim(
+            claim_key=old.claim_key,
+            case_id=old.case_id,
+            claim_type=old.claim_type,
+            title=title or old.title,
+            statement=statement or old.statement,
+            amount=amount if amount is not None else old.amount,
+            currency=currency if currency is not None else old.currency,
+            amount_is_suggested=False,
+            source_type=ClaimSourceType.LAWYER_REFINED.value,
+            status=ClaimStatus.CONFIRMED.value,
+            version=old.version + 1,
+            is_current=True,
+            supersedes_id=old.id,
+            confirm_decision_id=decision.id,
+            change_reason=change_reason,
+            legacy_claim_direction_key=old.legacy_claim_direction_key,
+            analyst_run_id=old.analyst_run_id,
+        )
+        self.repo.add(new_claim)
+        self.repo.flush()
+        self._copy_claim_links(old, new_claim)
+        self._audit(
+            actor_id,
+            "amend_claim",
+            "claims",
+            new_claim.id,
+            case_id=old.case_id,
+            after={"version": new_claim.version, "decision_id": str(decision.id)},
+        )
+        return new_claim
+
+    def link_issue_to_claim(
+        self,
+        *,
+        case_id: UUID,
+        claim_key: UUID,
+        claim_version: int,
+        issue_key: UUID,
+        issue_version: int,
+        role: str,
+        actor_id: UUID,
+    ) -> ClaimIssueLink:
+        self._require_case(case_id)
+        claim = self.repo.get_relief_claim_version(claim_key, claim_version)
+        if claim is None:
+            raise NotFoundError("claim version not found")
+        if claim.case_id != case_id:
+            raise ValidationError("claim case_id mismatch")
+        issue = self.repo.get_issue_version(issue_key, issue_version)
+        if issue is None:
+            raise NotFoundError("issue version not found")
+        if issue.case_id != case_id:
+            raise ValidationError("cross-case issue link rejected")
+        if issue.status != IssueStatus.CONFIRMED.value:
+            raise ValidationError("formal claim links require CONFIRMED issue")
+        if role not in {r.value for r in ClaimIssueLinkRole}:
+            raise ValidationError(f"invalid claim-issue link role: {role}")
+        link = ClaimIssueLink(
+            case_id=case_id,
+            claim_key=claim_key,
+            claim_version=claim_version,
+            issue_key=issue_key,
+            issue_version=issue_version,
+            role=role,
+            status=ClaimLinkStatus.ACTIVE.value,
+        )
+        self.repo.add(link)
+        self.repo.flush()
+        self._audit(
+            actor_id,
+            "link_issue_to_claim",
+            "claim_issue_links",
+            link.id,
+            case_id=case_id,
+            after={
+                "claim_key": str(claim_key),
+                "claim_version": claim_version,
+                "issue_key": str(issue_key),
+                "issue_version": issue_version,
+                "role": role,
+            },
+        )
+        return link
+
+    def link_fact_to_claim(
+        self,
+        *,
+        case_id: UUID,
+        claim_key: UUID,
+        claim_version: int,
+        fact_key: UUID,
+        fact_version: int,
+        role: str,
+        actor_id: UUID,
+    ) -> ClaimFactLink:
+        self._require_case(case_id)
+        claim = self.repo.get_relief_claim_version(claim_key, claim_version)
+        if claim is None:
+            raise NotFoundError("claim version not found")
+        if claim.case_id != case_id:
+            raise ValidationError("claim case_id mismatch")
+        fact = self.repo.get_fact_version(fact_key, fact_version)
+        if fact is None:
+            raise NotFoundError("fact version not found")
+        if fact.case_id != case_id:
+            raise ValidationError("cross-case fact link rejected")
+        if fact.status != FactStatus.CONFIRMED.value:
+            raise ValidationError("formal claim links require CONFIRMED fact")
+        if role not in {r.value for r in ClaimFactLinkRole}:
+            raise ValidationError(f"invalid claim-fact link role: {role}")
+        link = ClaimFactLink(
+            case_id=case_id,
+            claim_key=claim_key,
+            claim_version=claim_version,
+            fact_key=fact_key,
+            fact_version=fact_version,
+            role=role,
+            status=ClaimLinkStatus.ACTIVE.value,
+        )
+        self.repo.add(link)
+        self.repo.flush()
+        self._audit(
+            actor_id,
+            "link_fact_to_claim",
+            "claim_fact_links",
+            link.id,
+            case_id=case_id,
+            after={
+                "claim_key": str(claim_key),
+                "claim_version": claim_version,
+                "fact_key": str(fact_key),
+                "fact_version": fact_version,
+                "role": role,
+            },
+        )
+        return link
+
     # ----- Issue (versioned lawyer analysis object) -----
 
     def propose_issue(
@@ -1624,6 +1969,39 @@ class DomainService:
         if issue is None:
             raise NotFoundError("issue not found")
         return issue
+
+    def _require_current_relief_claim(self, claim_key: UUID) -> Claim:
+        claim = self.repo.get_current_relief_claim(claim_key)
+        if claim is None:
+            raise NotFoundError("claim not found")
+        return claim
+
+    def _copy_claim_links(self, old: Claim, new: Claim) -> None:
+        for link in self.repo.list_claim_issue_links(old.claim_key, old.version):
+            self.repo.add(
+                ClaimIssueLink(
+                    case_id=link.case_id,
+                    claim_key=new.claim_key,
+                    claim_version=new.version,
+                    issue_key=link.issue_key,
+                    issue_version=link.issue_version,
+                    role=link.role,
+                    status=ClaimLinkStatus.ACTIVE.value,
+                )
+            )
+        for link in self.repo.list_claim_fact_links(old.claim_key, old.version):
+            self.repo.add(
+                ClaimFactLink(
+                    case_id=link.case_id,
+                    claim_key=new.claim_key,
+                    claim_version=new.version,
+                    fact_key=link.fact_key,
+                    fact_version=link.fact_version,
+                    role=link.role,
+                    status=ClaimLinkStatus.ACTIVE.value,
+                )
+            )
+        self.repo.flush()
 
     def _copy_issue_links(self, old: Issue, new: Issue) -> None:
         for link in self.repo.list_issue_fact_links(old.issue_key, old.version):

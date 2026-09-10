@@ -157,6 +157,36 @@ class AnalystInput(BaseModel):
         return self
 
 
+class ClaimLinkIssueProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    issue_key: UUID
+    issue_version: int = Field(ge=1)
+    role: str = Field(pattern=r"^(BASIS|LIMITATION|CONTEXT)$")
+
+
+class ClaimLinkFactProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fact_key: UUID
+    fact_version: int = Field(ge=1)
+    role: str = Field(pattern=r"^(BASIS|AMOUNT_BASIS|LIMITATION|CONTEXT)$")
+
+
+class ClaimProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_id: UUID
+    claim_type: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=500)
+    statement: str = Field(min_length=1, max_length=5000)
+    amount: float | None = None
+    currency: str | None = None
+    issue_link_proposals: list[ClaimLinkIssueProposal] = Field(default_factory=list)
+    fact_link_proposals: list[ClaimLinkFactProposal] = Field(default_factory=list)
+    analyst_reason: str = Field(default="", max_length=2000)
+
+
 class AnalystEngineResult(BaseModel):
     """Structured analyst channels — only facts[] may enter propose_fact."""
 
@@ -164,6 +194,7 @@ class AnalystEngineResult(BaseModel):
 
     facts: list[FactProposal] = Field(default_factory=list)
     issues: list[IssueProposal] = Field(default_factory=list)
+    claims: list[ClaimProposal] = Field(default_factory=list)
     legal_theories: list[LegalTheoryProposal] = Field(default_factory=list)
     conflicts: list[ConflictItem] = Field(default_factory=list)
     missing_evidence: list[MissingEvidenceItem] = Field(default_factory=list)

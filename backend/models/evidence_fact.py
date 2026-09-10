@@ -10,6 +10,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -394,6 +395,161 @@ class LegalTheory(Base):
             name="ck_legal_theories_layer",
         ),
         Index("ix_legal_theories_case", "case_id"),
+    )
+
+
+class Claim(Base):
+    """Versioned individual relief item (distinct from ClaimDirection aggregate)."""
+
+    __tablename__ = "claims"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    claim_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    claim_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8))
+    amount_is_suggested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="CANDIDATE")
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="AI_PROPOSED")
+    change_reason: Mapped[str | None] = mapped_column(Text)
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("claims.id")
+    )
+    confirm_decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("human_decisions.id", use_alter=True, name="fk_claims_decision"),
+    )
+    legacy_claim_direction_key: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    analyst_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    stale_reason: Mapped[str | None] = mapped_column(String(64))
+    stale_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("claim_key", "version", name="uq_claims_key_version"),
+        CheckConstraint(
+            "status IN ('CANDIDATE','CONFIRMED','REJECTED','SUPERSEDED')",
+            name="ck_claims_status",
+        ),
+        CheckConstraint(
+            "source_type IN ('AI_PROPOSED','LAWYER_CREATED','LAWYER_REFINED',"
+            "'OPPONENT_RAISED','COURT_ADJUSTED')",
+            name="ck_claims_source_type",
+        ),
+        Index("ix_claims_case_current", "case_id", "is_current"),
+        Index(
+            "uq_claims_current",
+            "claim_key",
+            unique=True,
+            postgresql_where=text("is_current = true"),
+        ),
+    )
+
+
+class ClaimIssueLink(Base):
+    __tablename__ = "claim_issue_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id"), nullable=False
+    )
+    claim_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    claim_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    issue_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    issue_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="BASIS")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["claim_key", "claim_version"],
+            ["claims.claim_key", "claims.version"],
+            name="fk_claim_issue_links_claim",
+        ),
+        ForeignKeyConstraint(
+            ["issue_key", "issue_version"],
+            ["issues.issue_key", "issues.version"],
+            name="fk_claim_issue_links_issue",
+        ),
+        UniqueConstraint(
+            "claim_key",
+            "claim_version",
+            "issue_key",
+            "issue_version",
+            "role",
+            name="uq_claim_issue_links",
+        ),
+        CheckConstraint(
+            "role IN ('BASIS','LIMITATION','CONTEXT')",
+            name="ck_claim_issue_link_role",
+        ),
+        CheckConstraint(
+            "status IN ('ACTIVE','VOID')",
+            name="ck_claim_issue_link_status",
+        ),
+        Index("ix_claim_issue_links_case", "case_id"),
+    )
+
+
+class ClaimFactLink(Base):
+    __tablename__ = "claim_fact_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id"), nullable=False
+    )
+    claim_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    claim_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    fact_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    fact_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="BASIS")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["claim_key", "claim_version"],
+            ["claims.claim_key", "claims.version"],
+            name="fk_claim_fact_links_claim",
+        ),
+        ForeignKeyConstraint(
+            ["fact_key", "fact_version"],
+            ["facts.fact_key", "facts.version"],
+            name="fk_claim_fact_links_fact",
+        ),
+        UniqueConstraint(
+            "claim_key",
+            "claim_version",
+            "fact_key",
+            "fact_version",
+            "role",
+            name="uq_claim_fact_links",
+        ),
+        CheckConstraint(
+            "role IN ('BASIS','AMOUNT_BASIS','LIMITATION','CONTEXT')",
+            name="ck_claim_fact_link_role",
+        ),
+        CheckConstraint(
+            "status IN ('ACTIVE','VOID')",
+            name="ck_claim_fact_link_status",
+        ),
+        Index("ix_claim_fact_links_case", "case_id"),
     )
 
 

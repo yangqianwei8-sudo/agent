@@ -13,6 +13,7 @@ from backend.application.case_work_product import (
     enrich_evidence_rows,
     enrich_fact_rows,
 )
+from backend.application.claim_view import ClaimViewService
 from backend.application.issue_matrix import IssueMatrixService
 from backend.application.material_usability import (
     MaterialUsabilityPolicy,
@@ -84,6 +85,7 @@ class WorkspaceQueryService:
         issue_matrix = IssueMatrixService(self.session).build(case_id).model_dump(
             mode="json"
         )
+        claims_view = ClaimViewService(self.session).build(case_id).model_dump(mode="json")
         ctx = {
             "case": self._case_detail(case),
             "workflow": workflow,
@@ -97,6 +99,7 @@ class WorkspaceQueryService:
             "draft": draft,
             "pleading_readiness": readiness,
             "issue_matrix": issue_matrix,
+            "claims": claims_view,
             "conversation": self._conversation(case_id),
         }
         work_product = CaseWorkProductBuilder(self.session).build(ctx)

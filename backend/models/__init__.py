@@ -9,7 +9,10 @@ from backend.models.case_material import (
     SourceSpan,
 )
 from backend.models.evidence_fact import (
+    Claim,
     ClaimDirection,
+    ClaimFactLink,
+    ClaimIssueLink,
     EvidenceItem,
     EvidenceItemSpan,
     Fact,
@@ -53,7 +56,10 @@ __all__ = [
     "IssueFactLink",
     "IssueEvidenceLink",
     "LegalTheory",
+    "Claim",
     "ClaimDirection",
+    "ClaimIssueLink",
+    "ClaimFactLink",
     "WorkflowTemplate",
     "WorkflowNode",
     "WorkflowInstance",
