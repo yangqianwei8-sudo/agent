@@ -160,6 +160,7 @@ class DraftCitation(Base):
     fact_version: Mapped[int | None] = mapped_column(Integer)
     evidence_item_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     evidence_item_version: Mapped[int | None] = mapped_column(Integer)
+    source_span_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     requires_lawyer_confirm: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

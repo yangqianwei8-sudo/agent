@@ -16,6 +16,9 @@ from backend.application.issue_matrix import IssueMatrixService
 from backend.application.material_management import MaterialManagementService
 from backend.application.material_upload import MaterialUploadService
 from backend.application.party_management import PartyManagementService
+from backend.application.pleading_input_production import (
+    PleadingStructuredInputProductionBuilder,
+)
 from backend.application.workspace import WorkspaceQueryService
 from backend.domain.errors import ConflictError, DomainError, NotFoundError, ValidationError
 from backend.domain.services import DomainService
@@ -140,6 +143,23 @@ def api_issue_matrix(
     try:
         view = IssueMatrixService(session).build(case_id)
         return view.model_dump(mode="json")
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+
+
+@router.get("/{case_id}/pleading-input")
+def api_pleading_input(
+    case_id: UUID,
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> dict[str, Any]:
+    case = session.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    try:
+        inp = PleadingStructuredInputProductionBuilder(session).build_preview(case_id)
+        return inp.model_dump(mode="json")
+    except ValidationError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
 

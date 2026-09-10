@@ -1293,6 +1293,12 @@ class DomainService:
         self.repo.add(new_claim)
         self.repo.flush()
         self._copy_claim_links(old, new_claim)
+        invalidate_dependencies(
+            self.session,
+            StaleEvent.CLAIM_CHANGED,
+            case_id=old.case_id,
+            payload={"claim_key": str(old.claim_key), "from_version": old.version},
+        )
         self._audit(
             actor_id,
             "amend_claim",
@@ -1624,6 +1630,12 @@ class DomainService:
         self.repo.add(new_issue)
         self.repo.flush()
         self._copy_issue_links(old, new_issue)
+        invalidate_dependencies(
+            self.session,
+            StaleEvent.ISSUE_CHANGED,
+            case_id=old.case_id,
+            payload={"issue_key": str(old.issue_key), "from_version": old.version},
+        )
         self._audit(
             actor_id,
             "amend_issue",
@@ -1860,6 +1872,9 @@ class DomainService:
                     if cite.get("evidence_item_id")
                     else None,
                     evidence_item_version=cite.get("evidence_item_version"),
+                    source_span_id=UUID(str(cite["source_span_id"]))
+                    if cite.get("source_span_id")
+                    else None,
                     requires_lawyer_confirm=bool(cite.get("requires_lawyer_confirm", False)),
                 )
             )

@@ -55,6 +55,8 @@ def invalidate_dependencies(
         affected.extend(_fact_amended(session, case_id, payload))
     elif event == StaleEvent.CLAIM_DIRECTION_CHANGED:
         affected.extend(_claim_changed(session, case_id, payload))
+    elif event in {StaleEvent.CLAIM_CHANGED, StaleEvent.ISSUE_CHANGED}:
+        affected.extend(_formal_input_changed(session, case_id, payload, event))
     elif event == StaleEvent.EVIDENCE_EXCLUDED:
         affected.extend(_evidence_excluded(session, case_id, payload))
     elif event == StaleEvent.EXTRACTED_CONTENT_REBUILT:
@@ -196,6 +198,34 @@ def _fact_amended(session: Session, case_id: UUID, payload: dict[str, Any]) -> l
             affected.append(f"claim_direction:{claim.id}")
 
     _stale_drafts_citing_fact(session, case_id, old_fact_key, StaleReason.FACT_AMENDED, affected)
+    return affected
+
+
+def _formal_input_changed(
+    session: Session,
+    case_id: UUID,
+    payload: dict[str, Any],
+    event: StaleEvent,
+) -> list[str]:
+    """Mark active drafts stale when confirmed Claim/Issue versions change."""
+    _ = payload
+    reason = (
+        StaleReason.CLAIM_CHANGED
+        if event == StaleEvent.CLAIM_CHANGED
+        else StaleReason.ISSUE_CHANGED
+    )
+    affected: list[str] = []
+    drafts = session.scalars(
+        select(DocumentDraft).where(
+            DocumentDraft.case_id == case_id,
+            DocumentDraft.status.in_(["DRAFT", "IN_REVIEW", "APPROVED_BY_LAWYER"]),
+        )
+    ).all()
+    for draft in drafts:
+        draft.status = "STALE"
+        draft.stale_reason = reason.value
+        draft.updated_at = _now()
+        affected.append(f"draft:{draft.id}")
     return affected
 
 

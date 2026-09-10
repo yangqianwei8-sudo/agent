@@ -205,6 +205,8 @@ class StaleReason(StrEnum):
     FACT_REJECTED = "FACT_REJECTED"
     FACT_AMENDED = "FACT_AMENDED"
     CLAIM_DIRECTION_CHANGED = "CLAIM_DIRECTION_CHANGED"
+    CLAIM_CHANGED = "CLAIM_CHANGED"
+    ISSUE_CHANGED = "ISSUE_CHANGED"
     EVIDENCE_EXCLUDED = "EVIDENCE_EXCLUDED"
     EXTRACT_REBUILT = "EXTRACT_REBUILT"
 
@@ -214,5 +216,7 @@ class StaleEvent(StrEnum):
     FACT_REJECTED = "FactRejected"
     FACT_AMENDED = "FactAmended"
     CLAIM_DIRECTION_CHANGED = "ClaimDirectionChanged"
+    CLAIM_CHANGED = "ClaimChanged"
+    ISSUE_CHANGED = "IssueChanged"
     EVIDENCE_EXCLUDED = "EvidenceExcluded"
     EXTRACTED_CONTENT_REBUILT = "ExtractedContentRebuilt"

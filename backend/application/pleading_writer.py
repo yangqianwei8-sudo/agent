@@ -17,8 +17,10 @@ from sqlalchemy.orm import Session
 
 from backend.application.claim_direction import ClaimDirectionService
 from backend.application.pleading_draft_validator import PleadingDraftValidator
+from backend.application.pleading_input_production import (
+    PleadingStructuredInputProductionBuilder,
+)
 from backend.application.pleading_readiness import PleadingReadinessService
-from backend.application.pleading_structured_input import PleadingStructuredInputBuilder
 from backend.domain.errors import NotFoundError, ValidationError
 from backend.domain.services import DomainService
 from backend.models import (
@@ -136,12 +138,15 @@ class PleadingWriterService:
             accepted_evidence_refs=evidence_refs,
             confirmed_party_keys=list(confirmed_party_keys),
         )
-        structured = PleadingStructuredInputBuilder(self.session).build(
+        production = PleadingStructuredInputProductionBuilder(self.session).build(
+            case_id=case_id,
             parties=parties,
             facts=facts,
-            claim=claim,
             evidence=evidence,
         )
+        PleadingStructuredInputProductionBuilder.assert_formal_boundaries(production)
+        structured = production.writer_structured
+        claim = self._claim_view_from_production(production, claim)
         validator = PleadingDraftValidator()
         repair_count = 0
         try:
@@ -211,16 +216,19 @@ class PleadingWriterService:
         body["structured_input_summary"] = {
             "liability_bridge_required": structured.liability_bridge_required,
             "evidence_material_count": len(structured.evidence_directory),
+            "claim_source": production.snapshot_meta.claim_source,
+            "confirmation_set_hash": production.snapshot_meta.confirmation_set_hash,
         }
+        body["structured_input_snapshot"] = production.model_dump(mode="json")
         body["validation"] = {
             "passed": True,
             "repair_count": repair_count,
             "issue_codes": [],
         }
-        citations = self._build_citations(engine_result, facts)
-        conf_hash = self._confirmation_hash(
-            parties=parties, facts=facts, claim=claim, evidence=evidence
+        citations = self._build_citations(
+            engine_result, facts, production=production
         )
+        conf_hash = production.snapshot_meta.confirmation_set_hash
 
         draft = self.domain.create_document_draft(
             case_id=case_id,
@@ -323,15 +331,24 @@ class PleadingWriterService:
     # ----- gates / validation -----
 
     def _assert_n8_prerequisites(self, instance: WorkflowInstance) -> None:
-        ctx = instance.context_json or {}
-        if not (ctx.get("claim_direction") or {}).get("claim_direction_keys"):
-            # Soft signal from Phase 7; still require Writer-usable ClaimDirection.
-            pass
+        from backend.models import Claim
+
+        case_id = instance.case_id
+        has_claim_domain = self.session.scalars(
+            select(Claim).where(
+                Claim.case_id == case_id,
+                Claim.is_current.is_(True),
+                Claim.status == "CONFIRMED",
+                Claim.stale.is_(False),
+            )
+        ).first()
+        if has_claim_domain is not None:
+            return
         try:
-            self.claim_svc.get_confirmed_claim_direction_for_writer(instance.case_id)
+            self.claim_svc.get_confirmed_claim_direction_for_writer(case_id)
         except ValidationError as exc:
             raise ValidationError(
-                f"N8 requires CONFIRMED non-stale ClaimDirection (N7 incomplete): {exc.message}"
+                f"N8 requires CONFIRMED claim (domain or ClaimDirection): {exc.message}"
             ) from exc
 
     def _require_writer_claim(
@@ -339,6 +356,48 @@ class PleadingWriterService:
         case_id: UUID,
         claim_direction_ref: dict[str, Any] | ClaimDirectionRef | None,
     ) -> ClaimDirectionView:
+        from backend.models import Claim
+
+        domain_claim = self.session.scalars(
+            select(Claim).where(
+                Claim.case_id == case_id,
+                Claim.is_current.is_(True),
+                Claim.status == "CONFIRMED",
+                Claim.stale.is_(False),
+            )
+        ).first()
+        if domain_claim is not None:
+            rows = list(
+                self.session.scalars(
+                    select(Claim).where(
+                        Claim.case_id == case_id,
+                        Claim.is_current.is_(True),
+                        Claim.status == "CONFIRMED",
+                        Claim.stale.is_(False),
+                    )
+                )
+            )
+            payload = {
+                "overall_strategy": "基于律师确认的诉讼请求生成。",
+                "claims": [
+                    {
+                        "claim_type": r.claim_type,
+                        "description": r.statement,
+                        "amount": r.amount if not r.amount_is_suggested else None,
+                        "currency": r.currency,
+                        "supporting_fact_ids": [],
+                    }
+                    for r in rows
+                ],
+            }
+            return ClaimDirectionView(
+                claim_direction_key=domain_claim.claim_key,
+                claim_direction_version=max(r.version for r in rows),
+                payload=payload,
+                status="CONFIRMED",
+                stale=False,
+            )
+
         usable = self.claim_svc.get_confirmed_claim_direction_for_writer(case_id)
         if claim_direction_ref is not None:
             if isinstance(claim_direction_ref, dict):
@@ -658,12 +717,45 @@ class PleadingWriterService:
             if fr.fact_version < 1:
                 raise ValidationError("used_fact_refs must include fact_version")
 
+    def _claim_view_from_production(
+        self,
+        production,
+        fallback: ClaimDirectionView,
+    ) -> ClaimDirectionView:
+        if production.snapshot_meta.claim_source == "CLAIM_DOMAIN" and production.claims:
+            payload = PleadingStructuredInputProductionBuilder._claims_domain_payload(
+                production.claims
+            )
+            first = production.claims[0]
+            return ClaimDirectionView(
+                claim_direction_key=UUID(first.claim_key),
+                claim_direction_version=max(c.claim_version for c in production.claims),
+                payload=payload,
+                status="CONFIRMED",
+                stale=False,
+            )
+        return fallback
+
     def _build_citations(
         self,
         result: PleadingWriterEngineResult,
         facts: list[ConfirmedFactView],
+        *,
+        production=None,
     ) -> list[dict[str, Any]]:
         by_key = {f.fact_key: f for f in facts}
+        span_by_fe: dict[tuple[str, int, str, int], str | None] = {}
+        if production is not None:
+            for rel in production.fact_evidence_relations:
+                span_by_fe[
+                    (
+                        rel.fact_key,
+                        rel.fact_version,
+                        rel.evidence_item_id,
+                        rel.evidence_item_version,
+                    )
+                ] = rel.source_span_id
+
         citations: list[dict[str, Any]] = []
         for block in result.fact_blocks:
             for fr in block.fact_refs:
@@ -676,16 +768,25 @@ class PleadingWriterService:
                         f"block {block.block_id} has no evidence for citation"
                     )
                 for eref in erefs:
-                    citations.append(
-                        {
-                            "block_id": block.block_id,
-                            "citation_kind": "FACT",
-                            "fact_key": str(fr.fact_key),
-                            "fact_version": fr.fact_version,
-                            "evidence_item_id": str(eref.evidence_item_id),
-                            "evidence_item_version": eref.evidence_item_version,
-                        }
+                    cite: dict[str, Any] = {
+                        "block_id": block.block_id,
+                        "citation_kind": "FACT",
+                        "fact_key": str(fr.fact_key),
+                        "fact_version": fr.fact_version,
+                        "evidence_item_id": str(eref.evidence_item_id),
+                        "evidence_item_version": eref.evidence_item_version,
+                    }
+                    span_id = span_by_fe.get(
+                        (
+                            str(fr.fact_key),
+                            fr.fact_version,
+                            str(eref.evidence_item_id),
+                            eref.evidence_item_version,
+                        )
                     )
+                    if span_id:
+                        cite["source_span_id"] = span_id
+                    citations.append(cite)
         if not citations:
             raise ValidationError("Draft must include at least one DraftCitation")
         return citations

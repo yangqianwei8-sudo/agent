@@ -21,6 +21,7 @@ from backend.domain.enums import ClaimType, PartyRole
 from backend.models import (
     CaseMaterial,
     CaseParty,
+    Claim,
     ClaimDirection,
     EvidenceItem,
     ExtractedContent,
@@ -189,6 +190,16 @@ class PleadingReadinessService:
         defendants = self._confirmed_parties(case_id, PartyRole.DEFENDANT)
         facts = self._confirmed_facts(case_id)
         claim = self._confirmed_claim(case_id)
+        claim_domain = list(
+            self.session.scalars(
+                select(Claim).where(
+                    Claim.case_id == case_id,
+                    Claim.is_current.is_(True),
+                    Claim.status == "CONFIRMED",
+                    Claim.stale.is_(False),
+                )
+            )
+        )
 
         party_refs = [
             {"party_key": str(p.party_key), "role": p.role, "name": p.name}
@@ -231,20 +242,38 @@ class PleadingReadinessService:
         else:
             strengths.append(f"已确认被告：{', '.join(p.name for p in defendants)}")
 
-        # ClaimDirection required for payment-type gates
+        # Confirmed claim required — Claim Domain SSOT, ClaimDirection legacy fallback
         has_payment_claim = False
         claim_amount: float | None = None
-        if claim is None:
+        if claim_domain:
+            strengths.append(f"已确认 {len(claim_domain)} 项诉讼请求（Claim Domain）")
+            for row in claim_domain:
+                if row.claim_type in {
+                    ClaimType.PAYMENT.value,
+                    ClaimType.LIQUIDATED_DAMAGES.value,
+                }:
+                    has_payment_claim = True
+                    if row.amount is not None and not row.amount_is_suggested:
+                        claim_amount = float(row.amount)
+        elif claim is None:
             blockers.append(
                 self._blocker(
-                    ReadinessIssueCode.CLAIM_DIRECTION_NOT_CONFIRMED,
-                    "尚未确认诉讼请求方向（ClaimDirection），无法生成起诉状。",
-                    suggested_action="请先确认 ClaimDirection。",
+                    ReadinessIssueCode.NO_CONFIRMED_CLAIM,
+                    "尚无律师确认的诉讼请求，无法生成起诉状。",
+                    suggested_action="请先确认诉讼请求。",
                 )
             )
-            missing.append("CONFIRMED ClaimDirection")
+            missing.append("CONFIRMED claim")
         else:
-            strengths.append("已确认 ClaimDirection")
+            strengths.append("已确认 ClaimDirection（legacy）")
+            warnings.append(
+                ReadinessIssue(
+                    code=ReadinessIssueCode.LEGACY_CLAIM_SOURCE.value,
+                    severity="WARNING",
+                    message="诉请来源仍为 ClaimDirection 聚合（legacy）。",
+                    suggested_action="建议迁移至 Claim Domain 正式诉请。",
+                )
+            )
             payload = claim.payload or {}
             for item in payload.get("claims") or []:
                 ctype = str(item.get("claim_type") or "")
@@ -471,6 +500,35 @@ class PleadingReadinessService:
                         suggested_action="关联已确认争点或事实作为诉请基础。",
                     )
                 )
+            if (
+                item.amount is not None
+                and not item.amount_is_suggested
+                and not item.amount_basis_facts
+            ):
+                warnings.append(
+                    ReadinessIssue(
+                        code=ReadinessIssueCode.CLAIM_AMOUNT_WITHOUT_AMOUNT_BASIS.value,
+                        severity="WARNING",
+                        message=f"诉请「{item.title[:40]}」有金额但缺少 AMOUNT_BASIS 事实。",
+                        suggested_action="关联已确认金额基础事实。",
+                    )
+                )
+            if not item.basis_facts and not item.basis_issues:
+                warnings.append(
+                    ReadinessIssue(
+                        code=ReadinessIssueCode.CLAIM_HAS_NO_SUPPORTING_FACT.value,
+                        severity="WARNING",
+                        message=f"诉请「{item.title[:40]}」无支撑事实或争点。",
+                    )
+                )
+            if item.stale_state.get("stale"):
+                warnings.append(
+                    ReadinessIssue(
+                        code=ReadinessIssueCode.STALE_INPUT.value,
+                        severity="WARNING",
+                        message=f"正式诉请输入 stale：{item.title[:40]}",
+                    )
+                )
 
     def _check_issue_readiness(
         self,
@@ -505,6 +563,14 @@ class PleadingReadinessService:
         for item in matrix.items:
             if item.status != "CONFIRMED":
                 continue
+            if not item.supporting_facts and not item.adverse_facts:
+                warnings.append(
+                    ReadinessIssue(
+                        code=ReadinessIssueCode.ISSUE_HAS_NO_SUPPORTING_FACT.value,
+                        severity="WARNING",
+                        message=f"争点「{item.statement[:40]}」无关联事实。",
+                    )
+                )
             critical = item.fact_gaps or item.evidence_gaps
             if not critical:
                 continue

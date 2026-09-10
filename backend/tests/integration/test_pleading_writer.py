@@ -203,7 +203,10 @@ def test_a_no_confirmed_claim_direction(
     )
     domain.reject_claim_direction(claim.claim_direction_key, actor_id=actor_id)
     svc = PleadingWriterService(db_session)
-    with pytest.raises((ValidationError, PleadingNotReadyError), match="CONFIRMED|ClaimDirection"):
+    with pytest.raises(
+        (ValidationError, PleadingNotReadyError),
+        match="尚无律师确认|NO_CONFIRMED|ClaimDirection",
+    ):
         svc.write(
             **_writer_args(case, parties, facts, evidences, claim),
             actor_id=actor_id,
@@ -222,7 +225,7 @@ def test_b_stale_claim_direction(
     svc = PleadingWriterService(db_session)
     with pytest.raises(
         (ValidationError, PleadingNotReadyError),
-        match="CONFIRMED|stale|no CONFIRMED|ClaimDirection",
+        match="尚无律师确认|stale|NO_CONFIRMED|ClaimDirection",
     ):
         svc.write(
             **_writer_args(case, parties, facts, evidences, claim),

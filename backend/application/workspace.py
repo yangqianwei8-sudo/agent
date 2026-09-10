@@ -19,6 +19,9 @@ from backend.application.material_usability import (
     MaterialUsabilityPolicy,
     MaterialUsabilityView,
 )
+from backend.application.pleading_input_production import (
+    PleadingStructuredInputProductionBuilder,
+)
 from backend.application.pleading_readiness import PleadingReadinessService
 from backend.llm.factory import ai_mode_label
 from backend.models import (
@@ -86,6 +89,9 @@ class WorkspaceQueryService:
             mode="json"
         )
         claims_view = ClaimViewService(self.session).build(case_id).model_dump(mode="json")
+        pleading_input_summary = PleadingStructuredInputProductionBuilder(
+            self.session
+        ).summary(case_id)
         ctx = {
             "case": self._case_detail(case),
             "workflow": workflow,
@@ -100,6 +106,7 @@ class WorkspaceQueryService:
             "pleading_readiness": readiness,
             "issue_matrix": issue_matrix,
             "claims": claims_view,
+            "pleading_input_summary": pleading_input_summary,
             "conversation": self._conversation(case_id),
         }
         work_product = CaseWorkProductBuilder(self.session).build(ctx)
