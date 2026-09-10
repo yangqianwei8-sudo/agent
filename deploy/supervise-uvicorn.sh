@@ -25,11 +25,13 @@ if [[ -f "$ROOT/.venv/bin/activate" ]]; then
   source "$ROOT/.venv/bin/activate"
 fi
 
-if [[ -f "$ROOT/.env" ]]; then
-  set -a
+if [[ -f "$ROOT/deploy/load-env.sh" ]]; then
   # shellcheck disable=SC1091
-  source "$ROOT/.env"
-  set +a
+  source "$ROOT/deploy/load-env.sh" "$ROOT/.env"
+fi
+
+if [[ -x "$ROOT/deploy/configure-git-auth.sh" ]]; then
+  "$ROOT/deploy/configure-git-auth.sh" >/dev/null 2>&1 || true
 fi
 
 HOST="${APP_HOST:-0.0.0.0}"

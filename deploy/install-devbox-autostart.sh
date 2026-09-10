@@ -19,6 +19,7 @@ else
   echo "autostart hook already present"
 fi
 
-chmod +x "$ROOT/deploy/supervise-uvicorn.sh"
+chmod +x "$ROOT/deploy/supervise-uvicorn.sh" "$ROOT/deploy/configure-git-auth.sh" "$ROOT/deploy/load-env.sh" 2>/dev/null || true
+"$ROOT/deploy/configure-git-auth.sh" >/dev/null 2>&1 || true
 nohup "$ROOT/deploy/supervise-uvicorn.sh" >/dev/null 2>&1 &
 echo "supervisor started"

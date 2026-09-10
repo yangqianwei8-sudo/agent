@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from autonomous_dev.config import AutonomousDevSettings
+from autonomous_dev.github_auth import git_env
 from autonomous_dev.github_client import GitHubClient
 from autonomous_dev.product_decision import ProductDecisionPacket
 from autonomous_dev.state import StateStore, TaskRecord, TaskStatus
@@ -111,18 +111,6 @@ class Worker:
             blocked_task=f"Issue #{task.issue_number}",
         )
 
-    def _git_env(self) -> dict[str, str]:
-        env = os.environ.copy()
-        env["GIT_TERMINAL_PROMPT"] = "0"
-        token = self.settings.github_token
-        if token:
-            env["GIT_CONFIG_COUNT"] = "1"
-            env["GIT_CONFIG_KEY_0"] = "url.https://x-access-token:"
-            env["GIT_CONFIG_VALUE_0"] = (
-                f"https://x-access-token:{token}@github.com/.insteadOf https://github.com/"
-            )
-        return env
-
     def _run(self, cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         logger.info("worker cmd: %s", " ".join(cmd))
         return subprocess.run(
@@ -131,7 +119,7 @@ class Worker:
             capture_output=True,
             text=True,
             check=check,
-            env=self._git_env(),
+            env=git_env(),
         )
 
     def _run_cursor_agent(self, task: TaskRecord, issue_body: str) -> str:
@@ -217,8 +205,14 @@ class Worker:
         if self.settings.autonomous_worker_mode == "deterministic":
             return commit_sha
 
-        if not self.settings.github_token:
-            raise RuntimeError("GITHUB_TOKEN required for live push")
+        from autonomous_dev.github_auth import resolve_github_auth
+
+        auth = resolve_github_auth()
+        if auth.mode == "none":
+            raise RuntimeError(
+                "GitHub auth not configured — set GITHUB_TOKEN (Sealos Secret) "
+                "or GITHUB_APP_* / GITHUB_SSH_KEY_PATH (see docs/AUTONOMOUS_DEV_RUNBOOK.md)"
+            )
 
         self._run(["git", "push", "origin", "main"])
         return commit_sha

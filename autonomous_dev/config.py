@@ -18,6 +18,13 @@ class AutonomousDevSettings(BaseSettings):
     autonomous_dev_enabled: bool = False
     github_webhook_secret: str = ""
     github_token: str = ""
+    github_auth_mode: str = "auto"  # auto | pat | app | ssh
+    github_app_id: str = ""
+    github_app_installation_id: str = ""
+    github_app_private_key: str = ""
+    github_app_private_key_path: str = ""
+    github_ssh_key_path: str = ""
+    github_token_file: str = ""
     cursor_api_key: str = ""
     autonomous_worker_mode: str = "deterministic"  # deterministic | live | cursor_sdk
     autonomous_repo_root: str = "."

@@ -7,6 +7,7 @@ import logging
 import httpx
 
 from autonomous_dev.config import AutonomousDevSettings
+from autonomous_dev.github_auth import resolve_github_token
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,11 @@ class GitHubClient:
 
     @property
     def configured(self) -> bool:
-        return bool(self._settings.github_token)
+        return bool(resolve_github_token())
 
     def _headers(self) -> dict[str, str]:
         return {
-            "Authorization": f"Bearer {self._settings.github_token}",
+            "Authorization": f"Bearer {resolve_github_token()}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
