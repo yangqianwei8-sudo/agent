@@ -220,11 +220,25 @@ class Issue(Base):
     __tablename__ = "issues"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    issue_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     case_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("cases.id"), nullable=False
     )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     statement: Mapped[str] = mapped_column(Text, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="AI_PROPOSED")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="CANDIDATE")
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    parent_issue_key: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    change_reason: Mapped[str | None] = mapped_column(Text)
+    supersedes_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("issues.id")
+    )
+    confirm_decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("human_decisions.id", use_alter=True, name="fk_issues_decision"),
+    )
     layer: Mapped[str] = mapped_column(String(32), nullable=False, default="CANDIDATE")
     related_fact_ids: Mapped[list[Any] | None] = mapped_column(JSONB)
     analyst_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
@@ -234,13 +248,124 @@ class Issue(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
+        UniqueConstraint("issue_key", "version", name="uq_issues_key_version"),
+        CheckConstraint(
+            "status IN ('CANDIDATE','CONFIRMED','REJECTED','SUPERSEDED')",
+            name="ck_issues_status",
+        ),
+        CheckConstraint(
+            "source_type IN ('AI_PROPOSED','LAWYER_CREATED','LAWYER_REFINED',"
+            "'OPPONENT_RAISED','COURT_SUMMARIZED')",
+            name="ck_issues_source_type",
+        ),
         CheckConstraint(
             "layer IN ('CANDIDATE','CONFIRMED','REJECTED','SUPERSEDED')",
             name="ck_issues_layer",
         ),
-        Index("ix_issues_case", "case_id"),
+        Index("ix_issues_case_current", "case_id", "is_current"),
+        Index(
+            "uq_issues_current",
+            "issue_key",
+            unique=True,
+            postgresql_where=text("is_current = true"),
+        ),
+    )
+
+
+class IssueFactLink(Base):
+    __tablename__ = "issue_fact_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id"), nullable=False
+    )
+    issue_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    issue_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    fact_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    fact_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="SUPPORT")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ACTIVE")
+    explanation: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["issue_key", "issue_version"],
+            ["issues.issue_key", "issues.version"],
+            name="fk_issue_fact_links_issue",
+        ),
+        ForeignKeyConstraint(
+            ["fact_key", "fact_version"],
+            ["facts.fact_key", "facts.version"],
+            name="fk_issue_fact_links_fact",
+        ),
+        UniqueConstraint(
+            "issue_key",
+            "issue_version",
+            "fact_key",
+            "fact_version",
+            "role",
+            name="uq_issue_fact_links",
+        ),
+        CheckConstraint(
+            "role IN ('SUPPORT','ADVERSE','CONTEXT')",
+            name="ck_issue_fact_link_role",
+        ),
+        CheckConstraint(
+            "status IN ('ACTIVE','VOID')",
+            name="ck_issue_fact_link_status",
+        ),
+        Index("ix_issue_fact_links_case", "case_id"),
+    )
+
+
+class IssueEvidenceLink(Base):
+    __tablename__ = "issue_evidence_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id"), nullable=False
+    )
+    issue_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    issue_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence_item_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    evidence_item_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="SUPPORT")
+    explanation: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["issue_key", "issue_version"],
+            ["issues.issue_key", "issues.version"],
+            name="fk_issue_evidence_links_issue",
+        ),
+        ForeignKeyConstraint(
+            ["evidence_item_id", "evidence_item_version"],
+            ["evidence_items.id", "evidence_items.version"],
+            name="fk_issue_evidence_links_evidence",
+        ),
+        UniqueConstraint(
+            "issue_key",
+            "issue_version",
+            "evidence_item_id",
+            "evidence_item_version",
+            "role",
+            name="uq_issue_evidence_links",
+        ),
+        CheckConstraint(
+            "role IN ('SUPPORT','ADVERSE','CONTEXT')",
+            name="ck_issue_evidence_link_role",
+        ),
+        Index("ix_issue_evidence_links_case", "case_id"),
     )
 
 

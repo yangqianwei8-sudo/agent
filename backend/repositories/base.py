@@ -20,6 +20,9 @@ from backend.models import (
     Fact,
     FactEvidenceLink,
     HumanDecision,
+    Issue,
+    IssueEvidenceLink,
+    IssueFactLink,
     SourceSpan,
     WorkflowInstance,
 )
@@ -68,8 +71,48 @@ class Repository:
             select(Fact).where(Fact.fact_key == fact_key, Fact.is_current.is_(True))
         ).first()
 
+    def get_fact_version(self, fact_key: UUID, version: int) -> Fact | None:
+        return self.session.scalars(
+            select(Fact).where(Fact.fact_key == fact_key, Fact.version == version)
+        ).first()
+
     def get_fact_row(self, fact_id: UUID) -> Fact | None:
         return self.session.get(Fact, fact_id)
+
+    def get_current_issue(self, issue_key: UUID) -> Issue | None:
+        return self.session.scalars(
+            select(Issue).where(Issue.issue_key == issue_key, Issue.is_current.is_(True))
+        ).first()
+
+    def get_issue_version(self, issue_key: UUID, version: int) -> Issue | None:
+        return self.session.scalars(
+            select(Issue).where(Issue.issue_key == issue_key, Issue.version == version)
+        ).first()
+
+    def list_issue_fact_links(
+        self, issue_key: UUID, issue_version: int
+    ) -> list[IssueFactLink]:
+        return list(
+            self.session.scalars(
+                select(IssueFactLink).where(
+                    IssueFactLink.issue_key == issue_key,
+                    IssueFactLink.issue_version == issue_version,
+                    IssueFactLink.status == "ACTIVE",
+                )
+            )
+        )
+
+    def list_issue_evidence_links(
+        self, issue_key: UUID, issue_version: int
+    ) -> list[IssueEvidenceLink]:
+        return list(
+            self.session.scalars(
+                select(IssueEvidenceLink).where(
+                    IssueEvidenceLink.issue_key == issue_key,
+                    IssueEvidenceLink.issue_version == issue_version,
+                )
+            )
+        )
 
     def get_current_party(self, party_key: UUID) -> CaseParty | None:
         return self.session.scalars(

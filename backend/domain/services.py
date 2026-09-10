@@ -17,6 +17,10 @@ from backend.domain.enums import (
     DraftStatus,
     EvidenceAcceptance,
     FactStatus,
+    IssueLinkRole,
+    IssueLinkStatus,
+    IssueSourceType,
+    IssueStatus,
     LayerStatus,
     MaterialLifeStatus,
     ParseStatus,
@@ -38,10 +42,14 @@ from backend.models import (
     Fact,
     FactEvidenceLink,
     HumanDecision,
+    Issue,
+    IssueEvidenceLink,
+    IssueFactLink,
     SourceSpan,
 )
 from backend.repositories.base import Repository
 from backend.schemas.claim_direction import validate_claim_direction_payload
+from backend.skills.case_analyst import looks_like_legal_conclusion
 
 
 def _now() -> datetime:
@@ -1053,6 +1061,390 @@ class DomainService:
         )
         return claim
 
+    # ----- Issue (versioned lawyer analysis object) -----
+
+    def propose_issue(
+        self,
+        *,
+        case_id: UUID,
+        statement: str,
+        order_index: int = 0,
+        analyst_run_id: UUID | None = None,
+        actor_id: UUID | None = None,
+    ) -> Issue:
+        """AI proposal path — always CANDIDATE / AI_PROPOSED."""
+        self._require_case(case_id)
+        issue = Issue(
+            issue_key=uuid.uuid4(),
+            case_id=case_id,
+            statement=statement,
+            order_index=order_index,
+            source_type=IssueSourceType.AI_PROPOSED.value,
+            status=IssueStatus.CANDIDATE.value,
+            version=1,
+            is_current=True,
+            analyst_run_id=analyst_run_id,
+        )
+        _sync_issue_layer(issue)
+        self.repo.add(issue)
+        self.repo.flush()
+        self._audit(
+            actor_id or uuid.UUID(int=0),
+            "propose_issue",
+            "issues",
+            issue.id,
+            case_id=case_id,
+            after={
+                "issue_key": str(issue.issue_key),
+                "version": issue.version,
+                "status": issue.status,
+                "source_type": issue.source_type,
+            },
+        )
+        return issue
+
+    def create_lawyer_issue(
+        self,
+        *,
+        case_id: UUID,
+        statement: str,
+        actor_id: UUID,
+        order_index: int = 0,
+        decision: HumanDecision | None = None,
+    ) -> Issue:
+        """Lawyer-created issue — immediately CONFIRMED with HumanDecision."""
+        self._require_case(case_id)
+        issue_key = uuid.uuid4()
+        decision = decision or self._new_decision(
+            case_id=case_id,
+            actor_id=actor_id,
+            decision_type="CREATE_ISSUE",
+            target_type="Issue",
+            target_id=issue_key,
+            result=DecisionResult.CONFIRMED.value,
+            payload={"statement": statement},
+        )
+        self.repo.add_decision(decision)
+        self.repo.flush()
+        issue = Issue(
+            issue_key=issue_key,
+            case_id=case_id,
+            statement=statement,
+            order_index=order_index,
+            source_type=IssueSourceType.LAWYER_CREATED.value,
+            status=IssueStatus.CONFIRMED.value,
+            version=1,
+            is_current=True,
+            confirm_decision_id=decision.id,
+        )
+        _sync_issue_layer(issue)
+        self.repo.add(issue)
+        self.repo.flush()
+        self._audit(
+            actor_id,
+            "create_lawyer_issue",
+            "issues",
+            issue.id,
+            case_id=case_id,
+            after={
+                "issue_key": str(issue.issue_key),
+                "status": issue.status,
+                "decision_id": str(decision.id),
+            },
+        )
+        return issue
+
+    def confirm_issue(
+        self,
+        issue_key: UUID,
+        *,
+        actor_id: UUID,
+        decision: HumanDecision | None = None,
+    ) -> Issue:
+        issue = self._require_current_issue(issue_key)
+        if issue.status != IssueStatus.CANDIDATE.value:
+            raise ConflictError("only CANDIDATE issues can be confirmed")
+        if issue.stale:
+            raise ConflictError("cannot confirm stale issue")
+        decision = decision or self._new_decision(
+            case_id=issue.case_id,
+            actor_id=actor_id,
+            decision_type="CONFIRM_ISSUE",
+            target_type="Issue",
+            target_id=issue.issue_key,
+            result=DecisionResult.CONFIRMED.value,
+            payload={"issue_key": str(issue.issue_key), "version": issue.version},
+        )
+        self.repo.add_decision(decision)
+        self.repo.flush()
+        issue.status = IssueStatus.CONFIRMED.value
+        issue.confirm_decision_id = decision.id
+        issue.updated_at = _now()
+        _sync_issue_layer(issue)
+        self._audit(
+            actor_id,
+            "confirm_issue",
+            "issues",
+            issue.id,
+            case_id=issue.case_id,
+            after={
+                "status": issue.status,
+                "decision_id": str(decision.id),
+                "issue_key": str(issue.issue_key),
+                "version": issue.version,
+            },
+        )
+        return issue
+
+    def reject_issue(
+        self,
+        issue_key: UUID,
+        *,
+        actor_id: UUID,
+        decision: HumanDecision | None = None,
+    ) -> Issue:
+        issue = self._require_current_issue(issue_key)
+        if issue.status != IssueStatus.CANDIDATE.value:
+            raise ConflictError("only CANDIDATE issues can be rejected")
+        decision = decision or self._new_decision(
+            case_id=issue.case_id,
+            actor_id=actor_id,
+            decision_type="REJECT_ISSUE",
+            target_type="Issue",
+            target_id=issue.issue_key,
+            result=DecisionResult.REJECTED.value,
+            payload={"issue_key": str(issue.issue_key), "version": issue.version},
+        )
+        self.repo.add_decision(decision)
+        self.repo.flush()
+        issue.status = IssueStatus.REJECTED.value
+        issue.updated_at = _now()
+        _sync_issue_layer(issue)
+        self._audit(
+            actor_id,
+            "reject_issue",
+            "issues",
+            issue.id,
+            case_id=issue.case_id,
+            after={"status": issue.status, "decision_id": str(decision.id)},
+        )
+        return issue
+
+    def amend_issue(
+        self,
+        issue_key: UUID,
+        *,
+        new_statement: str,
+        actor_id: UUID,
+        change_reason: str | None = None,
+        decision: HumanDecision | None = None,
+    ) -> Issue:
+        old = self._require_current_issue(issue_key)
+        if old.status != IssueStatus.CONFIRMED.value:
+            raise ConflictError("only CONFIRMED issues can be amended")
+        decision = decision or self._new_decision(
+            case_id=old.case_id,
+            actor_id=actor_id,
+            decision_type="AMEND_ISSUE",
+            target_type="Issue",
+            target_id=old.issue_key,
+            result=DecisionResult.AMENDED.value,
+            payload={"from_version": old.version, "new_statement": new_statement},
+        )
+        self.repo.add_decision(decision)
+        self.repo.flush()
+        old.status = IssueStatus.SUPERSEDED.value
+        old.is_current = False
+        old.updated_at = _now()
+        _sync_issue_layer(old)
+        new_issue = Issue(
+            issue_key=old.issue_key,
+            case_id=old.case_id,
+            statement=new_statement,
+            order_index=old.order_index,
+            source_type=IssueSourceType.LAWYER_REFINED.value,
+            status=IssueStatus.CONFIRMED.value,
+            version=old.version + 1,
+            is_current=True,
+            supersedes_id=old.id,
+            confirm_decision_id=decision.id,
+            change_reason=change_reason,
+            parent_issue_key=old.parent_issue_key,
+            analyst_run_id=old.analyst_run_id,
+        )
+        _sync_issue_layer(new_issue)
+        self.repo.add(new_issue)
+        self.repo.flush()
+        self._copy_issue_links(old, new_issue)
+        self._audit(
+            actor_id,
+            "amend_issue",
+            "issues",
+            new_issue.id,
+            case_id=old.case_id,
+            after={
+                "issue_key": str(new_issue.issue_key),
+                "version": new_issue.version,
+                "decision_id": str(decision.id),
+            },
+        )
+        return new_issue
+
+    def link_fact_to_issue(
+        self,
+        *,
+        case_id: UUID,
+        issue_key: UUID,
+        issue_version: int,
+        fact_key: UUID,
+        fact_version: int,
+        role: str,
+        explanation: str | None = None,
+        actor_id: UUID,
+    ) -> IssueFactLink:
+        self._require_case(case_id)
+        issue = self.repo.get_issue_version(issue_key, issue_version)
+        if issue is None:
+            raise NotFoundError("issue version not found")
+        if issue.case_id != case_id:
+            raise ValidationError("issue case_id mismatch")
+        fact = self.repo.get_fact_version(fact_key, fact_version)
+        if fact is None:
+            raise NotFoundError("fact version not found")
+        if fact.case_id != case_id:
+            raise ValidationError("cross-case fact link rejected")
+        if role not in {r.value for r in IssueLinkRole}:
+            raise ValidationError(f"invalid issue-fact link role: {role}")
+        link = IssueFactLink(
+            case_id=case_id,
+            issue_key=issue_key,
+            issue_version=issue_version,
+            fact_key=fact_key,
+            fact_version=fact_version,
+            role=role,
+            status=IssueLinkStatus.ACTIVE.value,
+            explanation=explanation,
+            created_by=actor_id,
+        )
+        self.repo.add(link)
+        self.repo.flush()
+        self._audit(
+            actor_id,
+            "link_fact_to_issue",
+            "issue_fact_links",
+            link.id,
+            case_id=case_id,
+            after={
+                "issue_key": str(issue_key),
+                "issue_version": issue_version,
+                "fact_key": str(fact_key),
+                "fact_version": fact_version,
+                "role": role,
+            },
+        )
+        return link
+
+    def unlink_fact_from_issue(
+        self,
+        link_id: UUID,
+        *,
+        actor_id: UUID,
+    ) -> IssueFactLink:
+        link = self.session.get(IssueFactLink, link_id)
+        if link is None:
+            raise NotFoundError("issue-fact link not found")
+        if link.status == IssueLinkStatus.VOID.value:
+            raise ConflictError("link already void")
+        link.status = IssueLinkStatus.VOID.value
+        self.repo.flush()
+        self._audit(
+            actor_id,
+            "unlink_fact_from_issue",
+            "issue_fact_links",
+            link.id,
+            case_id=link.case_id,
+            before={"status": IssueLinkStatus.ACTIVE.value},
+            after={"status": link.status},
+        )
+        return link
+
+    def link_evidence_to_issue(
+        self,
+        *,
+        case_id: UUID,
+        issue_key: UUID,
+        issue_version: int,
+        evidence_item_id: UUID,
+        evidence_item_version: int,
+        role: str,
+        explanation: str | None = None,
+        actor_id: UUID,
+    ) -> IssueEvidenceLink:
+        self._require_case(case_id)
+        issue = self.repo.get_issue_version(issue_key, issue_version)
+        if issue is None:
+            raise NotFoundError("issue version not found")
+        if issue.case_id != case_id:
+            raise ValidationError("issue case_id mismatch")
+        evidence = self.repo.get_evidence_version(evidence_item_id, evidence_item_version)
+        if evidence is None:
+            raise NotFoundError("evidence version not found")
+        if evidence.case_id != case_id:
+            raise ValidationError("cross-case evidence link rejected")
+        if role not in {r.value for r in IssueLinkRole}:
+            raise ValidationError(f"invalid issue-evidence link role: {role}")
+        if explanation and _issue_evidence_explanation_is_legal_conclusion(explanation):
+            raise ValidationError(
+                "issue evidence explanation must not assert legal proof conclusions"
+            )
+        link = IssueEvidenceLink(
+            case_id=case_id,
+            issue_key=issue_key,
+            issue_version=issue_version,
+            evidence_item_id=evidence_item_id,
+            evidence_item_version=evidence_item_version,
+            role=role,
+            explanation=explanation,
+        )
+        self.repo.add(link)
+        self.repo.flush()
+        self._audit(
+            actor_id,
+            "link_evidence_to_issue",
+            "issue_evidence_links",
+            link.id,
+            case_id=case_id,
+            after={
+                "issue_key": str(issue_key),
+                "issue_version": issue_version,
+                "evidence_item_id": str(evidence_item_id),
+                "evidence_item_version": evidence_item_version,
+                "role": role,
+            },
+        )
+        return link
+
+    def unlink_evidence_from_issue(
+        self,
+        link_id: UUID,
+        *,
+        actor_id: UUID,
+    ) -> IssueEvidenceLink:
+        link = self.session.get(IssueEvidenceLink, link_id)
+        if link is None:
+            raise NotFoundError("issue-evidence link not found")
+        self.session.delete(link)
+        self.repo.flush()
+        self._audit(
+            actor_id,
+            "unlink_evidence_from_issue",
+            "issue_evidence_links",
+            link_id,
+            case_id=link.case_id,
+            before={"issue_key": str(link.issue_key), "issue_version": link.issue_version},
+        )
+        return link
+
     def invalidate_dependencies(
         self,
         event: StaleEvent,
@@ -1227,6 +1619,41 @@ class DomainService:
             raise NotFoundError("claim direction not found")
         return claim
 
+    def _require_current_issue(self, issue_key: UUID) -> Issue:
+        issue = self.repo.get_current_issue(issue_key)
+        if issue is None:
+            raise NotFoundError("issue not found")
+        return issue
+
+    def _copy_issue_links(self, old: Issue, new: Issue) -> None:
+        for link in self.repo.list_issue_fact_links(old.issue_key, old.version):
+            self.repo.add(
+                IssueFactLink(
+                    case_id=link.case_id,
+                    issue_key=new.issue_key,
+                    issue_version=new.version,
+                    fact_key=link.fact_key,
+                    fact_version=link.fact_version,
+                    role=link.role,
+                    status=IssueLinkStatus.ACTIVE.value,
+                    explanation=link.explanation,
+                    created_by=link.created_by,
+                )
+            )
+        for link in self.repo.list_issue_evidence_links(old.issue_key, old.version):
+            self.repo.add(
+                IssueEvidenceLink(
+                    case_id=link.case_id,
+                    issue_key=new.issue_key,
+                    issue_version=new.version,
+                    evidence_item_id=link.evidence_item_id,
+                    evidence_item_version=link.evidence_item_version,
+                    role=link.role,
+                    explanation=link.explanation,
+                )
+            )
+        self.repo.flush()
+
     def _assert_supporting_facts_confirmed(self, payload: dict[str, Any]) -> None:
         for item in payload.get("claims") or []:
             fact_ids = item.get("supporting_fact_ids") or []
@@ -1288,6 +1715,25 @@ class DomainService:
             )
         )
         self.repo.flush()
+
+
+def _sync_issue_layer(issue: Issue) -> None:
+    """Keep deprecated layer column aligned with status SSOT."""
+    issue.layer = issue.status
+
+
+def _issue_evidence_explanation_is_legal_conclusion(explanation: str) -> bool:
+    lowered = explanation.lower()
+    if looks_like_legal_conclusion(explanation):
+        return True
+    proof_markers = (
+        "proves defendant",
+        "proves liability",
+        "证明被告承担",
+        "证明.*责任",
+        "直接证明",
+    )
+    return any(marker in lowered for marker in proof_markers[:4])
 
 
 # Guard: DomainService must not allow mutating material content hash/storage key via public API.

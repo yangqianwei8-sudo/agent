@@ -121,6 +121,8 @@ def _fact_rejected(session: Session, case_id: UUID, payload: dict[str, Any]) -> 
     for model in (TimelineEvent, Issue):
         rows = session.scalars(select(model).where(model.case_id == case_id)).all()
         for row in rows:
+            if getattr(row, "is_current", True) is False:
+                continue
             related = row.related_fact_ids or []
             related_keys = {str(x) for x in related}
             if str(fact_key) in related_keys or (

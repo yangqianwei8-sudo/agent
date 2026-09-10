@@ -15,6 +15,8 @@ from backend.models.evidence_fact import (
     Fact,
     FactEvidenceLink,
     Issue,
+    IssueEvidenceLink,
+    IssueFactLink,
     LegalTheory,
     TimelineEvent,
 )
@@ -48,6 +50,8 @@ __all__ = [
     "FactEvidenceLink",
     "TimelineEvent",
     "Issue",
+    "IssueFactLink",
+    "IssueEvidenceLink",
     "LegalTheory",
     "ClaimDirection",
     "WorkflowTemplate",

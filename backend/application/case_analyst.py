@@ -23,7 +23,6 @@ from backend.models import (
     EvidenceItem,
     ExtractedContent,
     Fact,
-    Issue,
     LegalTheory,
     NodeRun,
     SkillExecution,
@@ -176,17 +175,15 @@ class CaseAnalystService:
                 )
 
         # Issues / LegalTheories: proposal layer only — never propose_fact.
+        domain = DomainService(self.session)
         for issue in engine_result.issues:
-            row = Issue(
+            row = domain.propose_issue(
                 case_id=case_id,
                 statement=issue.statement,
                 order_index=len(result.issue_ids),
-                layer="CANDIDATE",
-                related_fact_ids=None,
                 analyst_run_id=skill_exec.id if skill_exec else None,
+                actor_id=actor_id,
             )
-            self.session.add(row)
-            self.session.flush()
             result.issue_ids.append(row.id)
 
         for theory in engine_result.legal_theories:

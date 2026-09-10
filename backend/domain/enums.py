@@ -52,6 +52,32 @@ class FactStatus(StrEnum):
     SUPERSEDED = "SUPERSEDED"
 
 
+class IssueStatus(StrEnum):
+    CANDIDATE = "CANDIDATE"
+    CONFIRMED = "CONFIRMED"
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"
+
+
+class IssueSourceType(StrEnum):
+    AI_PROPOSED = "AI_PROPOSED"
+    LAWYER_CREATED = "LAWYER_CREATED"
+    LAWYER_REFINED = "LAWYER_REFINED"
+    OPPONENT_RAISED = "OPPONENT_RAISED"
+    COURT_SUMMARIZED = "COURT_SUMMARIZED"
+
+
+class IssueLinkRole(StrEnum):
+    SUPPORT = "SUPPORT"
+    ADVERSE = "ADVERSE"
+    CONTEXT = "CONTEXT"
+
+
+class IssueLinkStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    VOID = "VOID"
+
+
 class FactImportance(StrEnum):
     CORE = "CORE"
     SUPPORTING = "SUPPORTING"

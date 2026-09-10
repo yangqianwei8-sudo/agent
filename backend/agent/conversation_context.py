@@ -340,7 +340,7 @@ class CaseConversationContextBuilder:
         rows = list(
             self.session.scalars(
                 select(Issue)
-                .where(Issue.case_id == case_id)
+                .where(Issue.case_id == case_id, Issue.is_current.is_(True))
                 .order_by(Issue.order_index.asc())
                 .limit(20)
             )
@@ -349,7 +349,13 @@ class CaseConversationContextBuilder:
             {
                 "statement": r.statement,
                 "layer": r.layer,
-                "note": "AI candidate analysis — NOT lawyer-confirmed fact",
+                "status": r.status,
+                "source_type": r.source_type,
+                "note": (
+                    "AI candidate analysis — NOT lawyer-confirmed fact"
+                    if r.status == "CANDIDATE"
+                    else "Lawyer-confirmed issue framing — NOT a proven fact"
+                ),
             }
             for r in rows
         ]
