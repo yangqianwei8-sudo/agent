@@ -529,6 +529,27 @@ def test_stale_lease_recovery(infra_env):
     assert store.try_acquire_lease(2, 11, owner="worker-11", ttl_seconds=60)
 
 
+def test_stale_lease_fails_running_task(infra_env):
+    """Stale lease recovery atomically fails the linked RUNNING execution."""
+    repo, db = infra_env
+    store = StateStore(db)
+    running = store.create_task(
+        issue_number=20,
+        delivery_id="stale-run",
+        execution_key="repo#20#gen1",
+        status=TaskStatus.RUNNING,
+    )
+    assert store.try_acquire_lease(20, running.id, owner="worker-stale", ttl_seconds=1)
+    import time
+
+    time.sleep(1.1)
+    assert store.recover_stale_lease()
+    updated = store.get_task(running.id)
+    assert updated.status == TaskStatus.FAILED
+    assert updated.error == "stale worker lease recovered"
+    assert store.get_active_execution("repo#20#gen1") is None
+
+
 def test_heartbeat_extends_lease(infra_env):
     repo, db = infra_env
     store = StateStore(db)
@@ -1401,6 +1422,73 @@ def test_old_failed_execution_remains_historical(infra_env):
     assert store.get_task(old_task.id) is not None
     assert store.get_task(old_task.id).status == TaskStatus.FAILED
     assert store.get_task(old_task.id).error == "simulated failure"
+
+
+def test_watchdog_ready_for_review_new_generation_recovers(
+    infra_env, monkeypatch: pytest.MonkeyPatch
+):
+    """READY_FOR_REVIEW old generation + fresh current-task generation -> recovers once."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    old_key = f"{settings.github_repo}#20#2026-09-11T09:01:57Z"
+    prior = store.create_task(
+        issue_number=20,
+        delivery_id="prior-r4r",
+        execution_key=old_key,
+        status=TaskStatus.READY_FOR_REVIEW,
+    )
+    store.update_task(prior.id, commit_sha="abc1234567890")
+    issue = {
+        "number": 20,
+        "state": "open",
+        "body": "reactivated after review fail",
+        "labels": [{"name": "cursor-task"}, {"name": "current-task"}, {"name": "needs-fix"}],
+        "updated_at": "2026-09-11T10:05:28Z",
+        "created_at": "2026-09-11T08:12:36Z",
+    }
+    _mock_github_issues(monkeypatch, [issue])
+    handle_calls: list[str] = []
+
+    def _track_handle(self, **kwargs):
+        handle_calls.append(kwargs["delivery_id"])
+        return {"status": "worker_started", "task_id": 5, "issue_number": 20}
+
+    monkeypatch.setattr(TaskRouter, "handle", _track_handle)
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert len(handle_calls) == 1
+
+
+def test_watchdog_ready_for_review_same_generation_blocked(
+    infra_env, monkeypatch: pytest.MonkeyPatch
+):
+    """READY_FOR_REVIEW same generation -> no duplicate Worker."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    payload = _issue_payload(number=20)
+    execution_key = compute_execution_key(settings, payload)
+    same_gen = store.create_task(
+        issue_number=20,
+        delivery_id="r4r-same-gen",
+        execution_key=execution_key,
+        status=TaskStatus.READY_FOR_REVIEW,
+    )
+    store.update_task(same_gen.id, commit_sha="def1234567890")
+    _mock_github_issues(monkeypatch, [payload["issue"]])
+    handle_calls: list[str] = []
+
+    def _track_handle(self, **kwargs):
+        handle_calls.append(kwargs["delivery_id"])
+        return {"status": "worker_started"}
+
+    monkeypatch.setattr(TaskRouter, "handle", _track_handle)
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert handle_calls == []
 
 
 def test_watchdog_recovers_needs_fix_new_generation(infra_env, monkeypatch: pytest.MonkeyPatch):

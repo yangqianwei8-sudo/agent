@@ -44,7 +44,12 @@ def is_current_task_recoverable(
         return False
 
     latest = store.get_task_by_issue(issue_number)
-    if latest is not None and latest.status == TaskStatus.READY_FOR_REVIEW:
+    if (
+        latest is not None
+        and latest.status == TaskStatus.READY_FOR_REVIEW
+        and execution_key
+        and latest.execution_key == execution_key
+    ):
         return False
 
     return True

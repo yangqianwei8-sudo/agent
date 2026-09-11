@@ -478,6 +478,21 @@ class StateStore:
             expires = row["lease_expires_at"]
             if expires and expires >= now:
                 return False
+            task_id = row["task_id"]
+            if task_id:
+                conn.execute(
+                    """
+                    UPDATE task_executions
+                    SET status = ?, error = ?, updated_at = ?
+                    WHERE id = ? AND status IN ('queued', 'running')
+                    """,
+                    (
+                        TaskStatus.FAILED.value,
+                        "stale worker lease recovered",
+                        now,
+                        task_id,
+                    ),
+                )
             conn.execute(
                 """
                 UPDATE worker_lock
@@ -486,7 +501,7 @@ class StateStore:
                 WHERE id = 1
                 """
             )
-            return conn.total_changes > 0
+            return True
 
     def try_acquire_lease(
         self,
