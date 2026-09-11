@@ -4,7 +4,7 @@ metadata:
   name: lawyer-agent-orchestrator
 spec:
   rules:
-    - host: lawyer-agent.example.sealos.io
+    - host: lawyer.bja.sealos.run
       http:
         paths:
           - path: /webhooks/github

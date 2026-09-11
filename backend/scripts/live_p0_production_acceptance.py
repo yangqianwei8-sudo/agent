@@ -30,6 +30,7 @@ from autonomous_dev.worker import P0_LIVE_ACCEPTANCE_MARKER, PRODUCT_DECISION_MA
 
 VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
 BASE = os.environ.get("AUTONOMOUS_ACCEPTANCE_BASE", "http://127.0.0.1:8000")
+_ACCEPTANCE_PORT = int(os.environ.get("AUTONOMOUS_ACCEPTANCE_PORT", "8765"))
 
 
 def _sign(body: bytes, secret: str) -> str:
@@ -95,11 +96,23 @@ def _ensure_service() -> bool:
         return False
 
 
-def _start_service() -> None:
+def _start_service() -> subprocess.Popen | None:
+    """Start isolated acceptance server on non-production port; never bind :8000."""
+    global BASE
+    if _ensure_service():
+        return None
     log = ROOT / "data" / "p0-acceptance-uvicorn.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen(
-        [str(ROOT / ".venv" / "bin" / "uvicorn"), "backend.main:app", "--host", "127.0.0.1", "--port", "8000"],
+    BASE = f"http://127.0.0.1:{_ACCEPTANCE_PORT}"
+    proc = subprocess.Popen(
+        [
+            str(ROOT / ".venv" / "bin" / "uvicorn"),
+            "backend.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(_ACCEPTANCE_PORT),
+        ],
         cwd=ROOT,
         stdout=log.open("a"),
         stderr=subprocess.STDOUT,
@@ -107,9 +120,20 @@ def _start_service() -> None:
     )
     for _ in range(30):
         if _ensure_service():
-            return
+            return proc
         time.sleep(1)
+    proc.kill()
     raise RuntimeError("service failed to start")
+
+
+def _stop_service(proc: subprocess.Popen | None) -> None:
+    if proc is None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 def main() -> int:
@@ -126,141 +150,144 @@ def main() -> int:
     store = StateStore(settings.state_db_path)
     results: dict[str, str] = {}
 
-    if not _ensure_service():
-        _start_service()
-    results["A_service_start"] = "PASS" if _ensure_service() else "FAIL"
+    acceptance_proc: subprocess.Popen | None = None
+    try:
+        acceptance_proc = _start_service()
+        results["A_service_start"] = "PASS" if _ensure_service() else "FAIL"
 
-    with httpx.Client(timeout=60.0) as client:
-        results["B_healthz"] = "PASS" if client.get(f"{BASE}/healthz").status_code == 200 else "FAIL"
+        with httpx.Client(timeout=60.0) as client:
+            results["B_healthz"] = "PASS" if client.get(f"{BASE}/healthz").status_code == 200 else "FAIL"
 
-        results["C_invalid_signature"] = (
-            "PASS"
-            if _post_webhook(client, "ping", f"bad-{uuid.uuid4()}", {"zen": "x"}, secret, bad_sig=True).status_code
-            == 401
-            else "FAIL"
-        )
+            results["C_invalid_signature"] = (
+                "PASS"
+                if _post_webhook(client, "ping", f"bad-{uuid.uuid4()}", {"zen": "x"}, secret, bad_sig=True).status_code
+                == 401
+                else "FAIL"
+            )
 
-        sandbox = _create_sandbox_issue(
-            client,
-            settings.github_repo,
-            auth.token,
-            f"P0 live acceptance {uuid.uuid4().hex[:8]}",
-        )
-        issue_num = sandbox["number"]
-        updated_at = sandbox["updated_at"]
-
-        issue_payload = {
-            "action": "labeled",
-            "issue": {
-                "number": issue_num,
-                "state": "open",
-                "title": sandbox["title"],
-                "body": f"{P0_LIVE_ACCEPTANCE_MARKER}\nHarmless P0 acceptance only.",
-                "labels": [{"name": "cursor-task"}, {"name": "current-task"}],
-                "updated_at": updated_at,
-                "created_at": sandbox["created_at"],
-            },
-        }
-        delivery1 = f"p0-live-{uuid.uuid4()}"
-        r1 = _post_webhook(client, "issues", delivery1, issue_payload, secret)
-        results["D_valid_issue_webhook"] = "PASS" if r1.status_code == 200 else "FAIL"
-
-        closed_payload = dict(issue_payload)
-        closed_payload["issue"] = dict(issue_payload["issue"])
-        closed_payload["issue"]["state"] = "closed"
-        closed_payload["issue"]["labels"] = [{"name": "cursor-task"}]
-        r_closed = _post_webhook(
-            client, "issues", f"closed-{uuid.uuid4()}", closed_payload, secret
-        )
-        results["E_open_current_task_only"] = (
-            "PASS" if r_closed.json().get("status") == "ignored" else "FAIL"
-        )
-
-        results["F_one_worker_starts"] = (
-            "PASS" if r1.json().get("status") == "worker_started" else "FAIL"
-        )
-
-        r_dup = _post_webhook(client, "issues", delivery1, issue_payload, secret)
-        results["G_duplicate_delivery"] = (
-            "PASS" if r_dup.json().get("status") == "duplicate" else "FAIL"
-        )
-
-        delivery2 = f"p0-live-{uuid.uuid4()}"
-        r2 = _post_webhook(client, "issues", delivery2, issue_payload, secret)
-        results["H_same_task_new_delivery"] = (
-            "PASS" if r2.json().get("status") == "ignored" else "FAIL"
-        )
-
-        store.try_acquire_lease(99999, 99999, owner="blocker", ttl_seconds=120)
-        block_payload = _issue_payload_like(99002, updated_at)
-        r_block = _post_webhook(
-            client, "issues", f"block-{uuid.uuid4()}", block_payload, secret
-        )
-        store.release_lease("blocker")
-        results["I_concurrent_block"] = (
-            "PASS" if r_block.json().get("status") == "ignored" else "FAIL"
-        )
-
-        task = None
-        for _ in range(180):
-            task = store.get_task_by_issue(issue_num)
-            if task and task.commit_sha and len(task.commit_sha) >= 12:
-                break
-            time.sleep(2)
-        results["J_cursor_sdk_runtime"] = (
-            "PASS"
-            if task and task.commit_sha and task.commit_sha != "CURSOR_AGENT_RUNTIME_OK"
-            else "FAIL"
-        )
-        results["K_harmless_modification"] = (
-            "PASS" if (ROOT / "autonomous_dev" / "acceptance_marker.txt").exists() else "FAIL"
-        )
-        results["L_commit_push"] = "PASS" if task and task.commit_sha else "FAIL"
-
-        if task and task.commit_sha:
-            push_resp = _post_webhook(
+            sandbox = _create_sandbox_issue(
                 client,
-                "push",
-                f"push-{uuid.uuid4()}",
-                {"ref": "refs/heads/main", "after": task.commit_sha},
-                secret,
+                settings.github_repo,
+                auth.token,
+                f"P0 live acceptance {uuid.uuid4().hex[:8]}",
             )
-            results["M_push_ready_for_review"] = (
-                "PASS" if push_resp.json().get("status") == "ready_for_review" else "FAIL"
-            )
-            time.sleep(2)
-            labels = _get_labels(client, settings.github_repo, auth.token, issue_num)
-            results["label_lifecycle"] = (
-                "PASS" if LABEL_READY_FOR_REVIEW in labels else "FAIL"
-            )
-        else:
-            results["M_push_ready_for_review"] = "FAIL"
-            results["label_lifecycle"] = "FAIL"
+            issue_num = sandbox["number"]
+            updated_at = sandbox["updated_at"]
 
-        pd_num = _create_sandbox_issue(
-            client, settings.github_repo, auth.token, f"P0 product decision {uuid.uuid4().hex[:6]}"
-        )["number"]
-        pd_payload = {
-            "action": "opened",
-            "issue": {
-                "number": pd_num,
-                "state": "open",
-                "body": f"simulate {PRODUCT_DECISION_MARKER}",
-                "labels": [{"name": "cursor-task"}, {"name": "current-task"}],
-                "updated_at": pd_num and sandbox["updated_at"],
-                "created_at": sandbox["created_at"],
-            },
-        }
-        _post_webhook(client, "issues", f"pd-{uuid.uuid4()}", pd_payload, secret)
-        for _ in range(30):
-            pd_task = store.get_task_by_issue(pd_num)
-            if pd_task and pd_task.status == TaskStatus.PRODUCT_DECISION:
-                break
-            time.sleep(1)
-        pd_labels = _get_labels(client, settings.github_repo, auth.token, pd_num)
-        results["product_decision"] = (
-            "PASS" if LABEL_PRODUCT_DECISION in pd_labels else "FAIL"
-        )
+            issue_payload = {
+                "action": "labeled",
+                "issue": {
+                    "number": issue_num,
+                    "state": "open",
+                    "title": sandbox["title"],
+                    "body": f"{P0_LIVE_ACCEPTANCE_MARKER}\nHarmless P0 acceptance only.",
+                    "labels": [{"name": "cursor-task"}, {"name": "current-task"}],
+                    "updated_at": updated_at,
+                    "created_at": sandbox["created_at"],
+                },
+            }
+            delivery1 = f"p0-live-{uuid.uuid4()}"
+            r1 = _post_webhook(client, "issues", delivery1, issue_payload, secret)
+            results["D_valid_issue_webhook"] = "PASS" if r1.status_code == 200 else "FAIL"
+
+            closed_payload = dict(issue_payload)
+            closed_payload["issue"] = dict(issue_payload["issue"])
+            closed_payload["issue"]["state"] = "closed"
+            closed_payload["issue"]["labels"] = [{"name": "cursor-task"}]
+            r_closed = _post_webhook(
+                client, "issues", f"closed-{uuid.uuid4()}", closed_payload, secret
+            )
+            results["E_open_current_task_only"] = (
+                "PASS" if r_closed.json().get("status") == "ignored" else "FAIL"
+            )
+
+            results["F_one_worker_starts"] = (
+                "PASS" if r1.json().get("status") == "worker_started" else "FAIL"
+            )
+
+            r_dup = _post_webhook(client, "issues", delivery1, issue_payload, secret)
+            results["G_duplicate_delivery"] = (
+                "PASS" if r_dup.json().get("status") == "duplicate" else "FAIL"
+            )
+
+            delivery2 = f"p0-live-{uuid.uuid4()}"
+            r2 = _post_webhook(client, "issues", delivery2, issue_payload, secret)
+            results["H_same_task_new_delivery"] = (
+                "PASS" if r2.json().get("status") == "ignored" else "FAIL"
+            )
+
+            store.try_acquire_lease(99999, 99999, owner="blocker", ttl_seconds=120)
+            block_payload = _issue_payload_like(99002, updated_at)
+            r_block = _post_webhook(
+                client, "issues", f"block-{uuid.uuid4()}", block_payload, secret
+            )
+            store.release_lease("blocker")
+            results["I_concurrent_block"] = (
+                "PASS" if r_block.json().get("status") == "ignored" else "FAIL"
+            )
+
+            task = None
+            for _ in range(180):
+                task = store.get_task_by_issue(issue_num)
+                if task and task.commit_sha and len(task.commit_sha) >= 12:
+                    break
+                time.sleep(2)
+            results["J_cursor_sdk_runtime"] = (
+                "PASS"
+                if task and task.commit_sha and task.commit_sha != "CURSOR_AGENT_RUNTIME_OK"
+                else "FAIL"
+            )
+            results["K_harmless_modification"] = (
+                "PASS" if (ROOT / "autonomous_dev" / "acceptance_marker.txt").exists() else "FAIL"
+            )
+            results["L_commit_push"] = "PASS" if task and task.commit_sha else "FAIL"
+
+            if task and task.commit_sha:
+                push_resp = _post_webhook(
+                    client,
+                    "push",
+                    f"push-{uuid.uuid4()}",
+                    {"ref": "refs/heads/main", "after": task.commit_sha},
+                    secret,
+                )
+                results["M_push_ready_for_review"] = (
+                    "PASS" if push_resp.json().get("status") == "ready_for_review" else "FAIL"
+                )
+                time.sleep(2)
+                labels = _get_labels(client, settings.github_repo, auth.token, issue_num)
+                results["label_lifecycle"] = (
+                    "PASS" if LABEL_READY_FOR_REVIEW in labels else "FAIL"
+                )
+            else:
+                results["M_push_ready_for_review"] = "FAIL"
+                results["label_lifecycle"] = "FAIL"
+
+            pd_num = _create_sandbox_issue(
+                client, settings.github_repo, auth.token, f"P0 product decision {uuid.uuid4().hex[:6]}"
+            )["number"]
+            pd_payload = {
+                "action": "opened",
+                "issue": {
+                    "number": pd_num,
+                    "state": "open",
+                    "body": f"simulate {PRODUCT_DECISION_MARKER}",
+                    "labels": [{"name": "cursor-task"}, {"name": "current-task"}],
+                    "updated_at": pd_num and sandbox["updated_at"],
+                    "created_at": sandbox["created_at"],
+                },
+            }
+            _post_webhook(client, "issues", f"pd-{uuid.uuid4()}", pd_payload, secret)
+            for _ in range(30):
+                pd_task = store.get_task_by_issue(pd_num)
+                if pd_task and pd_task.status == TaskStatus.PRODUCT_DECISION:
+                    break
+                time.sleep(1)
+            pd_labels = _get_labels(client, settings.github_repo, auth.token, pd_num)
+            results["product_decision"] = (
+                "PASS" if LABEL_PRODUCT_DECISION in pd_labels else "FAIL"
+            )
+    finally:
+        _stop_service(acceptance_proc)
 
     store.recover_stale_lease()
     store.try_acquire_lease(1, 1, owner="stale-test", ttl_seconds=1)

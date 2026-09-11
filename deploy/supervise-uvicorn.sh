@@ -41,9 +41,19 @@ fi
 HOST="${APP_HOST:-0.0.0.0}"
 PORT="${APP_PORT:-8000}"
 
+_terminate_stale_uvicorn() {
+  # Acceptance scripts or manual runs may leave 127.0.0.1:8000 bound, blocking public 0.0.0.0.
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k "${PORT}/tcp" >/dev/null 2>&1 || true
+  fi
+  pkill -f "uvicorn backend.main:app" >/dev/null 2>&1 || true
+  sleep 1
+}
+
 echo "[$(date -Is)] supervisor started root=$ROOT host=$HOST port=$PORT" >> "$LOGFILE"
 
 while true; do
+  _terminate_stale_uvicorn
   echo "[$(date -Is)] starting uvicorn" >> "$LOGFILE"
   "$VENV_UVICORN" backend.main:app --host "$HOST" --port "$PORT" >> "$LOGFILE" 2>&1 || true
   echo "[$(date -Is)] uvicorn exited — restarting in 2s" >> "$LOGFILE"

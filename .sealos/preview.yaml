@@ -1,0 +1,6 @@
+# Sealos DevBox — declare public HTTP port for webhook ingress.
+ports:
+  - port: 8000
+    protocol: HTTP
+    public: true
+    description: autonomous-dev webhook
