@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from autonomous_dev.config import AutonomousDevSettings
+from autonomous_dev.execution_events import ExecutionEventRecorder
 from autonomous_dev.github_auth import git_env
 from autonomous_dev.github_client import GitHubClient, GitHubClientError
 from autonomous_dev.product_decision import ProductDecisionPacket
@@ -58,6 +59,7 @@ class Worker:
         lease_owner: str | None = None,
     ) -> WorkerResult:
         owner = lease_owner or f"worker-{task.id}"
+        events = ExecutionEventRecorder(self.store, task, self.repo_root)
         stop_heartbeat = threading.Event()
         heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
@@ -67,6 +69,7 @@ class Worker:
         )
         heartbeat_thread.start()
         try:
+            events.task_started()
             self.store.update_task(task.id, status=TaskStatus.RUNNING)
             self._github.sync_worker_running(task.issue_number)
 
@@ -87,22 +90,23 @@ class Worker:
 
             if self.settings.autonomous_worker_mode == "cursor_sdk":
                 self.settings.validate_cursor_sdk_config()
+                events.analysis_started()
                 if CURSOR_RUNTIME_ACCEPTANCE_MARKER in issue_body:
-                    commit_sha = self._run_cursor_agent_controlled(task, issue_body)
+                    commit_sha = self._run_cursor_agent_controlled(task, issue_body, events=events)
                 elif P0_LIVE_ACCEPTANCE_MARKER in issue_body:
-                    commit_sha = self._run_p0_live_acceptance(task, issue_body)
+                    commit_sha = self._run_p0_live_acceptance(task, issue_body, events=events)
                 else:
-                    commit_sha = self._run_cursor_agent(task, issue_body)
+                    commit_sha = self._run_cursor_agent(task, issue_body, events=events)
             else:
-                self._git_fetch()
+                self._git_fetch(events)
                 self._ensure_clean_or_resolve()
                 self._apply_harmless_change(task.issue_number)
-                self._run_tests()
-                commit_sha = self._commit_and_push(task.issue_number)
+                self._run_tests(events)
+                commit_sha = self._commit_and_push(task.issue_number, events=events)
                 self._verify_push(commit_sha)
 
             if self._should_handoff_after_push(commit_sha):
-                self._git_fetch()
+                self._git_fetch(events)
                 self._verify_push(commit_sha)
                 updated = transition_ready_for_review(
                     self.store,
@@ -111,6 +115,7 @@ class Worker:
                     task,
                     commit_sha,
                 )
+                events.task_finished(status=TaskStatus.READY_FOR_REVIEW)
                 return WorkerResult(
                     task_id=updated.id,
                     status=TaskStatus.READY_FOR_REVIEW,
@@ -122,6 +127,7 @@ class Worker:
                 status=TaskStatus.RUNNING,
                 commit_sha=commit_sha,
             )
+            events.task_finished(status=TaskStatus.RUNNING)
             return WorkerResult(
                 task_id=updated.id,
                 status=TaskStatus.RUNNING,
@@ -138,6 +144,7 @@ class Worker:
                 status=TaskStatus.NEEDS_FIX,
                 error=str(exc)[:2000],
             )
+            events.task_failed(error=str(exc)[:500])
             return WorkerResult(
                 task_id=task.id,
                 status=TaskStatus.NEEDS_FIX,
@@ -198,24 +205,44 @@ class Worker:
             local=LocalAgentOptions(cwd=str(self.repo_root)),
         )
 
-    def _invoke_cursor_agent(self, prompt: str):
+    def _invoke_cursor_agent(self, prompt: str, *, events: ExecutionEventRecorder | None = None):
         from cursor_sdk import Agent, CursorAgentError
 
+        if events:
+            events.cursor_started()
         try:
             result = Agent.prompt(prompt, self._cursor_agent_options())
         except CursorAgentError as exc:
+            if events:
+                events.record(
+                    "CURSOR_FINISHED",
+                    phase="cursor",
+                    result_summary=str(exc)[:300],
+                    status="fail",
+                )
             raise RuntimeError(str(exc)) from exc
         if result.status == "error":
+            if events:
+                events.record(
+                    "CURSOR_FINISHED",
+                    phase="cursor",
+                    result_summary=str(result.result)[:300],
+                    status="fail",
+                )
             raise RuntimeError(f"cursor agent failed: {result.result}")
+        if events:
+            events.cursor_finished(result_summary=(result.result or "")[:300])
         return result
 
-    def _run_cursor_agent_controlled(self, task: TaskRecord, issue_body: str) -> str:
+    def _run_cursor_agent_controlled(
+        self, task: TaskRecord, issue_body: str, *, events: ExecutionEventRecorder
+    ) -> str:
         prompt = (
             "connectivity/controlled acceptance only; do not modify files.\n"
             f"Issue #{task.issue_number} context:\n{issue_body}\n\n"
             f"Reply with exactly: {CURSOR_RUNTIME_OK_MARKER}"
         )
-        result = self._invoke_cursor_agent(prompt)
+        result = self._invoke_cursor_agent(prompt, events=events)
         output = (result.result or "").strip()
         if CURSOR_RUNTIME_OK_MARKER not in output:
             raise RuntimeError(
@@ -223,9 +250,11 @@ class Worker:
             )
         return CURSOR_RUNTIME_OK_MARKER
 
-    def _run_p0_live_acceptance(self, task: TaskRecord, issue_body: str) -> str:
+    def _run_p0_live_acceptance(
+        self, task: TaskRecord, issue_body: str, *, events: ExecutionEventRecorder
+    ) -> str:
         """P0 live path: cursor_sdk invoked + harmless change + tests + commit + push."""
-        self._git_fetch()
+        self._git_fetch(events)
         self._ensure_clean_or_resolve()
         self._apply_harmless_change(task.issue_number)
         prompt = (
@@ -233,27 +262,34 @@ class Worker:
             "Harmless marker file updated. Do not modify other files. "
             f"Reply with exactly: {CURSOR_RUNTIME_OK_MARKER}\n\n{issue_body}"
         )
-        self._invoke_cursor_agent(prompt)
-        self._run_tests()
-        commit_sha = self._commit_and_push(task.issue_number)
+        self._invoke_cursor_agent(prompt, events=events)
+        self._run_tests(events)
+        commit_sha = self._commit_and_push(task.issue_number, events=events)
         self._verify_push(commit_sha)
         return commit_sha
 
-    def _run_cursor_agent(self, task: TaskRecord, issue_body: str) -> str:
+    def _run_cursor_agent(
+        self, task: TaskRecord, issue_body: str, *, events: ExecutionEventRecorder
+    ) -> str:
         prompt = (
             f"Execute GitHub Issue #{task.issue_number} as sole SSOT.\n\n"
             f"{issue_body}\n\n"
             "Rules: run tests, git add -A, commit, push origin main, "
             "verify HEAD==origin/main, stop. No next product phase."
         )
-        self._invoke_cursor_agent(prompt)
+        self._invoke_cursor_agent(prompt, events=events)
         head = self._run(["git", "rev-parse", "HEAD"], check=True)
         return head.stdout.strip()
 
-    def _git_fetch(self) -> None:
+    def _git_fetch(self, events: ExecutionEventRecorder | None = None) -> None:
         if self.settings.autonomous_worker_mode == "deterministic":
             return
-        self._run(["git", "fetch", "origin", "main"])
+        cmd = ["git", "fetch", "origin", "main"]
+        if events:
+            events.command_started(cmd, phase="git")
+        result = self._run(cmd)
+        if events:
+            events.command_finished(cmd, output=result.stdout[:200], ok=True, phase="git")
 
     def _ensure_clean_or_resolve(self) -> None:
         status = self._run(["git", "status", "--porcelain"], check=True)
@@ -272,14 +308,13 @@ class Worker:
             encoding="utf-8",
         )
 
-    def _run_tests(self) -> None:
-        if self.settings.autonomous_worker_mode != "deterministic":
-            self._run([sys.executable, "-m", "pytest", "backend/tests/test_health.py", "-q"], check=True)
-            return
-        self._run(
-            [sys.executable, "-m", "pytest", "backend/tests/test_health.py", "-q"],
-            check=True,
-        )
+    def _run_tests(self, events: ExecutionEventRecorder | None = None) -> None:
+        cmd = [sys.executable, "-m", "pytest", "backend/tests/test_health.py", "-q"]
+        if events:
+            events.test_started(cmd)
+        result = self._run(cmd, check=True)
+        if events:
+            events.test_finished(output=result.stdout + result.stderr, passed=True)
 
     def _ensure_git_identity(self) -> None:
         if not self._run(["git", "config", "user.email"], check=False).stdout.strip():
@@ -290,18 +325,27 @@ class Worker:
         if not self._run(["git", "config", "user.name"], check=False).stdout.strip():
             self._run(["git", "config", "user.name", "autonomous-dev-bot"], check=False)
 
-    def _commit_and_push(self, issue_number: int) -> str:
+    def _commit_and_push(
+        self, issue_number: int, *, events: ExecutionEventRecorder | None = None
+    ) -> str:
         self._ensure_git_identity()
         self._run(["git", "add", "-A"])
         msg = f"chore: autonomous worker update for issue #{issue_number}"
+        diff_stat = self._run(["git", "diff", "--stat", "--cached"], check=False)
+        if events and diff_stat.stdout.strip():
+            events.git_diff(stat_output=diff_stat.stdout)
         diff = self._run(["git", "diff", "--cached", "--quiet"], check=False)
         if diff.returncode == 0:
             head = self._run(["git", "rev-parse", "HEAD"], check=True)
             return head.stdout.strip()
 
+        if events:
+            events.commit_started(msg)
         self._run(["git", "commit", "-m", msg])
         head = self._run(["git", "rev-parse", "HEAD"], check=True)
         commit_sha = head.stdout.strip()
+        if events:
+            events.commit_created(sha=commit_sha, message=msg)
 
         if self.settings.autonomous_worker_mode == "deterministic":
             return commit_sha
@@ -315,7 +359,11 @@ class Worker:
                 "or GITHUB_APP_* / GITHUB_SSH_KEY_PATH (see docs/AUTONOMOUS_DEV_RUNBOOK.md)"
             )
 
+        if events:
+            events.push_started()
         self._run(["git", "push", "origin", "main"])
+        if events:
+            events.push_finished(sha=commit_sha)
         return commit_sha
 
     def _verify_push(self, local_head: str) -> None:

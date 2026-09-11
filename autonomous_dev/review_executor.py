@@ -7,6 +7,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from autonomous_dev.config import AutonomousDevSettings
+from autonomous_dev.execution_events import ExecutionEventType, record_review_event
 from autonomous_dev.github_client import (
     LABEL_CURRENT_TASK,
     LABEL_CURSOR_TASK,
@@ -174,6 +175,13 @@ class ReviewExecutor:
             attempt_count=attempt_count + 1,
             clear_next_retry=True,
         )
+        record_review_event(
+            self.store,
+            task=task,
+            event_type=ExecutionEventType.REVIEW_STARTED,
+            status="running",
+            metadata={"invocation_id": invocation_id, "commit_sha": commit_sha[:40]},
+        )
         try:
             if issue_body is None:
                 issue_body = self._fetch_issue_body(task.issue_number)
@@ -189,6 +197,14 @@ class ReviewExecutor:
                 status=ReviewInvocationStatus.COMPLETED,
                 verdict=ReviewVerdict(result.verdict),
                 clear_started_at=True,
+            )
+            record_review_event(
+                self.store,
+                task=task,
+                event_type=ExecutionEventType.REVIEW_FINISHED,
+                result_summary=f"verdict={result.verdict}",
+                status="ok",
+                metadata={"invocation_id": invocation_id, "verdict": result.verdict},
             )
             self._post_verdict_comment(
                 task.issue_number,
@@ -217,10 +233,24 @@ class ReviewExecutor:
                 attempt_count=self.settings.review_max_attempts,
                 clear_started_at=True,
             )
+            record_review_event(
+                self.store,
+                task=task,
+                event_type=ExecutionEventType.REVIEW_FINISHED,
+                result_summary=str(exc)[:300],
+                status="fail",
+            )
             self._post_credential_blocker(task.issue_number, str(exc))
             return {"status": "credential_blocker", "error": str(exc)}
         except Exception as exc:  # noqa: BLE001 — review boundary
             logger.exception("review failed task=%s invocation=%s", task.id, invocation_id)
+            record_review_event(
+                self.store,
+                task=task,
+                event_type=ExecutionEventType.REVIEW_FINISHED,
+                result_summary=str(exc)[:300],
+                status="fail",
+            )
             return self._mark_transient_failure(invocation_id, attempt_count, exc)
 
     def _mark_transient_failure(

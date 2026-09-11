@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from autonomous_dev.config import AutonomousDevSettings
+from autonomous_dev.execution_events import build_execution_trace
 from autonomous_dev.state import StateStore, TaskRecord
 from autonomous_dev.status_deriver import (
     WorkerLeaseSnapshot,
@@ -239,6 +240,19 @@ def build_dashboard_payload(
         for row in snapshot["completed_rows"]
     ]
 
+    trace_task_id = None
+    if current_task:
+        trace_task_id = current_task.id
+    elif primary_task:
+        trace_task_id = primary_task.id
+    events = store.list_execution_events(task_id=trace_task_id, limit=100) if trace_task_id else []
+    execution_trace = build_execution_trace(
+        settings=settings,
+        snapshot=snapshot,
+        events=events,
+        now=generated_at,
+    )
+
     payload: dict[str, Any] = {
         "system_status": system_status.value,
         "current_task": _task_to_dict(
@@ -292,6 +306,7 @@ def build_dashboard_payload(
         ),
         "owner_attention": owner_attention,
         "recent_completed": recent_completed,
+        "execution_trace": execution_trace,
         "last_updated": generated_at.isoformat(),
     }
     return sanitize_for_json(payload)
@@ -343,15 +358,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     ul { margin: 0; padding-left: 18px; }
     .error { color: #fca5a5; }
     .degraded { color: #fed7aa; font-size: 0.85rem; margin-top: 6px; }
+    .trace-banner { padding: 12px 14px; border-radius: 10px; margin-bottom: 10px; font-weight: 600; }
+    .motion-MOVING { background: #14532d; color: #bbf7d0; }
+    .motion-STALLED { background: #78350f; color: #fed7aa; }
+    .motion-STALE { background: #7f1d1d; color: #fecaca; }
+    .motion-IDLE { background: #334155; color: #cbd5e1; }
+    .motion-REVIEWING { background: #1e3a5f; color: #bfdbfe; }
+    .trace-summary { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 10px; }
+    .trace-terminal {
+      background: #0a0f14; border: 1px solid #334155; border-radius: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem;
+      padding: 10px; max-height: 360px; overflow-y: auto; line-height: 1.45;
+    }
+    .trace-line { white-space: pre-wrap; word-break: break-all; }
+    .trace-line .ts { color: #64748b; }
+    .trace-line .etype { color: #38bdf8; }
+    .trace-line .detail { color: #cbd5e1; }
     @media (max-width: 640px) { body { padding: 10px; } .status-banner { font-size: 1.05rem; } }
   </style>
 </head>
 <body>
   <h1>自主开发 Dashboard</h1>
-  <div class="muted">只读运行视图 · 每 7 秒自动刷新 JSON</div>
+  <div class="muted">只读运行视图 · 每 3 秒自动刷新执行轨迹</div>
   <div id="status-banner" class="status-banner status-IDLE">加载中…</div>
   <div class="muted" id="last-updated"></div>
   <div id="degraded" class="degraded"></div>
+
+  <section>
+    <h2>实时执行过程</h2>
+    <div id="trace-banner" class="trace-banner motion-IDLE">加载中…</div>
+    <div id="trace-summary" class="trace-summary"></div>
+    <div id="trace-terminal" class="trace-terminal"></div>
+  </section>
 
   <section>
     <h2>当前任务</h2>
@@ -395,6 +433,42 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       STALE: "运行时过期",
       IDLE: "空闲",
     };
+    const MOTION_LABELS = {
+      MOVING: "推进中",
+      STALLED: "疑似停滞",
+      STALE: "心跳失效",
+      IDLE: "空闲",
+      REVIEWING: "审查中",
+    };
+
+    function fmtAge(seconds) {
+      if (seconds == null) return "—";
+      return `${seconds} 秒前`;
+    }
+
+    function renderTrace(trace) {
+      const t = trace || {};
+      const motion = t.motion_status || "IDLE";
+      const banner = document.getElementById("trace-banner");
+      banner.className = `trace-banner motion-${motion}`;
+      banner.textContent = `执行状态：${MOTION_LABELS[motion] || motion} (${motion}) · 当前：${t.current_action || "—"}`;
+
+      document.getElementById("trace-summary").innerHTML = [
+        kv("当前文件", t.current_file),
+        kv("当前命令", t.current_command),
+        kv("最后进展", fmtAge(t.seconds_since_last_progress)),
+        kv("Worker heartbeat", fmtAge(t.seconds_since_last_heartbeat)),
+        kv("测试", t.latest_test ? `${t.latest_test.status || "—"} · passed=${t.latest_test.passed ?? "—"}` : "—"),
+        kv("Git 变更", t.git ? `${t.git.files_changed ?? "—"} files, +${t.git.insertions ?? "—"} -${t.git.deletions ?? "—"}` : "—"),
+      ].join("");
+
+      const lines = (t.events || []).slice().reverse().map((e) => {
+        const ts = (e.at || "").slice(11, 19) || "—";
+        const detail = [e.file_path, e.command_summary, e.result_summary].filter(Boolean).join("  ");
+        return `<div class="trace-line"><span class="ts">${ts}</span>  <span class="etype">${e.event_type || ""}</span>  <span class="detail">${detail || e.action || ""}</span></div>`;
+      });
+      document.getElementById("trace-terminal").innerHTML = lines.join("") || '<div class="trace-line muted">暂无执行事件</div>';
+    }
 
     function kv(key, value) {
       return `<div class="kv"><div class="k">${key}</div><div class="v">${value ?? "—"}</div></div>`;
@@ -471,6 +545,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       completedEl.innerHTML = (data.recent_completed || []).map(
         (c) => `<tr><td>#${c.issue_number}</td><td>${c.verdict || "—"}</td><td>${c.commit_sha || "—"}</td><td>${c.completed_at || "—"}</td></tr>`
       ).join("");
+
+      renderTrace(data.execution_trace);
     }
 
     async function refresh() {
@@ -484,7 +560,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     refresh();
-    setInterval(refresh, 7000);
+    setInterval(refresh, 3000);
   </script>
 </body>
 </html>

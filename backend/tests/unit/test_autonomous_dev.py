@@ -299,8 +299,8 @@ def test_worker_git_completion_verification(infra_env, monkeypatch: pytest.Monke
     store = StateStore(db)
     worker = Worker(settings, store, repo_root=repo)
 
-    monkeypatch.setattr(worker, "_run_tests", lambda: None)
-    monkeypatch.setattr(worker, "_git_fetch", lambda: None)
+    monkeypatch.setattr(worker, "_run_tests", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "_git_fetch", lambda *a, **k: None)
     monkeypatch.setattr(worker, "_ensure_clean_or_resolve", lambda: None)
 
     task = store.create_task(issue_number=3, delivery_id="git-1")
@@ -1916,4 +1916,376 @@ def test_dashboard_no_unbounded_external_io(infra_env, monkeypatch):
     elapsed = time.monotonic() - start
     assert elapsed < 2.0
     assert calls["n"] <= 1
+
+
+def test_execution_event_append_and_read(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    task = store.create_task(issue_number=40, delivery_id="evt-1", status=TaskStatus.RUNNING)
+    e1 = store.append_execution_event(
+        task_id=task.id,
+        issue_number=40,
+        generation="gen1",
+        event_type="TASK_STARTED",
+        phase="worker",
+        action="Worker 已启动",
+    )
+    e2 = store.append_execution_event(
+        task_id=task.id,
+        issue_number=40,
+        generation="gen1",
+        event_type="TEST_STARTED",
+        command_summary="pytest backend/tests -q",
+    )
+    events = store.list_execution_events(task_id=task.id, limit=10)
+    assert len(events) == 2
+    assert events[0].event_type == "TEST_STARTED"
+    assert events[1].event_type == "TASK_STARTED"
+    assert e1.id != e2.id
+
+
+def test_execution_events_task_isolation(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    t1 = store.create_task(issue_number=41, delivery_id="iso-1")
+    t2 = store.create_task(issue_number=42, delivery_id="iso-2")
+    store.append_execution_event(
+        task_id=t1.id,
+        issue_number=41,
+        generation=None,
+        event_type="TASK_STARTED",
+    )
+    store.append_execution_event(
+        task_id=t2.id,
+        issue_number=42,
+        generation=None,
+        event_type="TASK_STARTED",
+    )
+    assert len(store.list_execution_events(task_id=t1.id)) == 1
+    assert store.list_execution_events(task_id=t1.id)[0].issue_number == 41
+
+
+def test_execution_event_ordering(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    task = store.create_task(issue_number=43, delivery_id="ord")
+    for et in ("TASK_STARTED", "TEST_STARTED", "TEST_FINISHED", "GIT_DIFF"):
+        store.append_execution_event(
+            task_id=task.id,
+            issue_number=43,
+            generation=None,
+            event_type=et,
+        )
+    events = store.list_execution_events(task_id=task.id, limit=10)
+    assert [e.event_type for e in events] == [
+        "GIT_DIFF",
+        "TEST_FINISHED",
+        "TEST_STARTED",
+        "TASK_STARTED",
+    ]
+
+
+def test_derive_motion_moving(infra_env):
+    from autonomous_dev.execution_events import MotionStatus, derive_motion_status
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot
+
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    now = datetime.now(UTC)
+    task = store.create_task(issue_number=44, delivery_id="mov", status=TaskStatus.RUNNING)
+    store.append_execution_event(
+        task_id=task.id,
+        issue_number=44,
+        generation=None,
+        event_type="TEST_STARTED",
+    )
+    events = store.list_execution_events(task_id=task.id)
+    lease = WorkerLeaseSnapshot(
+        True,
+        f"worker-{task.id}",
+        task.id,
+        44,
+        now.isoformat(),
+        now.isoformat(),
+        (now + timedelta(seconds=300)).isoformat(),
+    )
+    motion = derive_motion_status(
+        primary_task=task,
+        lease=lease,
+        reviewer_locked=False,
+        active_review=None,
+        events=events,
+        progress_stale_seconds=120,
+        cursor_long_op_grace_seconds=600,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+        now=now,
+    )
+    assert motion == MotionStatus.MOVING
+
+
+def test_derive_motion_stalled(infra_env):
+    from autonomous_dev.execution_events import MotionStatus, derive_motion_status
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot
+
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    now = datetime.now(UTC)
+    task = store.create_task(issue_number=45, delivery_id="stall", status=TaskStatus.RUNNING)
+    old = (now - timedelta(seconds=300)).isoformat()
+    with store._conn() as conn:  # noqa: SLF001
+        conn.execute(
+            """
+            INSERT INTO execution_events
+            (task_id, issue_number, generation, event_type, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (task.id, 45, None, "TASK_STARTED", old),
+        )
+    events = store.list_execution_events(task_id=task.id)
+    lease = WorkerLeaseSnapshot(
+        True,
+        f"worker-{task.id}",
+        task.id,
+        45,
+        now.isoformat(),
+        now.isoformat(),
+        (now + timedelta(seconds=300)).isoformat(),
+    )
+    motion = derive_motion_status(
+        primary_task=task,
+        lease=lease,
+        reviewer_locked=False,
+        active_review=None,
+        events=events,
+        progress_stale_seconds=120,
+        cursor_long_op_grace_seconds=600,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+        now=now,
+    )
+    assert motion == MotionStatus.STALLED
+
+
+def test_derive_motion_stale_priority(infra_env):
+    from autonomous_dev.execution_events import MotionStatus, derive_motion_status
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot
+
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    now = datetime.now(UTC)
+    task = store.create_task(issue_number=46, delivery_id="stale", status=TaskStatus.RUNNING)
+    store.append_execution_event(
+        task_id=task.id,
+        issue_number=46,
+        generation=None,
+        event_type="TASK_STARTED",
+    )
+    events = store.list_execution_events(task_id=task.id)
+    past = (now - timedelta(seconds=600)).isoformat()
+    lease = WorkerLeaseSnapshot(
+        True,
+        f"worker-{task.id}",
+        task.id,
+        46,
+        past,
+        past,
+        past,
+    )
+    motion = derive_motion_status(
+        primary_task=task,
+        lease=lease,
+        reviewer_locked=False,
+        active_review=None,
+        events=events,
+        progress_stale_seconds=120,
+        cursor_long_op_grace_seconds=600,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+        now=now,
+    )
+    assert motion == MotionStatus.STALE
+
+
+def test_derive_motion_reviewing(infra_env):
+    from autonomous_dev.execution_events import MotionStatus, derive_motion_status
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot
+
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    task = store.update_task(
+        store.create_task(issue_number=47, delivery_id="rev").id,
+        status=TaskStatus.READY_FOR_REVIEW,
+        commit_sha="abc1234567890",
+    )
+    inv = store.create_review_invocation(
+        invocation_id="inv-1",
+        task_id=task.id,
+        issue_number=47,
+        commit_sha="abc1234567890",
+    )
+    store.update_review_invocation(inv.invocation_id, status=ReviewInvocationStatus.RUNNING)
+    active = store.get_review_invocation(task.id, "abc1234567890")
+    lease = WorkerLeaseSnapshot(False, None, None, None, None, None, None)
+    motion = derive_motion_status(
+        primary_task=task,
+        lease=lease,
+        reviewer_locked=True,
+        active_review=active,
+        events=[],
+        progress_stale_seconds=120,
+        cursor_long_op_grace_seconds=600,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+    )
+    assert motion == MotionStatus.REVIEWING
+
+
+def test_sanitize_repo_path(infra_env):
+    from autonomous_dev.execution_events import sanitize_repo_path
+
+    repo, _ = infra_env
+    assert sanitize_repo_path("autonomous_dev/dashboard.py", repo) == "autonomous_dev/dashboard.py"
+    rel_path = str(repo / "autonomous_dev" / "state.py")
+    assert sanitize_repo_path(rel_path, repo) == "autonomous_dev/state.py"
+    assert sanitize_repo_path(".env", repo) is None
+    assert sanitize_repo_path("backend/cases/secret.pdf", repo) is None
+
+
+def test_sanitize_command_redaction():
+    from autonomous_dev.execution_events import sanitize_command
+
+    assert sanitize_command(["export", "OPENAI_API_KEY=sk-secret"]) == "[REDACTED]"
+    assert sanitize_command(["pytest", "backend/tests", "-q"]) == "pytest backend/tests -q"
+    assert "ghp_" not in (sanitize_command(["git", "push", "https://ghp_abc@github.com/x"]) or "")
+
+
+def test_execution_trace_secret_redaction(infra_env):
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    task = store.create_task(issue_number=48, delivery_id="trace-sec", status=TaskStatus.RUNNING)
+    store.try_acquire_lease(48, task.id, owner=f"worker-{task.id}", ttl_seconds=300)
+    store.append_execution_event(
+        task_id=task.id,
+        issue_number=48,
+        generation=None,
+        event_type="COMMAND_STARTED",
+        command_summary="export GITHUB_TOKEN=ghp_leaked",
+        result_summary="failed ghp_leaked",
+    )
+    payload = build_dashboard_payload(settings, store)
+    dumped = json.dumps(payload["execution_trace"])
+    assert "ghp_" not in dumped
+    assert "execution_trace" in payload
+    assert payload["execution_trace"]["motion_status"] in {
+        "MOVING",
+        "STALLED",
+        "STALE",
+        "IDLE",
+        "REVIEWING",
+    }
+
+
+def test_execution_trace_schema(infra_env):
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    task = store.create_task(issue_number=49, delivery_id="schema", status=TaskStatus.RUNNING)
+    store.try_acquire_lease(49, task.id, owner=f"worker-{task.id}", ttl_seconds=300)
+    store.append_execution_event(
+        task_id=task.id,
+        issue_number=49,
+        generation=None,
+        event_type="GIT_DIFF",
+        metadata={"files_changed": 2, "insertions": 10, "deletions": 3},
+    )
+    store.append_execution_event(
+        task_id=task.id,
+        issue_number=49,
+        generation=None,
+        event_type="TEST_FINISHED",
+        status="pass",
+        metadata={"passed": 5, "failed": 0},
+        command_summary="pytest -q",
+    )
+    payload = build_dashboard_payload(settings, store)
+    trace = payload["execution_trace"]
+    for key in (
+        "motion_status",
+        "current_action",
+        "last_progress_at",
+        "seconds_since_last_progress",
+        "last_heartbeat_at",
+        "seconds_since_last_heartbeat",
+        "recent_files",
+        "latest_test",
+        "git",
+        "events",
+    ):
+        assert key in trace
+    assert trace["git"]["files_changed"] == 2
+    assert trace["latest_test"]["passed"] == 5
+
+
+def test_execution_trace_event_limit(infra_env):
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    task = store.create_task(issue_number=50, delivery_id="limit", status=TaskStatus.RUNNING)
+    store.try_acquire_lease(50, task.id, owner=f"worker-{task.id}", ttl_seconds=300)
+    for i in range(120):
+        store.append_execution_event(
+            task_id=task.id,
+            issue_number=50,
+            generation=None,
+            event_type="COMMAND_STARTED",
+            command_summary=f"echo {i}",
+        )
+    payload = build_dashboard_payload(settings, store)
+    assert len(payload["execution_trace"]["events"]) <= 100
+
+
+def test_dashboard_html_execution_trace_smoke(infra_env):
+    client = TestClient(app)
+    resp = client.get("/autonomous/status")
+    assert resp.status_code == 200
+    assert "实时执行过程" in resp.text
+    assert "trace-terminal" in resp.text
+    assert "3000" in resp.text
+
+
+def test_worker_records_execution_events(infra_env, monkeypatch):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    task = store.create_task(
+        issue_number=51,
+        delivery_id="worker-ev",
+        execution_key="repo#51#gen",
+        status=TaskStatus.QUEUED,
+    )
+    store.try_acquire_lease(51, task.id, owner=f"worker-{task.id}", ttl_seconds=300)
+    worker = Worker(settings, store, repo_root=repo)
+    result = worker.run_task(task, issue_body="deterministic worker test")
+    assert result.status in {TaskStatus.RUNNING, TaskStatus.READY_FOR_REVIEW, TaskStatus.NEEDS_FIX}
+    events = store.list_execution_events(task_id=task.id, limit=50)
+    types = {e.event_type for e in events}
+    assert "TASK_STARTED" in types
+    assert "TEST_STARTED" in types or "COMMAND_STARTED" in types
+
+
+def test_autonomous_status_json_includes_execution_trace(infra_env):
+    client = TestClient(app)
+    resp = client.get("/autonomous/status.json")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "execution_trace" in data
+    assert "motion_status" in data["execution_trace"]
 

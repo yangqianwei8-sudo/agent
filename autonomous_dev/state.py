@@ -46,6 +46,23 @@ class ReviewInvocationStatus(StrEnum):
 
 
 @dataclass
+class ExecutionEventRecord:
+    id: int
+    task_id: int | None
+    issue_number: int | None
+    generation: str | None
+    event_type: str
+    phase: str | None
+    action: str | None
+    file_path: str | None
+    command_summary: str | None
+    result_summary: str | None
+    status: str | None
+    metadata: dict[str, Any] | None
+    created_at: str
+
+
+@dataclass
 class TaskRecord:
     id: int
     issue_number: int
@@ -189,6 +206,25 @@ class StateStore:
                 );
                 INSERT OR IGNORE INTO worker_lock (id, locked) VALUES (1, 0);
                 INSERT OR IGNORE INTO reviewer_lock (id, locked) VALUES (1, 0);
+                CREATE TABLE IF NOT EXISTS execution_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER,
+                    issue_number INTEGER,
+                    generation TEXT,
+                    event_type TEXT NOT NULL,
+                    phase TEXT,
+                    action TEXT,
+                    file_path TEXT,
+                    command_summary TEXT,
+                    result_summary TEXT,
+                    status TEXT,
+                    metadata_json TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_execution_events_task
+                    ON execution_events(task_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_execution_events_created
+                    ON execution_events(created_at DESC);
                 """
             )
             conn.execute(
@@ -621,6 +657,103 @@ class StateStore:
             "task_rows": [dict(r) for r in task_rows],
             "completed_rows": [dict(r) for r in completed_rows],
         }
+
+    def append_execution_event(
+        self,
+        *,
+        task_id: int | None,
+        issue_number: int | None,
+        generation: str | None,
+        event_type: str,
+        phase: str | None = None,
+        action: str | None = None,
+        file_path: str | None = None,
+        command_summary: str | None = None,
+        result_summary: str | None = None,
+        status: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ExecutionEventRecord:
+        now = datetime.now(UTC).isoformat()
+        meta_json = json.dumps(metadata or {}, ensure_ascii=False)
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO execution_events
+                (task_id, issue_number, generation, event_type, phase, action,
+                 file_path, command_summary, result_summary, status, metadata_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    issue_number,
+                    generation,
+                    event_type,
+                    phase,
+                    action,
+                    file_path,
+                    command_summary,
+                    result_summary,
+                    status,
+                    meta_json,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM execution_events WHERE id = last_insert_rowid()"
+            ).fetchone()
+            assert row is not None
+            return self._row_to_execution_event(row)
+
+    def list_execution_events(
+        self,
+        *,
+        task_id: int | None = None,
+        limit: int = 50,
+    ) -> list[ExecutionEventRecord]:
+        with self._read_conn() as conn:
+            if task_id is not None:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM execution_events
+                    WHERE task_id = ?
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (task_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM execution_events
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            return [self._row_to_execution_event(r) for r in rows]
+
+    @staticmethod
+    def _row_to_execution_event(row: sqlite3.Row) -> ExecutionEventRecord:
+        meta_raw = row["metadata_json"]
+        metadata = None
+        if meta_raw:
+            try:
+                metadata = json.loads(meta_raw)
+            except json.JSONDecodeError:
+                metadata = None
+        return ExecutionEventRecord(
+            id=row["id"],
+            task_id=row["task_id"],
+            issue_number=row["issue_number"],
+            generation=row["generation"],
+            event_type=row["event_type"],
+            phase=row["phase"],
+            action=row["action"],
+            file_path=row["file_path"],
+            command_summary=row["command_summary"],
+            result_summary=row["result_summary"],
+            status=row["status"],
+            metadata=metadata,
+            created_at=row["created_at"],
+        )
 
     def recover_stale_lease(self) -> bool:
         now = datetime.now(UTC).isoformat()

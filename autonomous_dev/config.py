@@ -44,6 +44,8 @@ class AutonomousDevSettings(BaseSettings):
     review_max_attempts: int = 5
     review_retry_backoff_seconds: int = 5
     review_recovery_interval_seconds: int = 10
+    autonomous_progress_stale_seconds: int = 120
+    cursor_long_op_grace_seconds: int = 600
 
     @property
     def repo_root(self) -> Path:
