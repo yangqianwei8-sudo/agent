@@ -172,9 +172,12 @@ def _resolve_trace_task(snapshot: dict[str, Any], store: StateStore) -> TaskReco
         if locked_task:
             return locked_task
     current = snapshot.get("current_task")
-    if current and current.status in {TaskStatus.RUNNING, TaskStatus.QUEUED}:
+    if current is not None:
         return current
-    return snapshot.get("primary_task")
+    primary = snapshot.get("primary_task")
+    if primary is not None and primary.status != TaskStatus.FAILED:
+        return primary
+    return None
 
 
 def _task_to_dict(

@@ -578,7 +578,7 @@ class StateStore:
                 SELECT * FROM task_executions
                 WHERE status IN (
                     'queued', 'running', 'ready-for-review', 'product-decision',
-                    'needs-fix', 'failed'
+                    'needs-fix'
                 )
                 ORDER BY id DESC LIMIT 1
                 """
@@ -603,7 +603,8 @@ class StateStore:
             ).fetchone()
             recent_failed = self._row_to_task(failed_row) if failed_row else None
 
-            review_task_id = primary_task.id if primary_task else None
+            focus_task = current_task or primary_task
+            review_task_id = focus_task.id if focus_task else None
             active_review = None
             if review_task_id is not None:
                 review_row = conn.execute(

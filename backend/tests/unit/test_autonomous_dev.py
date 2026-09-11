@@ -2345,6 +2345,51 @@ def test_execution_trace_event_limit(infra_env):
     assert len(payload["execution_trace"]["events"]) <= 100
 
 
+def test_dashboard_trace_prefers_ready_for_review_over_newer_failed(infra_env, monkeypatch):
+    """Regression: newer failed task must not hijack trace for ready-for-review issue."""
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    ready = store.update_task(
+        store.create_task(issue_number=23, delivery_id="ready").id,
+        status=TaskStatus.READY_FOR_REVIEW,
+        commit_sha="abc123def456",
+    )
+    failed = store.create_task(issue_number=1, delivery_id="failed", status=TaskStatus.FAILED)
+    store.update_task(failed.id, error="stale worker lease recovered")
+    store.append_execution_event(
+        task_id=ready.id,
+        issue_number=23,
+        generation=None,
+        event_type="CURSOR_FINISHED",
+        result_summary="done",
+    )
+    store.append_execution_event(
+        task_id=failed.id,
+        issue_number=1,
+        generation=None,
+        event_type="CURSOR_STARTED",
+    )
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard._fetch_issue_labels_bounded",
+        lambda *a, **k: ([], None),
+    )
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard._fetch_main_sha_bounded",
+        lambda *a, **k: (None, None),
+    )
+
+    payload = build_dashboard_payload(settings, store)
+
+    assert payload["current_task"]["issue_number"] == 23
+    assert payload["system_status"] == "REVIEWING"
+    event_types = {e["event_type"] for e in payload["execution_trace"]["events"]}
+    assert "CURSOR_FINISHED" in event_types
+    assert "CURSOR_STARTED" not in event_types
+
+
 def test_dashboard_html_execution_trace_smoke(infra_env):
     client = TestClient(app)
     resp = client.get("/autonomous/status")
