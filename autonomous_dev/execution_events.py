@@ -165,7 +165,10 @@ def _parse_ts(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt
     except ValueError:
         return None
 
@@ -927,6 +930,7 @@ def build_execution_trace(
             "cursor_elapsed_seconds": cursor_elapsed_seconds,
             "cursor_elapsed_display": _format_elapsed(cursor_elapsed_seconds),
             "telemetry_level": telemetry_level.value,
+            "display_timezone": "Asia/Shanghai",
             "recent_files": recent_files,
             "code_changes": code_changes,
             "latest_test": _latest_test_summary(events),

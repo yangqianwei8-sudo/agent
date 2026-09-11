@@ -1808,6 +1808,9 @@ def test_autonomous_status_html_smoke(infra_env):
     resp = client.get("/autonomous/status")
     assert resp.status_code == 200
     assert "实时开发控制台" in resp.text
+    assert "北京时间" in resp.text
+    assert "fmtClock" in resp.text
+    assert "Asia/Shanghai" in resp.text
 
 
 def test_dashboard_json_while_worker_running(infra_env):

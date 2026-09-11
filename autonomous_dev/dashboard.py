@@ -34,7 +34,10 @@ def _parse_ts(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt
     except ValueError:
         return None
 
@@ -504,6 +507,37 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const STATUS_LABELS = { RUNNING: "运行中", REVIEWING: "审查中", WAITING_USER: "等待用户决策", FAILED: "失败", STALE: "运行时过期", IDLE: "空闲" };
     const MOTION_LABELS = { MOVING: "推进中", WAITING: "等待中", REVIEWING: "审查中", STALLED: "疑似卡住", STALE: "失联", IDLE: "空闲", FAILED: "失败" };
 
+    const TIMEZONE = "Asia/Shanghai";
+
+    function fmtClock(iso) {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "—";
+      return d.toLocaleString("zh-CN", {
+        timeZone: TIMEZONE,
+        hour12: false,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+    }
+
+    function fmtTime(iso) {
+      if (!iso) return "—";
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return "—";
+      return d.toLocaleTimeString("zh-CN", {
+        timeZone: TIMEZONE,
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+    }
+
     function esc(s) { return String(s ?? "—").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
     function fmtAge(seconds) { if (seconds == null) return "—"; return `${seconds} 秒前`; }
     function kv(key, value) { return `<div class="kv"><div class="k">${esc(key)}</div><div class="v">${esc(value)}</div></div>`; }
@@ -535,7 +569,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (t.long_running) longNote = ` · Cursor 长任务 ${t.cursor_elapsed_display || "—"} · 细粒度进展${t.telemetry_level === "BOUNDARY_ONLY" ? "暂不可见" : "部分可见"}`;
       document.getElementById("hero-grid").innerHTML = [
         kv("当前文件", t.current_file), kv("当前命令", t.current_command),
-        kv("最后进展", fmtAge(t.seconds_since_last_progress)), kv("Worker 心跳", fmtAge(t.seconds_since_last_heartbeat)),
+        kv("最后进展", `${fmtAge(t.seconds_since_last_progress)} · ${fmtClock(t.last_progress_at)}`),
+        kv("Worker 心跳", `${fmtAge(t.seconds_since_last_heartbeat)} · ${fmtClock(t.last_heartbeat_at)}`),
         kv("运行时长", t.elapsed_display || t.elapsed_seconds), kv("Telemetry", (t.telemetry_level || "—") + longNote),
       ].join("");
     }
@@ -555,21 +590,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById("test-panel").innerHTML = test ? [
         kv("命令", test.command), kv("状态", test.status),
         kv("结果", `${test.passed ?? "—"} passed · ${test.failed ?? "—"} failed · ${test.duration_seconds ?? "—"}s`),
-        kv("最后测试", (test.finished_at || "").slice(11,19) || test.status),
+        kv("最后测试", fmtClock(test.finished_at) || test.status),
       ].join("") : kv("状态", "暂无测试事件");
       document.getElementById("ruff-panel").innerHTML = ruff ? [
-        kv("命令", ruff.command), kv("状态", ruff.status), kv("摘要", ruff.summary || "—"), kv("完成", (ruff.finished_at || "").slice(11,19) || "—"),
+        kv("命令", ruff.command), kv("状态", ruff.status), kv("摘要", ruff.summary || "—"), kv("完成", fmtClock(ruff.finished_at)),
       ].join("") : kv("状态", "暂无 ruff 事件");
       document.getElementById("git-panel").innerHTML = [
         kv("Latest commit", git.latest_commit_sha || "—"), kv("Message", git.latest_commit_message || "—"),
-        kv("Push", `${git.push_status || "—"} · origin/main`), kv("Push 时间", (git.push_at || git.push_time || "—").slice(11,19) || "—"),
+        kv("Push", `${git.push_status || "—"} · origin/main`), kv("Push 时间", fmtClock(git.push_at || git.push_time)),
       ].join("");
     }
 
     function renderTrace(trace) {
       const events = (trace && trace.events) || [];
       const lines = events.slice().reverse().map((e, idx) => {
-        const ts = (e.at || "").slice(11, 19) || "—";
+        const ts = fmtTime(e.at);
         const label = e.display_type || e.event_type || "";
         const detail = [e.file_path, e.command_summary, e.result_summary].filter(Boolean).join("  ");
         const newest = idx === 0 && events.length > lastEventCount ? " newest" : "";
@@ -589,7 +624,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const banner = document.getElementById("status-banner");
       banner.className = `status-banner status-${status}`;
       banner.textContent = `${STATUS_LABELS[status] || status} (${status})`;
-      document.getElementById("last-updated").textContent = `最后更新: ${data.last_updated || "—"}`;
+      document.getElementById("last-updated").textContent = `最后更新: ${fmtClock(data.last_updated)} (北京时间)`;
 
       const rt = data.runtime_evidence || {};
       const degradedEl = document.getElementById("degraded");
@@ -648,12 +683,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const activityEl = document.getElementById("activity");
       activityEl.innerHTML = (data.recent_activity || []).map(
-        (a) => `<li><span class="muted">${a.at || ""}</span> — ${a.summary || a.kind}</li>`
+        (a) => `<li><span class="muted">${fmtClock(a.at)}</span> — ${a.summary || a.kind}</li>`
       ).join("");
 
       const completedEl = document.getElementById("completed");
       completedEl.innerHTML = (data.recent_completed || []).map(
-        (c) => `<tr><td>#${c.issue_number}</td><td>${c.verdict || "—"}</td><td>${c.commit_sha || "—"}</td><td>${c.completed_at || "—"}</td></tr>`
+        (c) => `<tr><td>#${c.issue_number}</td><td>${c.verdict || "—"}</td><td>${c.commit_sha || "—"}</td><td>${fmtClock(c.completed_at)}</td></tr>`
       ).join("");
 
       document.getElementById("fetch-error").textContent = "";
