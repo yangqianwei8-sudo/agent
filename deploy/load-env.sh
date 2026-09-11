@@ -34,6 +34,15 @@ for key in "${!preserved[@]}"; do
   fi
 done
 
+# DevBox runtime version — align healthz/status with git HEAD when not injected by K8s.
+if [[ -z "${GIT_SHA:-}" ]] && command -v git >/dev/null 2>&1; then
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  if git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    export GIT_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+    export IMAGE_TAG="${IMAGE_TAG:-$GIT_SHA}"
+  fi
+fi
+
 # DevBox public ingress port — must match Sealos Network container port (see .sealos/preview.yaml).
 if [[ -n "${DEVBOX_JWT_SECRET:-}" ]]; then
   export APP_PORT=8080
