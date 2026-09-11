@@ -14,6 +14,7 @@ PUBLIC_URL="${AUTONOMOUS_WEBHOOK_PUBLIC_URL:-https://ynboesvphjna.sealosbja.site
 WEBHOOK_URL="${PUBLIC_URL%/}/webhooks/github"
 SECRET="${GITHUB_WEBHOOK_SECRET:-}"
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+export WEBHOOK_URL SECRET
 
 if [[ -z "$SECRET" ]]; then
   echo "ERROR: GITHUB_WEBHOOK_SECRET not set" >&2
