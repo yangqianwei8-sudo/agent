@@ -41,6 +41,9 @@ class AutonomousDevSettings(BaseSettings):
     reviewer_base_url: str = ""
     reviewer_max_retries: int = 2
     reviewer_lease_ttl_seconds: int = 300
+    review_max_attempts: int = 5
+    review_retry_backoff_seconds: int = 5
+    review_recovery_interval_seconds: int = 10
 
     @property
     def repo_root(self) -> Path:

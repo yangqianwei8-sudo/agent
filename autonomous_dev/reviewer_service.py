@@ -11,6 +11,11 @@ from pathlib import Path
 
 import httpx
 
+from autonomous_dev.acceptance_evidence import (
+    format_evidence_for_reviewer,
+    generate_acceptance_report,
+    load_report,
+)
 from autonomous_dev.config import AutonomousDevSettings
 
 logger = logging.getLogger(__name__)
@@ -190,7 +195,7 @@ class ReviewerService:
         commit_sha: str,
     ) -> ReviewContext:
         diff = self._git_diff(commit_sha)
-        tests = self._gather_test_evidence()
+        tests = self._gather_test_evidence(commit_sha)
         return ReviewContext(
             issue_number=issue_number,
             issue_body=issue_body,
@@ -223,17 +228,21 @@ class ReviewerService:
         except OSError:
             return ""
 
-    def _gather_test_evidence(self) -> str:
+    def _gather_test_evidence(self, commit_sha: str) -> str:
         if self.settings.autonomous_worker_mode == "deterministic":
-            return "pytest backend/tests/test_health.py -q: passed (deterministic)"
-        try:
-            proc = subprocess.run(
-                ["git", "log", "-1", "--format=%s", "HEAD"],
-                cwd=self.repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
+            report = load_report(self.repo_root, commit_sha)
+            if report is None:
+                report = generate_acceptance_report(self.repo_root, commit_sha)
+            return format_evidence_for_reviewer(
+                commit_sha=commit_sha,
+                diff=self._git_diff(commit_sha),
+                report=report,
             )
-            return f"latest commit message: {proc.stdout.strip()}"
-        except OSError:
-            return "test evidence unavailable"
+        report = load_report(self.repo_root, commit_sha)
+        if report is None:
+            report = generate_acceptance_report(self.repo_root, commit_sha)
+        return format_evidence_for_reviewer(
+            commit_sha=commit_sha,
+            diff=self._git_diff(commit_sha),
+            report=report,
+        )

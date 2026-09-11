@@ -80,6 +80,9 @@ class ReviewInvocationRecord:
     error: str | None
     created_at: str
     completed_at: str | None
+    attempt_count: int = 0
+    next_retry_at: str | None = None
+    started_at: str | None = None
 
 
 class StateStore:
@@ -151,6 +154,9 @@ class StateStore:
                     error TEXT,
                     created_at TEXT NOT NULL,
                     completed_at TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at TEXT,
+                    started_at TEXT,
                     UNIQUE(task_id, commit_sha)
                 );
                 CREATE TABLE IF NOT EXISTS reviewer_lock (
@@ -169,6 +175,16 @@ class StateStore:
                 "CREATE INDEX IF NOT EXISTS idx_review_invocations_task "
                 "ON review_invocations(task_id, commit_sha)"
             )
+            inv_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(review_invocations)").fetchall()
+            }
+            for col, ddl in (
+                ("attempt_count", "ALTER TABLE review_invocations ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"),
+                ("next_retry_at", "ALTER TABLE review_invocations ADD COLUMN next_retry_at TEXT"),
+                ("started_at", "ALTER TABLE review_invocations ADD COLUMN started_at TEXT"),
+            ):
+                if col not in inv_cols:
+                    conn.execute(ddl)
             cols = {row[1] for row in conn.execute("PRAGMA table_info(task_executions)").fetchall()}
             if "execution_key" not in cols:
                 conn.execute("ALTER TABLE task_executions ADD COLUMN execution_key TEXT")
@@ -599,6 +615,11 @@ class StateStore:
         status: ReviewInvocationStatus | None = None,
         verdict: ReviewVerdict | None = None,
         error: str | None = None,
+        attempt_count: int | None = None,
+        next_retry_at: str | None = None,
+        started_at: str | None = None,
+        clear_next_retry: bool = False,
+        clear_started_at: bool = False,
     ) -> ReviewInvocationRecord:
         now = datetime.now(UTC).isoformat()
         with self._lock, self._conn() as conn:
@@ -611,17 +632,42 @@ class StateStore:
             new_status = status.value if status else row["status"]
             new_verdict = verdict.value if verdict else row["verdict"]
             new_error = error if error is not None else row["error"]
+            new_attempt = attempt_count if attempt_count is not None else row["attempt_count"]
+            if clear_next_retry:
+                new_next_retry = None
+            elif next_retry_at is not None:
+                new_next_retry = next_retry_at
+            else:
+                new_next_retry = row["next_retry_at"]
+            if clear_started_at:
+                new_started_at = None
+            elif started_at is not None:
+                new_started_at = started_at
+            else:
+                new_started_at = row["started_at"]
             completed_at = now if status in {
                 ReviewInvocationStatus.COMPLETED,
                 ReviewInvocationStatus.FAILED,
             } else row["completed_at"]
+            if status == ReviewInvocationStatus.PENDING:
+                completed_at = None
             conn.execute(
                 """
                 UPDATE review_invocations
-                SET status = ?, verdict = ?, error = ?, completed_at = ?
+                SET status = ?, verdict = ?, error = ?, completed_at = ?,
+                    attempt_count = ?, next_retry_at = ?, started_at = ?
                 WHERE invocation_id = ?
                 """,
-                (new_status, new_verdict, new_error, completed_at, invocation_id),
+                (
+                    new_status,
+                    new_verdict,
+                    new_error,
+                    completed_at,
+                    new_attempt,
+                    new_next_retry,
+                    new_started_at,
+                    invocation_id,
+                ),
             )
             updated = conn.execute(
                 "SELECT * FROM review_invocations WHERE invocation_id = ?",
@@ -629,6 +675,82 @@ class StateStore:
             ).fetchone()
             assert updated is not None
             return self._row_to_review_invocation(updated)
+
+    def reset_review_for_retry(self, invocation_id: str) -> ReviewInvocationRecord:
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE review_invocations
+                SET status = ?, error = NULL, completed_at = NULL,
+                    next_retry_at = NULL, started_at = NULL
+                WHERE invocation_id = ?
+                """,
+                (ReviewInvocationStatus.PENDING.value, invocation_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM review_invocations WHERE invocation_id = ?",
+                (invocation_id,),
+            ).fetchone()
+            assert row is not None
+            return self._row_to_review_invocation(row)
+
+    def is_review_retryable(
+        self,
+        record: ReviewInvocationRecord,
+        *,
+        max_attempts: int,
+    ) -> bool:
+        if record.status != ReviewInvocationStatus.FAILED:
+            return False
+        if record.attempt_count >= max_attempts:
+            return False
+        if record.next_retry_at is None:
+            return True
+        return record.next_retry_at <= datetime.now(UTC).isoformat()
+
+    def recover_stale_running_reviews(self, *, older_than_seconds: int) -> list[str]:
+        cutoff = (datetime.now(UTC) - timedelta(seconds=older_than_seconds)).isoformat()
+        recovered: list[str] = []
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT invocation_id FROM review_invocations
+                WHERE status = ?
+                  AND started_at IS NOT NULL
+                  AND started_at < ?
+                """,
+                (ReviewInvocationStatus.RUNNING.value, cutoff),
+            ).fetchall()
+            for row in rows:
+                conn.execute(
+                    """
+                    UPDATE review_invocations
+                    SET status = ?, started_at = NULL
+                    WHERE invocation_id = ?
+                    """,
+                    (ReviewInvocationStatus.PENDING.value, row["invocation_id"]),
+                )
+                recovered.append(row["invocation_id"])
+        return recovered
+
+    def get_due_review_invocations(self, *, max_attempts: int) -> list[ReviewInvocationRecord]:
+        now = datetime.now(UTC).isoformat()
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM review_invocations
+                WHERE status = ?
+                   OR (status = ? AND attempt_count < ? AND (next_retry_at IS NULL OR next_retry_at <= ?))
+                ORDER BY created_at ASC
+                """,
+                (
+                    ReviewInvocationStatus.PENDING.value,
+                    ReviewInvocationStatus.FAILED.value,
+                    max_attempts,
+                    now,
+                ),
+            ).fetchall()
+            return [self._row_to_review_invocation(r) for r in rows]
 
     def recover_stale_reviewer_lock(self) -> bool:
         now = datetime.now(UTC).isoformat()
@@ -706,6 +828,7 @@ class StateStore:
 
     @staticmethod
     def _row_to_review_invocation(row: sqlite3.Row) -> ReviewInvocationRecord:
+        keys = row.keys()
         verdict_raw = row["verdict"]
         return ReviewInvocationRecord(
             invocation_id=row["invocation_id"],
@@ -717,6 +840,9 @@ class StateStore:
             error=row["error"],
             created_at=row["created_at"],
             completed_at=row["completed_at"],
+            attempt_count=int(row["attempt_count"]) if "attempt_count" in keys else 0,
+            next_retry_at=row["next_retry_at"] if "next_retry_at" in keys else None,
+            started_at=row["started_at"] if "started_at" in keys else None,
         )
 
     @staticmethod

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-import threading
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from autonomous_dev.config import AutonomousDevSettings
 from autonomous_dev.github_client import (
@@ -16,6 +16,7 @@ from autonomous_dev.github_client import (
 from autonomous_dev.product_decision import ProductDecisionPacket
 from autonomous_dev.reviewer_service import ReviewerCredentialError, ReviewerService
 from autonomous_dev.state import (
+    ReviewInvocationRecord,
     ReviewInvocationStatus,
     ReviewVerdict,
     StateStore,
@@ -24,8 +25,6 @@ from autonomous_dev.state import (
 )
 
 logger = logging.getLogger(__name__)
-
-_executor_lock = threading.Lock()
 
 
 class ReviewExecutor:
@@ -55,9 +54,27 @@ class ReviewExecutor:
             ReviewInvocationStatus.PENDING,
             ReviewInvocationStatus.RUNNING,
         }:
+            self._kick_review_worker()
             return {
                 "status": "already_scheduled",
                 "invocation_id": existing.invocation_id,
+            }
+        if existing and existing.status == ReviewInvocationStatus.FAILED:
+            if self.store.is_review_retryable(
+                existing,
+                max_attempts=self.settings.review_max_attempts,
+            ):
+                self.store.reset_review_for_retry(existing.invocation_id)
+                self._kick_review_worker()
+                return {
+                    "status": "retry_scheduled",
+                    "invocation_id": existing.invocation_id,
+                    "attempt_count": str(existing.attempt_count),
+                }
+            return {
+                "status": "failed_permanent",
+                "invocation_id": existing.invocation_id,
+                "error": existing.error or "max attempts exceeded",
             }
 
         invocation_id = str(uuid.uuid4())
@@ -74,29 +91,21 @@ class ReviewExecutor:
                     "verdict": record.verdict.value if record.verdict else "",
                     "invocation_id": record.invocation_id,
                 }
+            if record.status == ReviewInvocationStatus.FAILED:
+                if self.store.is_review_retryable(
+                    record,
+                    max_attempts=self.settings.review_max_attempts,
+                ):
+                    self.store.reset_review_for_retry(record.invocation_id)
+                    self._kick_review_worker()
+                    return {
+                        "status": "retry_scheduled",
+                        "invocation_id": record.invocation_id,
+                    }
+            self._kick_review_worker()
             return {"status": "already_scheduled", "invocation_id": record.invocation_id}
 
-        owner = f"reviewer-{invocation_id[:8]}"
-        if not self.store.try_acquire_reviewer_lock(
-            task.id,
-            owner=owner,
-            ttl_seconds=self.settings.reviewer_lease_ttl_seconds,
-        ):
-            return {"status": "blocked", "reason": "reviewer lock held"}
-
-        def _run() -> None:
-            with _executor_lock:
-                try:
-                    self._execute_review(task, commit_sha, invocation_id)
-                finally:
-                    self.store.release_reviewer_lock(owner)
-
-        thread = threading.Thread(
-            target=_run,
-            name=f"reviewer-{task.id}",
-            daemon=True,
-        )
-        thread.start()
+        self._kick_review_worker()
         return {"status": "scheduled", "invocation_id": invocation_id}
 
     def run_review_sync(
@@ -118,9 +127,35 @@ class ReviewExecutor:
         if not self.store.try_acquire_reviewer_lock(task.id, owner=owner, ttl_seconds=300):
             return {"status": "blocked"}
         try:
-            return self._execute_review(task, commit_sha, invocation_id, issue_body=issue_body)
+            invocation = self.store.get_review_invocation(task.id, commit_sha)
+            assert invocation is not None
+            return self.execute_review_invocation(
+                task,
+                invocation,
+                issue_body=issue_body or None,
+            )
         finally:
             self.store.release_reviewer_lock(owner)
+
+    def execute_review_invocation(
+        self,
+        task: TaskRecord,
+        invocation: ReviewInvocationRecord,
+        *,
+        issue_body: str | None = None,
+    ) -> dict[str, str]:
+        return self._execute_review(
+            task,
+            invocation.commit_sha,
+            invocation.invocation_id,
+            issue_body=issue_body,
+            attempt_count=invocation.attempt_count,
+        )
+
+    def _kick_review_worker(self) -> None:
+        from autonomous_dev.review_worker import schedule_review_processing
+
+        schedule_review_processing(self.settings, self.store)
 
     def _execute_review(
         self,
@@ -129,10 +164,15 @@ class ReviewExecutor:
         invocation_id: str,
         *,
         issue_body: str | None = None,
+        attempt_count: int = 0,
     ) -> dict[str, str]:
+        now = datetime.now(UTC).isoformat()
         self.store.update_review_invocation(
             invocation_id,
             status=ReviewInvocationStatus.RUNNING,
+            started_at=now,
+            attempt_count=attempt_count + 1,
+            clear_next_retry=True,
         )
         try:
             if issue_body is None:
@@ -148,25 +188,63 @@ class ReviewExecutor:
                 invocation_id,
                 status=ReviewInvocationStatus.COMPLETED,
                 verdict=ReviewVerdict(result.verdict),
+                clear_started_at=True,
             )
             self._post_verdict_comment(task.issue_number, result.verdict, result.reason, invocation_id)
-            return {"status": "completed", "verdict": result.verdict, "invocation_id": invocation_id}
+            return {
+                "status": "completed",
+                "verdict": result.verdict,
+                "invocation_id": invocation_id,
+            }
         except ReviewerCredentialError as exc:
             self.store.update_review_invocation(
                 invocation_id,
                 status=ReviewInvocationStatus.FAILED,
                 error=str(exc)[:2000],
+                attempt_count=self.settings.review_max_attempts,
+                clear_started_at=True,
             )
             self._post_credential_blocker(task.issue_number, str(exc))
             return {"status": "credential_blocker", "error": str(exc)}
         except Exception as exc:  # noqa: BLE001 — review boundary
-            logger.exception("review failed task=%s", task.id)
+            logger.exception("review failed task=%s invocation=%s", task.id, invocation_id)
+            return self._mark_transient_failure(invocation_id, attempt_count, exc)
+
+    def _mark_transient_failure(
+        self,
+        invocation_id: str,
+        attempt_count: int,
+        exc: Exception,
+    ) -> dict[str, str]:
+        next_attempt = attempt_count + 1
+        error = str(exc)[:2000]
+        if next_attempt >= self.settings.review_max_attempts:
             self.store.update_review_invocation(
                 invocation_id,
                 status=ReviewInvocationStatus.FAILED,
-                error=str(exc)[:2000],
+                error=error,
+                attempt_count=next_attempt,
+                clear_started_at=True,
             )
-            return {"status": "failed", "error": str(exc)[:500]}
+            return {"status": "failed", "error": error[:500], "retryable": "false"}
+
+        backoff = self.settings.review_retry_backoff_seconds * next_attempt
+        next_retry = (datetime.now(UTC) + timedelta(seconds=backoff)).isoformat()
+        self.store.update_review_invocation(
+            invocation_id,
+            status=ReviewInvocationStatus.FAILED,
+            error=error,
+            attempt_count=next_attempt,
+            next_retry_at=next_retry,
+            clear_started_at=True,
+        )
+        self._kick_review_worker()
+        return {
+            "status": "failed",
+            "error": error[:500],
+            "retryable": "true",
+            "next_retry_at": next_retry,
+        }
 
     def _apply_verdict(self, task: TaskRecord, commit_sha: str, verdict: str, result) -> None:
         if verdict == "PASS":

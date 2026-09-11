@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import os
 import subprocess
 import sys
@@ -288,6 +287,93 @@ def main() -> int:
                 "PASS"
                 if any("【需要产品决策】" in c for n, c in mock.comments if n == pd_num)
                 else "FAIL"
+            )
+
+            retry_num = 504
+            retry_body = f"{REVIEWER_ACCEPTANCE_MARKER}\nTransient retry acceptance."
+            retry_task = store.create_task(issue_number=retry_num, delivery_id=f"p02-retry-{uuid.uuid4()}")
+            store.update_task(
+                retry_task.id,
+                status=TaskStatus.READY_FOR_REVIEW,
+                commit_sha="retry000000001",
+            )
+            mock.bodies[retry_num] = retry_body
+            retry_calls = {"count": 0}
+            real_review = executor._reviewer.review
+
+            def _flaky_review(ctx, *, invocation_id=None):
+                retry_calls["count"] += 1
+                if retry_calls["count"] == 1:
+                    raise RuntimeError("simulated transient reviewer API 503")
+                return real_review(ctx, invocation_id=invocation_id)
+
+            executor._reviewer.review = _flaky_review
+            first_retry = executor.run_review_sync(
+                retry_task,
+                commit_sha="retry000000001",
+                issue_body=retry_body,
+            )
+            retry_inv = store.get_review_invocation(retry_task.id, "retry000000001")
+            store.update_review_invocation(
+                retry_inv.invocation_id,
+                next_retry_at="2000-01-01T00:00:00+00:00",
+            )
+            from autonomous_dev.review_worker import process_due_reviews
+
+            reset_autonomous_singletons()
+            retry_results = process_due_reviews(settings, store)
+            retry_inv2 = store.get_review_invocation(retry_task.id, "retry000000001")
+            retry_comments = [
+                c for n, c in mock.comments if n == retry_num and "Reviewer Verdict" in c
+            ]
+            results["RETRY_transient_fail"] = (
+                "PASS" if first_retry.get("status") == "failed" else "FAIL"
+            )
+            results["RETRY_auto_recovery"] = (
+                "PASS" if any(r.get("verdict") == "PASS" for r in retry_results) else "FAIL"
+            )
+            results["RETRY_single_verdict"] = "PASS" if len(retry_comments) == 1 else "FAIL"
+            results["RETRY_completed_once"] = (
+                "PASS"
+                if retry_inv2 and retry_inv2.status == ReviewInvocationStatus.COMPLETED
+                else "FAIL"
+            )
+
+            restart_num = 505
+            restart_body = f"{REVIEWER_ACCEPTANCE_MARKER}\nRestart recovery acceptance."
+            restart_task = store.create_task(
+                issue_number=restart_num,
+                delivery_id=f"p02-restart-{uuid.uuid4()}",
+            )
+            store.update_task(
+                restart_task.id,
+                status=TaskStatus.READY_FOR_REVIEW,
+                commit_sha="restart0000001",
+            )
+            mock.bodies[restart_num] = restart_body
+            restart_inv_id = str(uuid.uuid4())
+            store.create_review_invocation(
+                invocation_id=restart_inv_id,
+                task_id=restart_task.id,
+                issue_number=restart_num,
+                commit_sha="restart0000001",
+            )
+            store.update_review_invocation(
+                restart_inv_id,
+                status=ReviewInvocationStatus.RUNNING,
+                started_at="2000-01-01T00:00:00+00:00",
+                attempt_count=1,
+            )
+            reset_autonomous_singletons()
+            restart_results = process_due_reviews(settings, store)
+            restart_inv = store.get_review_invocation(restart_task.id, "restart0000001")
+            results["RESTART_stale_running"] = (
+                "PASS"
+                if restart_inv and restart_inv.status == ReviewInvocationStatus.COMPLETED
+                else "FAIL"
+            )
+            results["RESTART_single_completion"] = (
+                "PASS" if any(r.get("verdict") == "PASS" for r in restart_results) else "FAIL"
             )
 
     finally:

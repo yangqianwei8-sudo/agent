@@ -59,7 +59,12 @@ class OpenAIApiReviewAdapter(ReviewTriggerAdapter):
                 f"commit={commit_sha} status={outcome.get('status')}"
             )
             logger.info(detail)
-            triggered = outcome.get("status") in {"scheduled", "idempotent", "already_scheduled"}
+            triggered = outcome.get("status") in {
+                "scheduled",
+                "idempotent",
+                "already_scheduled",
+                "retry_scheduled",
+            }
             return ReviewTriggerResult(triggered=triggered, adapter="openai_api", detail=detail)
         except ReviewerCredentialError as exc:
             detail = f"reviewer credential blocker: {exc}"

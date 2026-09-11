@@ -42,8 +42,11 @@ def _get_router() -> TaskRouter:
 
 def reset_autonomous_singletons() -> None:
     global _store, _router
+    from autonomous_dev.review_worker import reset_review_worker_singleton
+
     _store = None
     _router = None
+    reset_review_worker_singleton()
 
 
 @router.get("/healthz")

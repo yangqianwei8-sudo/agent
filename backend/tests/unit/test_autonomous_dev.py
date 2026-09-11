@@ -856,3 +856,159 @@ def test_reviewer_service_deterministic_pass(infra_env):
     )
     result = svc.review(ctx)
     assert result.verdict == "PASS"
+
+
+def test_reviewer_evidence_includes_pytest_and_ruff(infra_env, monkeypatch: pytest.MonkeyPatch):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    svc = ReviewerService(settings, repo_root=repo)
+
+    def fake_report(root, commit_sha, *, force=False):
+        return {
+            "commit_sha": commit_sha,
+            "generated_at": "2026-09-11T00:00:00Z",
+            "source": "test",
+            "pytest_focused": {"passed": True, "command": "pytest focused", "output_tail": "ok"},
+            "pytest_full": {"passed": True, "command": "pytest -q", "output_tail": "ok"},
+            "ruff": {"passed": True, "command": "ruff check .", "output_tail": "ok"},
+            "secret_scan": {"passed": True, "findings": []},
+            "overall_passed": True,
+        }
+
+    monkeypatch.setattr(
+        "autonomous_dev.reviewer_service.generate_acceptance_report",
+        fake_report,
+    )
+    monkeypatch.setattr("autonomous_dev.reviewer_service.load_report", lambda *a, **k: None)
+    evidence = svc._gather_test_evidence("abc123def456")
+    assert "pytest_focused" in evidence
+    assert "ruff" in evidence
+    assert "secret_scan" in evidence
+    assert "abc123def456" in evidence
+
+
+def test_failed_review_becomes_retryable(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    repo, db = infra_env
+    monkeypatch.setenv("REVIEW_RETRY_BACKOFF_SECONDS", "0")
+    monkeypatch.setattr(
+        "autonomous_dev.review_worker.schedule_review_processing",
+        lambda *args, **kwargs: None,
+    )
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    task = store.create_task(issue_number=30, delivery_id="retry-fail")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="retry1234567")
+    invocation_id = "inv-retry-fail"
+    store.create_review_invocation(
+        invocation_id=invocation_id,
+        task_id=task.id,
+        issue_number=30,
+        commit_sha="retry1234567",
+    )
+    store.update_review_invocation(
+        invocation_id,
+        status=ReviewInvocationStatus.FAILED,
+        error="transient API 503",
+        attempt_count=1,
+        next_retry_at="2000-01-01T00:00:00+00:00",
+    )
+    executor = ReviewExecutor(settings, store)
+    outcome = executor.schedule_review(task, commit_sha="retry1234567")
+    assert outcome["status"] == "retry_scheduled"
+    inv = store.get_review_invocation(task.id, "retry1234567")
+    assert inv is not None
+    assert inv.status == ReviewInvocationStatus.PENDING
+
+
+def test_transient_failure_retries_to_single_verdict(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    repo, db = infra_env
+    monkeypatch.setenv("REVIEW_RETRY_BACKOFF_SECONDS", "0")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok\n", encoding="utf-8")
+    task = store.create_task(issue_number=31, delivery_id="transient-retry")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="trans12345678")
+    body = f"{REVIEWER_ACCEPTANCE_MARKER}\nTransient retry test."
+    _mock_github_client.bodies[31] = body
+
+    calls = {"count": 0}
+    real_review = ReviewerService.review
+
+    def flaky_review(self, ctx, *, invocation_id=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("simulated transient reviewer API 503")
+        return real_review(self, ctx, invocation_id=invocation_id)
+
+    reviewer = ReviewerService(settings, repo_root=repo)
+    monkeypatch.setattr(reviewer, "review", flaky_review.__get__(reviewer, ReviewerService))
+    executor = ReviewExecutor(settings, store, reviewer=reviewer)
+
+    first = executor.run_review_sync(task, commit_sha="trans12345678", issue_body=body)
+    assert first["status"] == "failed"
+    assert first.get("retryable") == "true"
+    inv = store.get_review_invocation(task.id, "trans12345678")
+    assert inv is not None
+    assert inv.status == ReviewInvocationStatus.FAILED
+
+    store.update_review_invocation(
+        inv.invocation_id,
+        next_retry_at="2000-01-01T00:00:00+00:00",
+    )
+    reset_autonomous_singletons()
+    from autonomous_dev.review_worker import process_due_reviews
+
+    results = process_due_reviews(settings, store)
+    assert any(r.get("verdict") == "PASS" for r in results)
+    inv2 = store.get_review_invocation(task.id, "trans12345678")
+    assert inv2 is not None
+    assert inv2.status == ReviewInvocationStatus.COMPLETED
+    verdict_comments = [
+        c for n, c in _mock_github_client.comments if n == 31 and "Reviewer Verdict" in c
+    ]
+    assert len(verdict_comments) == 1
+
+
+def test_stale_running_review_recovered(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok\n", encoding="utf-8")
+    task = store.create_task(issue_number=32, delivery_id="stale-running")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="stale123456789")
+    body = f"{REVIEWER_ACCEPTANCE_MARKER}\nStale recovery test."
+    _mock_github_client.bodies[32] = body
+    invocation_id = "inv-stale-running"
+    store.create_review_invocation(
+        invocation_id=invocation_id,
+        task_id=task.id,
+        issue_number=32,
+        commit_sha="stale123456789",
+    )
+    store.update_review_invocation(
+        invocation_id,
+        status=ReviewInvocationStatus.RUNNING,
+        started_at="2000-01-01T00:00:00+00:00",
+        attempt_count=1,
+    )
+    from autonomous_dev.review_worker import process_due_reviews
+
+    reset_autonomous_singletons()
+    results = process_due_reviews(settings, store)
+    assert results
+    inv = store.get_review_invocation(task.id, "stale123456789")
+    assert inv is not None
+    assert inv.status == ReviewInvocationStatus.COMPLETED
+    assert inv.verdict == ReviewVerdict.PASS

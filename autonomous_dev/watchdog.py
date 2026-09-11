@@ -51,12 +51,21 @@ def stop_watchdog() -> None:
 
 def _loop() -> None:
     settings = get_autonomous_settings()
-    interval = settings.watchdog_interval_seconds
-    while not _stop.wait(interval):
+    review_interval = max(1, settings.review_recovery_interval_seconds)
+    watchdog_interval = settings.watchdog_interval_seconds
+    elapsed = 0
+    while not _stop.wait(review_interval):
+        elapsed += review_interval
         try:
             _tick()
         except Exception:
             logger.exception("watchdog tick failed")
+        if elapsed >= watchdog_interval:
+            elapsed = 0
+            try:
+                _tick_full_scan(settings)
+            except Exception:
+                logger.exception("watchdog full scan failed")
 
 
 def _tick() -> None:
@@ -65,6 +74,16 @@ def _tick() -> None:
     if store.recover_stale_lease():
         logger.warning("watchdog recovered stale worker lease")
 
+    from autonomous_dev.review_worker import process_due_reviews
+
+    try:
+        process_due_reviews(settings, store)
+    except Exception:
+        logger.exception("watchdog review recovery failed")
+
+
+def _tick_full_scan(settings) -> None:
+    store = StateStore(settings.state_db_path)
     token = resolve_github_token()
     if not token:
         logger.debug("watchdog skip: no GitHub token")
