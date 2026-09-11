@@ -21,3 +21,10 @@ spec:
                 name: lawyer-agent-orchestrator
                 port:
                   number: 8000
+          - path: /autonomous/status
+            pathType: Prefix
+            backend:
+              service:
+                name: lawyer-agent-orchestrator
+                port:
+                  number: 8000
