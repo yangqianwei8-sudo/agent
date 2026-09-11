@@ -80,9 +80,9 @@ python3.11 -m venv .venv
 | `WORKER_HEARTBEAT_INTERVAL_SECONDS` | Lease heartbeat interval (default 30) |
 | `WATCHDOG_INTERVAL_SECONDS` | Hourly fallback scan interval (default 3600) |
 | `REVIEW_WATCHDOG_STALE_SECONDS` | Re-trigger review handoff after this age (default 3600) |
-| `OPENAI_API_KEY` | Independent reviewer API key (falls back to `LLM_API_KEY`) |
-| `REVIEWER_MODEL` | Reviewer model (default `gpt-4o-mini` or `LLM_MODEL`) |
-| `REVIEWER_BASE_URL` | Reviewer API base URL (default OpenAI or `LLM_BASE_URL`) |
+| `OPENAI_API_KEY` | Independent reviewer API key (reviewer-only; does **not** fall back to `LLM_API_KEY`) |
+| `REVIEWER_MODEL` | Reviewer model (default `gpt-4o-mini`) |
+| `REVIEWER_BASE_URL` | Reviewer API base URL (default `https://api.openai.com/v1`) |
 | `REVIEWER_LEASE_TTL_SECONDS` | Reviewer lock TTL (default 300) |
 
 Never commit `.env`. **Do not** leave `GITHUB_TOKEN=` or `CURSOR_API_KEY=` empty in `.env` — empty values overwrite secrets injected by Sealos/DevBox.
@@ -215,7 +215,7 @@ Primary path: push webhook → `ready-for-review` → `OpenAIApiReviewAdapter` �
 - Reviewer lock prevents concurrent reviews on same task
 - Idempotent replay on duplicate push deliveries
 - Watchdog fallback re-schedules stale reviews (hourly only)
-- Credential blocker: missing `OPENAI_API_KEY`/`LLM_API_KEY` → fail closed, no Cursor substitution
+- Credential blocker: missing `OPENAI_API_KEY` → fail closed; `LLM_API_KEY` (worker) does **not** substitute reviewer
 
 Verdicts: `PASS` (seal/close), `FAIL` (repair issue + `current-task`), `PRODUCT_DECISION` (Chinese packet, halt).
 

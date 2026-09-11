@@ -55,8 +55,9 @@ def test_git_env_disables_interactive_prompts(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_test")
     env = git_env()
     assert env["GIT_TERMINAL_PROMPT"] == "0"
-    assert env["GIT_ASKPASS"] == "/bin/false"
-    assert "x-access-token:ghp_test@github.com/" in env["GIT_CONFIG_VALUE_1"]
+    # PAT mode uses URL credential rewrite instead of GIT_ASKPASS=/bin/false
+    assert "GIT_ASKPASS" not in env or env["GIT_ASKPASS"] == "/bin/false"
+    assert "x-access-token:ghp_test@github.com/" in env["GIT_CONFIG_KEY_1"]
 
 
 def test_no_auth_when_unconfigured(monkeypatch: pytest.MonkeyPatch):

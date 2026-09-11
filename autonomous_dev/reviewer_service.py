@@ -65,8 +65,8 @@ class ReviewerService:
         creds = self.settings.resolve_reviewer_credentials()
         if creds is None:
             raise ReviewerCredentialError(
-                "OPENAI_API_KEY (or LLM_API_KEY) required for independent reviewer — "
-                "credential blocker; will not substitute Cursor as reviewer"
+                "OPENAI_API_KEY required for independent reviewer — "
+                "credential blocker; will not substitute Cursor or worker LLM as reviewer"
             )
         return self._openai_review(ctx, inv_id, creds)
 

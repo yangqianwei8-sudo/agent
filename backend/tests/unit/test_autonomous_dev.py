@@ -800,6 +800,18 @@ def test_openai_adapter_credential_blocker(infra_env, monkeypatch: pytest.Monkey
     assert "credential blocker" in result.detail.lower()
 
 
+def test_llm_api_key_does_not_configure_reviewer(infra_env, monkeypatch: pytest.MonkeyPatch):
+    """Worker LLM credentials must not substitute the independent OpenAI reviewer."""
+    repo, db = infra_env
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("LLM_API_KEY", "sk-test-worker-only-key")
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-chat")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    assert settings.resolve_reviewer_credentials() is None
+
+
 def test_openai_adapter_schedules_in_deterministic_mode(infra_env):
     repo, db = infra_env
     settings = AutonomousDevSettings()

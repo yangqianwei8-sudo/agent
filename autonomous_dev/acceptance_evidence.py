@@ -61,6 +61,7 @@ def _run_cmd(args: list[str], *, cwd: Path, timeout: int = 600) -> dict[str, Any
         return {
             "command": " ".join(args),
             "exit_code": proc.returncode,
+            "output": output,
             "output_tail": output[-8000:],
             "passed": proc.returncode == 0,
         }
@@ -171,8 +172,8 @@ def format_evidence_for_reviewer(
     lines = [
         f"commit_sha: {commit_sha}",
         "",
-        "--- diff (truncated) ---",
-        diff[:12000],
+        "--- diff (full) ---",
+        diff,
         "",
     ]
     if report is None:
@@ -194,8 +195,8 @@ def format_evidence_for_reviewer(
         lines.append(f"--- {key} ---")
         lines.append(f"passed: {section.get('passed')}")
         lines.append(f"command: {section.get('command', section.get('findings', ''))}")
-        tail = section.get("output_tail") or section.get("findings")
-        if tail:
-            lines.append(str(tail)[:3000])
+        full = section.get("output") or section.get("output_tail") or section.get("findings")
+        if full:
+            lines.append(str(full))
         lines.append("")
     return "\n".join(lines)

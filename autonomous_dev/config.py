@@ -66,22 +66,25 @@ class AutonomousDevSettings(BaseSettings):
             raise RuntimeError("CURSOR_MODEL required for cursor_sdk mode")
 
     def resolve_reviewer_credentials(self) -> tuple[str, str, str] | None:
-        """Return (api_key, base_url, model) or None if reviewer credentials absent."""
+        """Return (api_key, base_url, model) or None if reviewer credentials absent.
+
+        Reviewer credentials are intentionally isolated from worker LLM settings
+        (LLM_API_KEY / LLM_BASE_URL / LLM_MODEL). Only OPENAI_API_KEY and
+        REVIEWER_* env vars configure the independent reviewer — never the
+        DeepSeek/Cursor worker provider — so the reviewer cannot be silently
+        substituted by the same API the worker uses.
+        """
         import os
 
         api_key = (self.openai_api_key or os.environ.get("OPENAI_API_KEY") or "").strip()
-        if not api_key:
-            api_key = (os.environ.get("LLM_API_KEY") or "").strip()
         base_url = (
             self.reviewer_base_url
             or os.environ.get("REVIEWER_BASE_URL")
-            or os.environ.get("LLM_BASE_URL")
             or "https://api.openai.com/v1"
         ).strip().rstrip("/")
         model = (
             self.reviewer_model
             or os.environ.get("REVIEWER_MODEL")
-            or os.environ.get("LLM_MODEL")
             or "gpt-4o-mini"
         ).strip()
         if not api_key:

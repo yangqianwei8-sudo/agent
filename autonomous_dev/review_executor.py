@@ -190,14 +190,14 @@ class ReviewExecutor:
                 verdict=ReviewVerdict(result.verdict),
                 clear_started_at=True,
             )
+            self._post_verdict_comment(
+                task.issue_number,
+                result.verdict,
+                result.reason,
+                invocation_id,
+            )
             try:
                 self._apply_verdict(task, commit_sha, result.verdict, result)
-                self._post_verdict_comment(
-                    task.issue_number,
-                    result.verdict,
-                    result.reason,
-                    invocation_id,
-                )
             except Exception:  # noqa: BLE001 — GitHub apply must not block queue
                 logger.exception(
                     "verdict GitHub apply failed task=%s invocation=%s (verdict persisted)",
@@ -388,8 +388,8 @@ class ReviewExecutor:
         body = (
             "## Reviewer Credential Blocker\n\n"
             f"{message}\n\n"
-            "Configure `OPENAI_API_KEY` (or `LLM_API_KEY`) — "
-            "will not substitute Cursor as independent reviewer."
+            "Configure `OPENAI_API_KEY` (reviewer-only; not LLM_API_KEY) — "
+            "will not substitute Cursor or worker LLM as independent reviewer."
         )
         try:
             self._github.add_comment(issue_number, body)
