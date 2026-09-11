@@ -118,6 +118,7 @@ def _tick() -> None:
             TaskStatus.READY_FOR_REVIEW,
             TaskStatus.COMPLETED,
             TaskStatus.PRODUCT_DECISION,
+            TaskStatus.FAILED,
         }:
             continue
         logger.info("watchdog triggering issue #%s", num)

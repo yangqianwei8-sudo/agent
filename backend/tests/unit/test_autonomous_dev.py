@@ -553,6 +553,41 @@ def test_reviewer_pass_completes_task(infra_env):
     assert updated.status == TaskStatus.COMPLETED
 
 
+def test_labeled_existing_open_issue_activates(infra_env):
+    """Router must activate when current-task is added to an already-open issue."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    router_svc = TaskRouter(settings, store)
+    store.create_task(
+        issue_number=77,
+        delivery_id="prior-run",
+        execution_key=f"{settings.github_repo}#77#2026-09-10T12:00:00Z",
+        status=TaskStatus.COMPLETED,
+    )
+    payload = _issue_payload(number=77, labels=["cursor-task", "current-task"])
+    payload["issue"]["updated_at"] = "2026-09-11T06:00:00Z"
+    result = router_svc.handle(
+        event_type="issues",
+        action="labeled",
+        delivery_id="labeled-existing-77",
+        payload=payload,
+    )
+    assert result["status"] == "worker_started"
+    assert result["issue_number"] == 77
+
+
+def test_failed_task_status_roundtrip(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    task = store.create_task(issue_number=88, delivery_id="failed-1")
+    updated = store.update_task(task.id, status=TaskStatus.FAILED, error="simulated")
+    assert updated.status == TaskStatus.FAILED
+    fetched = store.get_task_by_issue(88)
+    assert fetched is not None
+    assert fetched.status == TaskStatus.FAILED
+
+
 def test_review_trigger_dedup_metadata(infra_env):
     repo, db = infra_env
     store = StateStore(db)

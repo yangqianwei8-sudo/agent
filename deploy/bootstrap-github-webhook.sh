@@ -10,7 +10,7 @@ if [[ -f "$ROOT/deploy/load-env.sh" ]]; then
   source "$ROOT/deploy/load-env.sh" "$ROOT/.env"
 fi
 
-PUBLIC_URL="${AUTONOMOUS_WEBHOOK_PUBLIC_URL:-https://lawyer.bja.sealos.run}"
+PUBLIC_URL="${AUTONOMOUS_WEBHOOK_PUBLIC_URL:-https://ynboesvphjna.sealosbja.site}"
 WEBHOOK_URL="${PUBLIC_URL%/}/webhooks/github"
 SECRET="${GITHUB_WEBHOOK_SECRET:-}"
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
@@ -24,12 +24,17 @@ if [[ -z "$TOKEN" ]]; then
   exit 1
 fi
 
-echo "Checking public endpoint: ${PUBLIC_URL}/healthz"
-health_code="$(curl -sS -m 10 -o /tmp/webhook-health.json -w '%{http_code}' "${PUBLIC_URL}/healthz" || echo 000)"
-if [[ "$health_code" != "200" ]]; then
-  echo "ERROR: public /healthz returned HTTP ${health_code} (expected 200)" >&2
-  echo "Ensure uvicorn binds 0.0.0.0:${APP_PORT:-8000} and DevBox port public access is enabled." >&2
-  exit 1
+if [[ "${SKIP_PUBLIC_HEALTH_CHECK:-}" != "1" ]]; then
+  echo "Checking public endpoint: ${PUBLIC_URL}/healthz"
+  health_code="$(curl -sS -m 10 -o /tmp/webhook-health.json -w '%{http_code}' "${PUBLIC_URL}/healthz" || echo 000)"
+  if [[ "$health_code" != "200" ]]; then
+    echo "ERROR: public /healthz returned HTTP ${health_code} (expected 200)" >&2
+    echo "Ensure uvicorn binds 0.0.0.0:${APP_PORT:-8000} and DevBox port public access is enabled." >&2
+    echo "If checking from inside the cluster (hairpin NAT), retry with SKIP_PUBLIC_HEALTH_CHECK=1." >&2
+    exit 1
+  fi
+else
+  echo "SKIP_PUBLIC_HEALTH_CHECK=1 — skipping external /healthz probe"
 fi
 
 payload="$(python3 - <<PY

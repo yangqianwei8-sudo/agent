@@ -1,8 +1,8 @@
 {
   "name": "lawyer-agent-autonomous-dev",
-  "forwardPorts": [8000],
+  "forwardPorts": [8080],
   "portsAttributes": {
-    "8000": {
+    "8080": {
       "label": "autonomous-dev-webhook",
       "onAutoForward": "notify"
     }

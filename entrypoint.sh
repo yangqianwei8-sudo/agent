@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 export APP_HOST="${APP_HOST:-0.0.0.0}"
-export APP_PORT="${APP_PORT:-8000}"
+export APP_PORT="${APP_PORT:-8080}"
 export PYTHONPATH="${PYTHONPATH:-$ROOT}"
 
 if [[ -f "$ROOT/deploy/load-env.sh" ]]; then

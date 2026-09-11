@@ -21,6 +21,7 @@ class TaskStatus(StrEnum):
     NEEDS_FIX = "needs-fix"
     PRODUCT_DECISION = "product-decision"
     COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class DeliveryStatus(StrEnum):

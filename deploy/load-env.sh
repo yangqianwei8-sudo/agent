@@ -13,8 +13,11 @@ PRESERVE_KEYS=(
   CURSOR_API_KEY
 )
 
+# Sealos/DevBox injects APP_PORT for public ingress — never let .env override it.
+FORCE_PRESERVE_KEYS=(APP_PORT APP_HOST)
+
 declare -A preserved=()
-for key in "${PRESERVE_KEYS[@]}"; do
+for key in "${PRESERVE_KEYS[@]}" "${FORCE_PRESERVE_KEYS[@]}"; do
   if [[ -n "${!key:-}" ]]; then
     preserved["$key"]="${!key}"
   fi
@@ -26,7 +29,12 @@ source "$ENV_FILE"
 set +a
 
 for key in "${!preserved[@]}"; do
-  if [[ -z "${!key:-}" ]]; then
+  if [[ " ${FORCE_PRESERVE_KEYS[*]} " == *" ${key} "* ]] || [[ -z "${!key:-}" ]]; then
     export "$key=${preserved[$key]}"
   fi
 done
+
+# DevBox public ingress port — must match Sealos Network container port (see .sealos/preview.yaml).
+if [[ -n "${DEVBOX_JWT_SECRET:-}" ]]; then
+  export APP_PORT=8080
+fi
