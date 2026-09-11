@@ -32,6 +32,9 @@ class AutonomousDevSettings(BaseSettings):
     autonomous_state_db_path: str = "data/autonomous_dev.db"
     github_repo: str = "yangqianwei8-sudo/agent"
     watchdog_interval_seconds: int = 3600
+    current_task_scan_interval_seconds: int = 10
+    watchdog_github_connect_timeout_seconds: float = 2.0
+    watchdog_github_read_timeout_seconds: float = 5.0
     worker_lease_ttl_seconds: int = 300
     worker_heartbeat_interval_seconds: int = 30
     review_watchdog_stale_seconds: int = 3600

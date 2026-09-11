@@ -16,6 +16,11 @@ spec:
       containers:
         - name: app
           image: ghcr.io/yangqianwei8-sudo/agent:latest
+          env:
+            - name: GIT_SHA
+              value: "unknown"
+            - name: IMAGE_TAG
+              value: "unknown"
           command: ["/app/.venv/bin/uvicorn"]
           args: ["backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
           ports:

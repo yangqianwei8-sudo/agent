@@ -1,4 +1,4 @@
-"""Hourly watchdog fallback — stale lock recovery + overdue review scan."""
+"""Watchdog fallback — stale lock recovery, reviewer recovery, current-task discovery."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import uuid
 
 import httpx
 
-from autonomous_dev.config import get_autonomous_settings
+from autonomous_dev.config import AutonomousDevSettings, get_autonomous_settings
 from autonomous_dev.execution_identity import compute_execution_key
 from autonomous_dev.github_auth import resolve_github_token
 from autonomous_dev.github_webhook import is_current_cursor_task
@@ -27,12 +27,7 @@ def is_current_task_recoverable(
     execution_key: str | None,
     issue_number: int,
 ) -> bool:
-    """True when a GitHub current-task should trigger worker via watchdog fallback.
-
-    Exactly-once is keyed by (repo, issue, generation). A prior FAILED/NEEDS_FIX
-    record for an older generation must not block reactivation with a fresh
-    updated_at, but the same generation must never spawn duplicate workers.
-    """
+    """True when a GitHub current-task should trigger worker via watchdog fallback."""
     if execution_key:
         if store.get_active_execution(execution_key) is not None:
             return False
@@ -65,8 +60,12 @@ def start_watchdog() -> None:
     _stop.clear()
     _thread = threading.Thread(target=_loop, name="autonomous-watchdog", daemon=True)
     _thread.start()
-    logger.info("watchdog started interval=%ss", settings.watchdog_interval_seconds)
-    # Recover missed activations promptly when webhook delivery is delayed/unavailable.
+    logger.info(
+        "watchdog started review_interval=%ss scan_interval=%ss full_interval=%ss",
+        settings.review_recovery_interval_seconds,
+        settings.current_task_scan_interval_seconds,
+        settings.watchdog_interval_seconds,
+    )
     threading.Thread(target=_startup_tick, name="autonomous-watchdog-startup", daemon=True).start()
 
 
@@ -88,16 +87,25 @@ def stop_watchdog() -> None:
 def _loop() -> None:
     settings = get_autonomous_settings()
     review_interval = max(1, settings.review_recovery_interval_seconds)
+    scan_interval = max(review_interval, settings.current_task_scan_interval_seconds)
     watchdog_interval = settings.watchdog_interval_seconds
-    elapsed = 0
+    elapsed_full = 0
+    elapsed_scan = 0
     while not _stop.wait(review_interval):
-        elapsed += review_interval
+        elapsed_full += review_interval
+        elapsed_scan += review_interval
         try:
             _tick()
         except Exception:
             logger.exception("watchdog tick failed")
-        if elapsed >= watchdog_interval:
-            elapsed = 0
+        if elapsed_scan >= scan_interval:
+            elapsed_scan = 0
+            try:
+                _scan_current_tasks(settings)
+            except Exception:
+                logger.exception("watchdog current-task scan failed")
+        if elapsed_full >= watchdog_interval:
+            elapsed_full = 0
             try:
                 _tick_full_scan(settings)
             except Exception:
@@ -118,7 +126,7 @@ def _tick() -> None:
         logger.exception("watchdog review recovery failed")
 
 
-def _tick_full_scan(settings) -> None:
+def _tick_full_scan(settings: AutonomousDevSettings) -> None:
     store = StateStore(settings.state_db_path)
     stale_tasks = store.get_stale_ready_for_review_tasks(
         older_than_seconds=settings.review_watchdog_stale_seconds,
@@ -136,10 +144,15 @@ def _tick_full_scan(settings) -> None:
         executor = ReviewExecutor(settings, store)
         executor.schedule_review(task, commit_sha=task.commit_sha)
 
-    _scan_current_tasks(settings)
+
+def _github_timeout(settings: AutonomousDevSettings) -> httpx.Timeout:
+    return httpx.Timeout(
+        settings.watchdog_github_read_timeout_seconds,
+        connect=settings.watchdog_github_connect_timeout_seconds,
+    )
 
 
-def _scan_current_tasks(settings) -> None:
+def _scan_current_tasks(settings: AutonomousDevSettings) -> None:
     store = StateStore(settings.state_db_path)
     store.recover_stale_lease()
     if store.is_locked():
@@ -156,14 +169,21 @@ def _scan_current_tasks(settings) -> None:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    with httpx.Client(timeout=30.0) as client:
-        resp = client.get(
-            url,
-            headers=headers,
-            params={"state": "open", "labels": "current-task", "per_page": 10},
-        )
-        resp.raise_for_status()
-        issues = resp.json()
+    try:
+        with httpx.Client(timeout=_github_timeout(settings)) as client:
+            resp = client.get(
+                url,
+                headers=headers,
+                params={"state": "open", "labels": "current-task", "per_page": 10},
+            )
+            resp.raise_for_status()
+            issues = resp.json()
+    except httpx.TimeoutException:
+        logger.warning("watchdog current-task scan timeout")
+        return
+    except httpx.HTTPError as exc:
+        logger.warning("watchdog current-task scan failed: %s", exc.__class__.__name__)
+        return
 
     router = TaskRouter(settings, store)
     for issue in issues:

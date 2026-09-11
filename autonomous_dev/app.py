@@ -16,6 +16,7 @@ from autonomous_dev.github_webhook import (
     parse_json_payload,
     verify_github_signature,
 )
+from autonomous_dev.runtime_version import get_runtime_version
 from autonomous_dev.state import DeliveryStatus, StateStore
 from autonomous_dev.task_router import TaskRouter
 
@@ -56,14 +57,21 @@ def _build_healthz_payload() -> dict[str, str]:
     settings = get_autonomous_settings()
     store = _get_store()
     reviewer_creds = settings.resolve_reviewer_credentials()
-    return {
+    version = get_runtime_version()
+    payload = {
         "status": "ok",
         "autonomous_dev_enabled": str(settings.autonomous_dev_enabled).lower(),
         "worker_mode": settings.autonomous_worker_mode,
         "worker_locked": str(store.peek_worker_locked()).lower(),
         "reviewer_configured": str(reviewer_creds is not None).lower(),
         "reviewer_locked": str(store.peek_reviewer_locked()).lower(),
+        "git_sha": version["git_sha"],
+        "image_tag": version["image_tag"],
+        "started_at": version["started_at"],
     }
+    if version.get("build_time"):
+        payload["build_time"] = version["build_time"]
+    return payload
 
 
 @router.get("/healthz")

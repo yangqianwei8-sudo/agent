@@ -2456,3 +2456,100 @@ def test_code_changes_and_ruff_summary(infra_env):
     assert trace["latest_ruff"]["status"] == "pass"
     assert trace["telemetry_level"] == "FULL"
 
+
+def test_watchdog_loop_scans_on_short_interval(infra_env, monkeypatch):
+    import autonomous_dev.watchdog as wd
+
+    scan_calls: list[int] = []
+
+    def _track_scan(settings):
+        scan_calls.append(1)
+
+    waits: list[int] = []
+
+    def _wait(timeout):
+        waits.append(timeout)
+        return len(waits) > 2
+
+    monkeypatch.setattr(wd, "_scan_current_tasks", _track_scan)
+    monkeypatch.setattr(wd, "_tick", lambda: None)
+    monkeypatch.setattr(wd, "_tick_full_scan", lambda _s: None)
+    monkeypatch.setattr(wd._stop, "wait", _wait)
+    monkeypatch.setenv("CURRENT_TASK_SCAN_INTERVAL_SECONDS", "10")
+    monkeypatch.setenv("REVIEW_RECOVERY_INTERVAL_SECONDS", "10")
+    clear_autonomous_settings_cache()
+    wd._loop()
+    assert len(scan_calls) >= 1
+
+
+def test_watchdog_github_timeout_survives(infra_env, monkeypatch):
+    import httpx
+
+    class _TimeoutClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, *args, **kwargs):
+            raise httpx.TimeoutException("timeout")
+
+    monkeypatch.setattr("autonomous_dev.watchdog.httpx.Client", _TimeoutClient)
+    monkeypatch.setattr("autonomous_dev.watchdog.resolve_github_token", lambda: "tok")
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert True
+
+
+def test_healthz_exposes_runtime_sha(infra_env, monkeypatch):
+    monkeypatch.setenv("GIT_SHA", "abc123deadbeef")
+    monkeypatch.setenv("IMAGE_TAG", "abc123deadbeef")
+    clear_autonomous_settings_cache()
+    reset_autonomous_singletons()
+    client = TestClient(app)
+    resp = client.get("/healthz")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["git_sha"] == "abc123deadbeef"
+    assert data["image_tag"] == "abc123deadbeef"
+    assert "started_at" in data
+
+
+def test_dashboard_exposes_runtime_version(infra_env, monkeypatch):
+    monkeypatch.setenv("GIT_SHA", "def456789abc")
+    clear_autonomous_settings_cache()
+    reset_autonomous_singletons()
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard._fetch_main_sha_bounded",
+        lambda *a, **k: ("def456789abc", None),
+    )
+    client = TestClient(app)
+    resp = client.get("/autonomous/status.json")
+    data = resp.json()
+    assert data["runtime_version"]["git_sha"] == "def456789abc"
+    assert data["deployment"]["status"] == "CURRENT"
+
+
+def test_deployment_stale_when_main_differs(infra_env):
+    from autonomous_dev.runtime_version import derive_deployment_status
+
+    assert derive_deployment_status(runtime_sha="aaa1111", main_sha="bbb2222") == "STALE"
+    assert derive_deployment_status(runtime_sha="abc1234", main_sha="abc1234567890") == "CURRENT"
+
+
+def test_runtime_version_module(infra_env, monkeypatch):
+    from autonomous_dev.runtime_version import get_runtime_version
+
+    monkeypatch.setenv("GIT_SHA", "sha999")
+    monkeypatch.setenv("IMAGE_TAG", "sha999")
+    v = get_runtime_version()
+    assert v["git_sha"] == "sha999"
+    assert v["image_tag"] == "sha999"
+

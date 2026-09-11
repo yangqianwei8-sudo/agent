@@ -10,6 +10,7 @@ from typing import Any
 
 from autonomous_dev.config import AutonomousDevSettings
 from autonomous_dev.execution_events import build_execution_trace
+from autonomous_dev.runtime_version import derive_deployment_status, get_runtime_version
 from autonomous_dev.state import StateStore, TaskRecord, TaskStatus
 from autonomous_dev.status_deriver import (
     WorkerLeaseSnapshot,
@@ -69,6 +70,43 @@ def _fetch_issue_labels_bounded(
     except Exception as exc:  # noqa: BLE001 — degrade, never fail dashboard
         logger.debug("dashboard github labels failed issue=%s: %s", issue_number, exc)
         return [], "github_labels_unavailable"
+
+
+def _fetch_main_sha_sync(settings: AutonomousDevSettings) -> str | None:
+    from autonomous_dev.github_auth import resolve_github_token
+
+    token = resolve_github_token()
+    if not token:
+        return None
+    url = f"https://api.github.com/repos/{settings.github_repo}/commits/main"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    import httpx
+
+    with httpx.Client(timeout=httpx.Timeout(5.0, connect=2.0)) as client:
+        resp = client.get(url, headers=headers)
+        resp.raise_for_status()
+        sha = resp.json().get("sha")
+        return str(sha) if sha else None
+
+
+def _fetch_main_sha_bounded(
+    settings: AutonomousDevSettings,
+    *,
+    timeout_seconds: float = DASHBOARD_GITHUB_TIMEOUT_SECONDS,
+) -> tuple[str | None, str | None]:
+    future = _executor.submit(_fetch_main_sha_sync, settings)
+    try:
+        return future.result(timeout=timeout_seconds), None
+    except FuturesTimeout:
+        future.cancel()
+        return None, "github_main_sha_timeout"
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("dashboard main sha failed: %s", exc)
+        return None, "github_main_sha_unavailable"
 
 
 def _activity_from_snapshot(
@@ -264,6 +302,15 @@ def build_dashboard_payload(
         now=generated_at,
     )
 
+    runtime_version = get_runtime_version()
+    main_sha, main_sha_reason = _fetch_main_sha_bounded(settings)
+    if main_sha_reason:
+        degraded_reasons.append(main_sha_reason)
+    deployment_status = derive_deployment_status(
+        runtime_sha=runtime_version["git_sha"],
+        main_sha=main_sha,
+    )
+
     payload: dict[str, Any] = {
         "system_status": system_status.value,
         "current_task": _task_to_dict(
@@ -318,7 +365,15 @@ def build_dashboard_payload(
         "owner_attention": owner_attention,
         "recent_completed": recent_completed,
         "execution_trace": execution_trace,
+        "runtime_version": runtime_version,
+        "deployment": {
+            "status": deployment_status,
+            "main_sha": main_sha,
+            "production_sha": runtime_version["git_sha"],
+            "image_tag": runtime_version["image_tag"],
+        },
         "last_updated": generated_at.isoformat(),
+        "display_timezone": "Asia/Shanghai",
     }
     return sanitize_for_json(payload)
 
@@ -399,7 +454,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <h1>实时开发控制台</h1>
-  <div class="muted">Live Development Console · 每 3 秒自动刷新 · 不整页 reload</div>
+  <div class="muted">Live Development Console · 每 3 秒自动刷新 · 时间显示：北京时间 (UTC+8)</div>
+  <div id="version-banner" class="hero" style="margin-top:10px;padding:12px 14px">
+    <div id="deploy-status" class="pill motion-IDLE">部署状态：加载中</div>
+    <div class="hero-sub" id="version-line">生产版本：— · GitHub main：—</div>
+  </div>
   <div id="fetch-error" class="fetch-error"></div>
 
   <div class="hero">
@@ -448,6 +507,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     function esc(s) { return String(s ?? "—").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
     function fmtAge(seconds) { if (seconds == null) return "—"; return `${seconds} 秒前`; }
     function kv(key, value) { return `<div class="kv"><div class="k">${esc(key)}</div><div class="v">${esc(value)}</div></div>`; }
+
+    function renderVersion(data) {
+      const rv = data.runtime_version || {};
+      const dep = data.deployment || {};
+      const prod = (dep.production_sha || rv.git_sha || "unknown").slice(0, 7);
+      const main = dep.main_sha ? dep.main_sha.slice(0, 7) : "—";
+      const status = dep.status || "UNKNOWN";
+      const pill = document.getElementById("deploy-status");
+      pill.className = `pill motion-${status === "CURRENT" ? "MOVING" : status === "STALE" ? "STALLED" : "IDLE"}`;
+      pill.textContent = status === "CURRENT" ? "部署状态：CURRENT" : status === "STALE" ? "部署状态：STALE · PRODUCTION OUTDATED" : `部署状态：${status}`;
+      document.getElementById("version-line").textContent = `生产版本：${prod} · GitHub main：${main} · image：${(rv.image_tag || "—").slice(0, 7)}`;
+    }
 
     function renderHero(data) {
       const t = data.execution_trace || {};
@@ -510,6 +581,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function render(data) {
       lastPayload = data;
+      renderVersion(data);
       renderHero(data);
       renderPanels(data);
       renderTrace(data.execution_trace);
