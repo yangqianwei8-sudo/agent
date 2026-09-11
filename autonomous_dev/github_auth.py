@@ -230,11 +230,12 @@ def git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 
     auth = resolve_github_auth()
     if auth.mode in ("app", "pat") and auth.token:
+        env.pop("GIT_ASKPASS", None)
         env["GIT_CONFIG_COUNT"] = "2"
         env["GIT_CONFIG_KEY_0"] = "credential.helper"
         env["GIT_CONFIG_VALUE_0"] = ""
-        env["GIT_CONFIG_KEY_1"] = "url.https://x-access-token:@github.com/.insteadOf"
-        env["GIT_CONFIG_VALUE_1"] = f"https://x-access-token:{auth.token}@github.com/"
+        env["GIT_CONFIG_KEY_1"] = f"url.https://x-access-token:{auth.token}@github.com/.insteadOf"
+        env["GIT_CONFIG_VALUE_1"] = "https://github.com/"
     elif auth.mode == "ssh" and auth.ssh_key_path:
         env["GIT_SSH_COMMAND"] = (
             f"ssh -i {auth.ssh_key_path} -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
