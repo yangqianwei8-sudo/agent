@@ -119,9 +119,13 @@ Sealos Secret names (see `deploy/sealos/secret.example.yaml`): `GITHUB_TOKEN`, `
 
 ## Webhook URL
 
+Production (Sealos DevBox public ingress, container port 8080):
+
 ```text
-https://<your-devbox-or-sealos-host>/webhooks/github
+https://ynboesvphjna.sealosbja.site/webhooks/github
 ```
+
+Set `AUTONOMOUS_WEBHOOK_PUBLIC_URL` to match. Do not use stale hostnames that return 503.
 
 Enable GitHub events: `Issues`, `Push`.
 
