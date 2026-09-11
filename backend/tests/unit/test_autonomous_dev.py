@@ -404,12 +404,26 @@ def test_cursor_sdk_passes_model_to_agent_options(
         status = "completed"
         result = CURSOR_RUNTIME_OK_MARKER
 
-    def fake_prompt(prompt, options):
+    class FakeRun:
+        def events(self):
+            return iter([])
+
+        def wait(self):
+            return FakeResult()
+
+    class FakeAgent:
+        def send(self, prompt):
+            return FakeRun()
+
+        def close(self):
+            return None
+
+    def fake_create(options):
         captured["model"] = options.model
         captured["api_key"] = options.api_key
-        return FakeResult()
+        return FakeAgent()
 
-    monkeypatch.setattr("cursor_sdk.Agent.prompt", fake_prompt)
+    monkeypatch.setattr("cursor_sdk.Agent.create", fake_create)
 
     task = store.create_task(issue_number=99, delivery_id="cursor-model-1")
     store.try_acquire_lock(99, task.id)
@@ -467,10 +481,21 @@ def test_cursor_sdk_secrets_not_in_error(infra_env, monkeypatch: pytest.MonkeyPa
     store = StateStore(db)
     worker = Worker(settings, store, repo_root=repo)
 
-    def fake_prompt(prompt, options):
-        raise RuntimeError("simulated agent failure")
+    class FakeRun:
+        def events(self):
+            return iter([])
 
-    monkeypatch.setattr("cursor_sdk.Agent.prompt", fake_prompt)
+        def wait(self):
+            raise RuntimeError("simulated agent failure")
+
+    class FakeAgent:
+        def send(self, prompt):
+            return FakeRun()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("cursor_sdk.Agent.create", lambda options: FakeAgent())
 
     task = store.create_task(issue_number=102, delivery_id="cursor-secret")
     store.try_acquire_lock(102, task.id)
@@ -1782,7 +1807,7 @@ def test_autonomous_status_html_smoke(infra_env):
     client = TestClient(app)
     resp = client.get("/autonomous/status")
     assert resp.status_code == 200
-    assert "自主开发 Dashboard" in resp.text
+    assert "实时开发控制台" in resp.text
 
 
 def test_dashboard_json_while_worker_running(infra_env):
@@ -2018,6 +2043,7 @@ def test_derive_motion_moving(infra_env):
         events=events,
         progress_stale_seconds=120,
         cursor_long_op_grace_seconds=600,
+        cursor_long_op_suspect_seconds=900,
         lease_ttl_seconds=settings.worker_lease_ttl_seconds,
         now=now,
     )
@@ -2061,6 +2087,7 @@ def test_derive_motion_stalled(infra_env):
         events=events,
         progress_stale_seconds=120,
         cursor_long_op_grace_seconds=600,
+        cursor_long_op_suspect_seconds=900,
         lease_ttl_seconds=settings.worker_lease_ttl_seconds,
         now=now,
     )
@@ -2101,6 +2128,7 @@ def test_derive_motion_stale_priority(infra_env):
         events=events,
         progress_stale_seconds=120,
         cursor_long_op_grace_seconds=600,
+        cursor_long_op_suspect_seconds=900,
         lease_ttl_seconds=settings.worker_lease_ttl_seconds,
         now=now,
     )
@@ -2136,6 +2164,7 @@ def test_derive_motion_reviewing(infra_env):
         events=[],
         progress_stale_seconds=120,
         cursor_long_op_grace_seconds=600,
+        cursor_long_op_suspect_seconds=900,
         lease_ttl_seconds=settings.worker_lease_ttl_seconds,
     )
     assert motion == MotionStatus.REVIEWING
@@ -2222,10 +2251,15 @@ def test_execution_trace_schema(infra_env):
         "seconds_since_last_progress",
         "last_heartbeat_at",
         "seconds_since_last_heartbeat",
+        "telemetry_level",
         "recent_files",
+        "code_changes",
         "latest_test",
+        "latest_ruff",
         "git",
         "events",
+        "elapsed_display",
+        "long_running",
     ):
         assert key in trace
     assert trace["git"]["files_changed"] == 2
@@ -2256,7 +2290,7 @@ def test_dashboard_html_execution_trace_smoke(infra_env):
     client = TestClient(app)
     resp = client.get("/autonomous/status")
     assert resp.status_code == 200
-    assert "实时执行过程" in resp.text
+    assert "实时开发过程" in resp.text
     assert "trace-terminal" in resp.text
     assert "3000" in resp.text
 
@@ -2288,4 +2322,137 @@ def test_autonomous_status_json_includes_execution_trace(infra_env):
     data = resp.json()
     assert "execution_trace" in data
     assert "motion_status" in data["execution_trace"]
+
+
+def test_derive_motion_waiting(infra_env):
+    from autonomous_dev.execution_events import MotionStatus, derive_motion_status
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot
+
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    task = store.update_task(
+        store.create_task(issue_number=60, delivery_id="wait").id,
+        status=TaskStatus.READY_FOR_REVIEW,
+        commit_sha="abc1234567890",
+    )
+    inv = store.create_review_invocation(
+        invocation_id="inv-w",
+        task_id=task.id,
+        issue_number=60,
+        commit_sha="abc1234567890",
+    )
+    lease = WorkerLeaseSnapshot(False, None, None, None, None, None, None)
+    motion = derive_motion_status(
+        primary_task=task,
+        lease=lease,
+        reviewer_locked=False,
+        active_review=inv,
+        events=[],
+        progress_stale_seconds=120,
+        cursor_long_op_grace_seconds=600,
+        cursor_long_op_suspect_seconds=900,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+    )
+    assert motion == MotionStatus.WAITING
+
+
+def test_derive_motion_failed(infra_env):
+    from autonomous_dev.execution_events import MotionStatus, derive_motion_status
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot
+
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    task = store.update_task(
+        store.create_task(issue_number=61, delivery_id="fail-motion").id,
+        status=TaskStatus.NEEDS_FIX,
+        error="pytest failed",
+    )
+    store.append_execution_event(
+        task_id=task.id,
+        issue_number=61,
+        generation=None,
+        event_type="TEST_FINISHED",
+        status="fail",
+    )
+    lease = WorkerLeaseSnapshot(False, None, None, None, None, None, None)
+    motion = derive_motion_status(
+        primary_task=task,
+        lease=lease,
+        reviewer_locked=False,
+        active_review=None,
+        events=store.list_execution_events(task_id=task.id),
+        progress_stale_seconds=120,
+        cursor_long_op_grace_seconds=600,
+        cursor_long_op_suspect_seconds=900,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+    )
+    assert motion == MotionStatus.FAILED
+
+
+def test_telemetry_level_derivation(infra_env):
+    from autonomous_dev.execution_events import TelemetryLevel, _derive_telemetry_level
+    from autonomous_dev.state import ExecutionEventRecord
+
+    boundary = [
+        ExecutionEventRecord(
+            1, 1, 1, None, "CURSOR_STARTED", "cursor", None, None, None, None, None, None, "t"
+        )
+    ]
+    assert _derive_telemetry_level(boundary) == TelemetryLevel.BOUNDARY_ONLY
+    partial = boundary + [
+        ExecutionEventRecord(
+            2, 1, 1, None, "CURSOR_PROGRESS", "cursor", None, None, None, None, None, None, "t"
+        )
+    ]
+    assert _derive_telemetry_level(partial) == TelemetryLevel.PARTIAL
+    full = partial + [
+        ExecutionEventRecord(
+            3,
+            1,
+            1,
+            None,
+            "FILE_EDIT",
+            "cursor",
+            None,
+            "autonomous_dev/x.py",
+            None,
+            None,
+            None,
+            None,
+            "t",
+        )
+    ]
+    assert _derive_telemetry_level(full) == TelemetryLevel.FULL
+
+
+def test_code_changes_and_ruff_summary(infra_env):
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    task = store.create_task(issue_number=62, delivery_id="cc", status=TaskStatus.RUNNING)
+    store.try_acquire_lease(62, task.id, owner=f"worker-{task.id}", ttl_seconds=300)
+    store.append_execution_event(
+        task_id=task.id,
+        issue_number=62,
+        generation=None,
+        event_type="FILE_EDIT",
+        file_path="autonomous_dev/dashboard.py",
+    )
+    store.append_execution_event(
+        task_id=task.id,
+        issue_number=62,
+        generation=None,
+        event_type="RUFF_FINISHED",
+        status="pass",
+        command_summary="ruff check .",
+    )
+    payload = build_dashboard_payload(settings, store)
+    trace = payload["execution_trace"]
+    assert "autonomous_dev/dashboard.py" in trace["code_changes"]["modified_files"]
+    assert trace["latest_ruff"]["status"] == "pass"
+    assert trace["telemetry_level"] == "FULL"
 

@@ -10,7 +10,7 @@ from typing import Any
 
 from autonomous_dev.config import AutonomousDevSettings
 from autonomous_dev.execution_events import build_execution_trace
-from autonomous_dev.state import StateStore, TaskRecord
+from autonomous_dev.state import StateStore, TaskRecord, TaskStatus
 from autonomous_dev.status_deriver import (
     WorkerLeaseSnapshot,
     derive_current_phase,
@@ -122,6 +122,18 @@ def _activity_from_snapshot(
 
     events.sort(key=lambda item: item.get("at") or "", reverse=True)
     return events[:limit]
+
+
+def _resolve_trace_task(snapshot: dict[str, Any], store: StateStore) -> TaskRecord | None:
+    lease = snapshot["lease"]
+    if snapshot.get("worker_locked") and lease.task_id:
+        locked_task = store.get_task(lease.task_id)
+        if locked_task:
+            return locked_task
+    current = snapshot.get("current_task")
+    if current and current.status in {TaskStatus.RUNNING, TaskStatus.QUEUED}:
+        return current
+    return snapshot.get("primary_task")
 
 
 def _task_to_dict(
@@ -240,16 +252,15 @@ def build_dashboard_payload(
         for row in snapshot["completed_rows"]
     ]
 
-    trace_task_id = None
-    if current_task:
-        trace_task_id = current_task.id
-    elif primary_task:
-        trace_task_id = primary_task.id
-    events = store.list_execution_events(task_id=trace_task_id, limit=100) if trace_task_id else []
+    trace_task = _resolve_trace_task(snapshot, store)
+    events = (
+        store.list_execution_events(task_id=trace_task.id, limit=100) if trace_task else []
+    )
     execution_trace = build_execution_trace(
         settings=settings,
         snapshot=snapshot,
         events=events,
+        trace_task=trace_task,
         now=generated_at,
     )
 
@@ -326,7 +337,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>自主开发 Dashboard</title>
+  <title>实时开发控制台</title>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
     body { margin: 0; padding: 16px; background: #0f1419; color: #e7ecf3; }
@@ -363,7 +374,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .motion-STALLED { background: #78350f; color: #fed7aa; }
     .motion-STALE { background: #7f1d1d; color: #fecaca; }
     .motion-IDLE { background: #334155; color: #cbd5e1; }
-    .motion-REVIEWING { background: #1e3a5f; color: #bfdbfe; }
+    .motion-WAITING { background: #1e3a5f; color: #bfdbfe; }
+    .motion-FAILED { background: #7f1d1d; color: #fecaca; }
+    .hero { background: #111827; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin: 12px 0 16px; }
+    .hero-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 12px; }
+    .hero-title { font-size: 1.35rem; font-weight: 700; margin: 0; }
+    .hero-sub { color: #94a3b8; font-size: 0.9rem; margin-top: 6px; }
+    .pill { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 0.85rem; font-weight: 600; }
+    .panels { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .trace-line.newest { background: rgba(56,189,248,0.08); border-left: 2px solid #38bdf8; padding-left: 6px; margin-left: -6px; }
+    .fetch-error { color: #fed7aa; font-size: 0.85rem; margin-top: 6px; }
     .trace-summary { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: 10px; }
     .trace-terminal {
       background: #0a0f14; border: 1px solid #334155; border-radius: 8px;
@@ -378,103 +398,121 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <h1>自主开发 Dashboard</h1>
-  <div class="muted">只读运行视图 · 每 3 秒自动刷新执行轨迹</div>
-  <div id="status-banner" class="status-banner status-IDLE">加载中…</div>
-  <div class="muted" id="last-updated"></div>
-  <div id="degraded" class="degraded"></div>
+  <h1>实时开发控制台</h1>
+  <div class="muted">Live Development Console · 每 3 秒自动刷新 · 不整页 reload</div>
+  <div id="fetch-error" class="fetch-error"></div>
+
+  <div class="hero">
+    <div id="hero-motion" class="pill motion-IDLE">执行状态：加载中</div>
+    <div class="hero-title" id="hero-current">当前：—</div>
+    <div class="hero-sub" id="hero-task">当前任务：—</div>
+    <div class="hero-grid" id="hero-grid"></div>
+  </div>
 
   <section>
-    <h2>实时执行过程</h2>
-    <div id="trace-banner" class="trace-banner motion-IDLE">加载中…</div>
-    <div id="trace-summary" class="trace-summary"></div>
+    <h2>实时开发过程</h2>
     <div id="trace-terminal" class="trace-terminal"></div>
   </section>
 
-  <section>
-    <h2>当前任务</h2>
-    <div id="current-task" class="grid"></div>
-  </section>
+  <div class="panels">
+    <section><h2>本轮代码变化</h2><div id="code-panel" class="grid"></div></section>
+    <section><h2>测试</h2><div id="test-panel" class="grid"></div></section>
+    <section><h2>Ruff</h2><div id="ruff-panel" class="grid"></div></section>
+    <section><h2>Git / Push</h2><div id="git-panel" class="grid"></div></section>
+  </div>
 
-  <section>
-    <h2>Pipeline 进度</h2>
-    <div id="pipeline" class="pipeline"></div>
-  </section>
+  <details><summary class="muted">系统状态与 Pipeline</summary>
+  <div id="status-banner" class="status-banner status-IDLE" style="margin-top:10px">加载中…</div>
+  <div class="muted" id="last-updated"></div>
+  <div id="degraded" class="degraded"></div>
+  <section><h2>Pipeline 进度</h2><div id="pipeline" class="pipeline"></div></section>
+  <section><h2>Runtime 证据</h2><div id="runtime" class="grid"></div></section>
+  </details>
 
-  <section>
-    <h2>Runtime 证据</h2>
-    <div id="runtime" class="grid"></div>
+  <details><summary class="muted">历史与 Owner</summary>
+  <section><h2>当前任务详情</h2><div id="current-task" class="grid"></div></section>
+  <section><h2>Owner Attention</h2><div id="owner-attention"></div></section>
+  <section><h2>Recent Activity</h2><ul id="activity"></ul></section>
+  <section><h2>Recent Completed</h2>
+    <table><thead><tr><th>Issue</th><th>Verdict</th><th>Commit</th><th>Completed</th></tr></thead>
+    <tbody id="completed"></tbody></table>
   </section>
-
-  <section>
-    <h2>Owner Attention</h2>
-    <div id="owner-attention"></div>
-  </section>
-
-  <section>
-    <h2>Recent Activity</h2>
-    <ul id="activity"></ul>
-  </section>
-
-  <section>
-    <h2>Recent Completed</h2>
-    <table>
-      <thead><tr><th>Issue</th><th>Verdict</th><th>Commit</th><th>Completed</th></tr></thead>
-      <tbody id="completed"></tbody>
-    </table>
-  </section>
+  </details>
 
   <script>
-    const STATUS_LABELS = {
-      RUNNING: "运行中",
-      REVIEWING: "审查中",
-      WAITING_USER: "等待用户决策",
-      FAILED: "失败",
-      STALE: "运行时过期",
-      IDLE: "空闲",
-    };
-    const MOTION_LABELS = {
-      MOVING: "推进中",
-      STALLED: "疑似停滞",
-      STALE: "心跳失效",
-      IDLE: "空闲",
-      REVIEWING: "审查中",
-    };
+    let lastPayload = null;
+    let lastEventCount = 0;
+    const STATUS_LABELS = { RUNNING: "运行中", REVIEWING: "审查中", WAITING_USER: "等待用户决策", FAILED: "失败", STALE: "运行时过期", IDLE: "空闲" };
+    const MOTION_LABELS = { MOVING: "推进中", WAITING: "等待中", REVIEWING: "审查中", STALLED: "疑似卡住", STALE: "失联", IDLE: "空闲", FAILED: "失败" };
 
-    function fmtAge(seconds) {
-      if (seconds == null) return "—";
-      return `${seconds} 秒前`;
+    function esc(s) { return String(s ?? "—").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+    function fmtAge(seconds) { if (seconds == null) return "—"; return `${seconds} 秒前`; }
+    function kv(key, value) { return `<div class="kv"><div class="k">${esc(key)}</div><div class="v">${esc(value)}</div></div>`; }
+
+    function renderHero(data) {
+      const t = data.execution_trace || {};
+      const task = data.current_task;
+      const motion = t.motion_status || "IDLE";
+      const pill = document.getElementById("hero-motion");
+      pill.className = `pill motion-${motion}`;
+      pill.textContent = `执行状态：${MOTION_LABELS[motion] || motion} (${motion})`;
+      document.getElementById("hero-current").textContent = `当前：${t.current_action || "—"}`;
+      const issue = task ? `#${task.issue_number}` : "—";
+      const title = task && task.title ? ` · ${task.title}` : "";
+      document.getElementById("hero-task").textContent = `当前任务：Issue ${issue}${title} · 阶段 ${t.current_phase || "—"} · telemetry ${t.telemetry_level || "—"}`;
+      let longNote = "";
+      if (t.long_running) longNote = ` · Cursor 长任务 ${t.cursor_elapsed_display || "—"} · 细粒度进展${t.telemetry_level === "BOUNDARY_ONLY" ? "暂不可见" : "部分可见"}`;
+      document.getElementById("hero-grid").innerHTML = [
+        kv("当前文件", t.current_file), kv("当前命令", t.current_command),
+        kv("最后进展", fmtAge(t.seconds_since_last_progress)), kv("Worker 心跳", fmtAge(t.seconds_since_last_heartbeat)),
+        kv("运行时长", t.elapsed_display || t.elapsed_seconds), kv("Telemetry", (t.telemetry_level || "—") + longNote),
+      ].join("");
+    }
+
+    function renderPanels(data) {
+      const t = data.execution_trace || {};
+      const cc = t.code_changes || {};
+      const git = t.git || {};
+      const test = t.latest_test;
+      const ruff = t.latest_ruff;
+      document.getElementById("code-panel").innerHTML = [
+        kv("修改", (cc.modified_files || []).join(", ") || "—"),
+        kv("新增", (cc.added_files || []).join(", ") || "—"),
+        kv("删除", (cc.deleted_files || []).join(", ") || "—"),
+        kv("Diff 摘要", `${git.files_changed ?? "—"} files · +${git.insertions ?? "—"} -${git.deletions ?? "—"}`),
+      ].join("");
+      document.getElementById("test-panel").innerHTML = test ? [
+        kv("命令", test.command), kv("状态", test.status),
+        kv("结果", `${test.passed ?? "—"} passed · ${test.failed ?? "—"} failed · ${test.duration_seconds ?? "—"}s`),
+        kv("最后测试", (test.finished_at || "").slice(11,19) || test.status),
+      ].join("") : kv("状态", "暂无测试事件");
+      document.getElementById("ruff-panel").innerHTML = ruff ? [
+        kv("命令", ruff.command), kv("状态", ruff.status), kv("摘要", ruff.summary || "—"), kv("完成", (ruff.finished_at || "").slice(11,19) || "—"),
+      ].join("") : kv("状态", "暂无 ruff 事件");
+      document.getElementById("git-panel").innerHTML = [
+        kv("Latest commit", git.latest_commit_sha || "—"), kv("Message", git.latest_commit_message || "—"),
+        kv("Push", `${git.push_status || "—"} · origin/main`), kv("Push 时间", (git.push_at || git.push_time || "—").slice(11,19) || "—"),
+      ].join("");
     }
 
     function renderTrace(trace) {
-      const t = trace || {};
-      const motion = t.motion_status || "IDLE";
-      const banner = document.getElementById("trace-banner");
-      banner.className = `trace-banner motion-${motion}`;
-      banner.textContent = `执行状态：${MOTION_LABELS[motion] || motion} (${motion}) · 当前：${t.current_action || "—"}`;
-
-      document.getElementById("trace-summary").innerHTML = [
-        kv("当前文件", t.current_file),
-        kv("当前命令", t.current_command),
-        kv("最后进展", fmtAge(t.seconds_since_last_progress)),
-        kv("Worker heartbeat", fmtAge(t.seconds_since_last_heartbeat)),
-        kv("测试", t.latest_test ? `${t.latest_test.status || "—"} · passed=${t.latest_test.passed ?? "—"}` : "—"),
-        kv("Git 变更", t.git ? `${t.git.files_changed ?? "—"} files, +${t.git.insertions ?? "—"} -${t.git.deletions ?? "—"}` : "—"),
-      ].join("");
-
-      const lines = (t.events || []).slice().reverse().map((e) => {
+      const events = (trace && trace.events) || [];
+      const lines = events.slice().reverse().map((e, idx) => {
         const ts = (e.at || "").slice(11, 19) || "—";
+        const label = e.display_type || e.event_type || "";
         const detail = [e.file_path, e.command_summary, e.result_summary].filter(Boolean).join("  ");
-        return `<div class="trace-line"><span class="ts">${ts}</span>  <span class="etype">${e.event_type || ""}</span>  <span class="detail">${detail || e.action || ""}</span></div>`;
+        const newest = idx === 0 && events.length > lastEventCount ? " newest" : "";
+        return `<div class="trace-line${newest}"><span class="ts">${ts}</span>  <span class="etype">${esc(label)}</span>  <span class="detail">${esc(detail || e.action || "")}</span></div>`;
       });
+      lastEventCount = events.length;
       document.getElementById("trace-terminal").innerHTML = lines.join("") || '<div class="trace-line muted">暂无执行事件</div>';
     }
 
-    function kv(key, value) {
-      return `<div class="kv"><div class="k">${key}</div><div class="v">${value ?? "—"}</div></div>`;
-    }
-
     function render(data) {
+      lastPayload = data;
+      renderHero(data);
+      renderPanels(data);
+      renderTrace(data.execution_trace);
       const status = data.system_status || "IDLE";
       const banner = document.getElementById("status-banner");
       banner.className = `status-banner status-${status}`;
@@ -546,7 +584,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         (c) => `<tr><td>#${c.issue_number}</td><td>${c.verdict || "—"}</td><td>${c.commit_sha || "—"}</td><td>${c.completed_at || "—"}</td></tr>`
       ).join("");
 
-      renderTrace(data.execution_trace);
+      document.getElementById("fetch-error").textContent = "";
     }
 
     async function refresh() {
@@ -555,7 +593,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         render(await resp.json());
       } catch (err) {
-        document.getElementById("status-banner").textContent = `加载失败: ${err}`;
+        document.getElementById("fetch-error").textContent = "连接暂时失败，正在重试…";
+        if (lastPayload) render(lastPayload);
       }
     }
 

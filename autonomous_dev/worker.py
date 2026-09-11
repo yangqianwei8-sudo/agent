@@ -100,7 +100,7 @@ class Worker:
             else:
                 self._git_fetch(events)
                 self._ensure_clean_or_resolve()
-                self._apply_harmless_change(task.issue_number)
+                self._apply_harmless_change(task.issue_number, events=events)
                 self._run_tests(events)
                 commit_sha = self._commit_and_push(task.issue_number, events=events)
                 self._verify_push(commit_sha)
@@ -208,10 +208,19 @@ class Worker:
     def _invoke_cursor_agent(self, prompt: str, *, events: ExecutionEventRecorder | None = None):
         from cursor_sdk import Agent, CursorAgentError
 
+        from autonomous_dev.cursor_telemetry import record_cursor_stream_event
+
+        agent = None
+        result = None
         if events:
             events.cursor_started()
         try:
-            result = Agent.prompt(prompt, self._cursor_agent_options())
+            agent = Agent.create(self._cursor_agent_options())
+            run = agent.send(prompt)
+            for stream_event in run.events():
+                if events:
+                    record_cursor_stream_event(events, stream_event)
+            result = run.wait()
         except CursorAgentError as exc:
             if events:
                 events.record(
@@ -221,6 +230,11 @@ class Worker:
                     status="fail",
                 )
             raise RuntimeError(str(exc)) from exc
+        finally:
+            if agent is not None:
+                agent.close()
+        if result is None:
+            raise RuntimeError("cursor agent returned no result")
         if result.status == "error":
             if events:
                 events.record(
@@ -256,7 +270,7 @@ class Worker:
         """P0 live path: cursor_sdk invoked + harmless change + tests + commit + push."""
         self._git_fetch(events)
         self._ensure_clean_or_resolve()
-        self._apply_harmless_change(task.issue_number)
+        self._apply_harmless_change(task.issue_number, events=events)
         prompt = (
             f"P0 live acceptance for Issue #{task.issue_number}. "
             "Harmless marker file updated. Do not modify other files. "
@@ -300,13 +314,26 @@ class Worker:
                 return
             raise RuntimeError(f"working tree not clean: {status.stdout.strip()[:500]}")
 
-    def _apply_harmless_change(self, issue_number: int) -> None:
+    def _apply_harmless_change(self, issue_number: int, *, events: ExecutionEventRecorder | None = None) -> None:
         marker = self.repo_root / "autonomous_dev" / "acceptance_marker.txt"
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(
             f"worker-run issue={issue_number} at={datetime.now(UTC).isoformat()}\n",
             encoding="utf-8",
         )
+        if events:
+            events.file_edit(marker)
+
+    def _run_ruff(self, events: ExecutionEventRecorder | None = None) -> None:
+        cmd = [sys.executable, "-m", "ruff", "check", "."]
+        if events:
+            events.ruff_started(cmd)
+        result = self._run(cmd, check=False)
+        ok = result.returncode == 0
+        if events:
+            events.ruff_finished(output=result.stdout + result.stderr, passed=ok)
+        if not ok:
+            raise RuntimeError(f"ruff failed: {(result.stdout + result.stderr)[:500]}")
 
     def _run_tests(self, events: ExecutionEventRecorder | None = None) -> None:
         cmd = [sys.executable, "-m", "pytest", "backend/tests/test_health.py", "-q"]
@@ -315,6 +342,7 @@ class Worker:
         result = self._run(cmd, check=True)
         if events:
             events.test_finished(output=result.stdout + result.stderr, passed=True)
+        self._run_ruff(events)
 
     def _ensure_git_identity(self) -> None:
         if not self._run(["git", "config", "user.email"], check=False).stdout.strip():
