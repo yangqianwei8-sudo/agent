@@ -5,6 +5,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+PYTHON="$ROOT/.venv/bin/python"
+if [[ ! -x "$PYTHON" ]]; then
+  echo "ERROR: project venv required at $PYTHON (python>=3.11)" >&2
+  exit 1
+fi
+
 # shellcheck disable=SC1091
 source "$ROOT/deploy/load-env.sh" "$ROOT/.env"
 
@@ -20,7 +26,7 @@ ssh-keyscan github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
 export GITHUB_SSH_KEY_PATH="$KEY"
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
-python3 - "$PUB" <<'PY'
+"$PYTHON" - "$PUB" <<'PY'
 import sys
 from pathlib import Path
 

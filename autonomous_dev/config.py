@@ -26,6 +26,7 @@ class AutonomousDevSettings(BaseSettings):
     github_ssh_key_path: str = ""
     github_token_file: str = ""
     cursor_api_key: str = ""
+    cursor_model: str = "composer-2"
     autonomous_worker_mode: str = "deterministic"  # deterministic | live | cursor_sdk
     autonomous_repo_root: str = "."
     autonomous_state_db_path: str = "data/autonomous_dev.db"
@@ -43,6 +44,15 @@ class AutonomousDevSettings(BaseSettings):
         if not p.is_absolute():
             p = self.repo_root / p
         return p
+
+    def validate_cursor_sdk_config(self) -> None:
+        """Fail closed when cursor_sdk mode is active but Cursor SDK is misconfigured."""
+        if self.autonomous_worker_mode != "cursor_sdk":
+            return
+        if not self.cursor_api_key.strip():
+            raise RuntimeError("CURSOR_API_KEY required for cursor_sdk mode")
+        if not self.cursor_model.strip():
+            raise RuntimeError("CURSOR_MODEL required for cursor_sdk mode")
 
 
 @lru_cache

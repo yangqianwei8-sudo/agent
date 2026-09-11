@@ -3,6 +3,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON="$ROOT/.venv/bin/python"
+if [[ ! -x "$PYTHON" ]]; then
+  exit 1
+fi
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 if [[ "${1:-}" != "get" ]]; then
@@ -26,7 +30,7 @@ if [[ "$host" != "github.com" || "$protocol" != "https" ]]; then
 fi
 
 token="$(
-  python3 - <<'PY'
+  "$PYTHON" - <<'PY'
 from autonomous_dev.github_auth import resolve_github_token
 print(resolve_github_token())
 PY

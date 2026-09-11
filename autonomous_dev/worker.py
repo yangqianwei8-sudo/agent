@@ -18,6 +18,8 @@ from autonomous_dev.state import StateStore, TaskRecord, TaskStatus
 logger = logging.getLogger(__name__)
 
 PRODUCT_DECISION_MARKER = "[PRODUCT-DECISION]"
+CURSOR_RUNTIME_ACCEPTANCE_MARKER = "[CURSOR-RUNTIME-ACCEPTANCE]"
+CURSOR_RUNTIME_OK_MARKER = "CURSOR_AGENT_RUNTIME_OK"
 
 
 @dataclass
@@ -62,7 +64,11 @@ class Worker:
                 )
 
             if self.settings.autonomous_worker_mode == "cursor_sdk":
-                commit_sha = self._run_cursor_agent(task, issue_body)
+                self.settings.validate_cursor_sdk_config()
+                if CURSOR_RUNTIME_ACCEPTANCE_MARKER in issue_body:
+                    commit_sha = self._run_cursor_agent_controlled(task, issue_body)
+                else:
+                    commit_sha = self._run_cursor_agent(task, issue_body)
             else:
                 self._git_fetch()
                 self._ensure_clean_or_resolve()
@@ -122,30 +128,48 @@ class Worker:
             env=git_env(),
         )
 
-    def _run_cursor_agent(self, task: TaskRecord, issue_body: str) -> str:
-        if not self.settings.cursor_api_key:
-            raise RuntimeError("CURSOR_API_KEY required for cursor_sdk mode")
-        from cursor_sdk import Agent, AgentOptions, CursorAgentError, LocalAgentOptions
+    def _cursor_agent_options(self):
+        from cursor_sdk import AgentOptions, LocalAgentOptions
 
+        return AgentOptions(
+            api_key=self.settings.cursor_api_key,
+            model=self.settings.cursor_model,
+            local=LocalAgentOptions(cwd=str(self.repo_root)),
+        )
+
+    def _invoke_cursor_agent(self, prompt: str):
+        from cursor_sdk import Agent, CursorAgentError
+
+        try:
+            result = Agent.prompt(prompt, self._cursor_agent_options())
+        except CursorAgentError as exc:
+            raise RuntimeError(str(exc)) from exc
+        if result.status == "error":
+            raise RuntimeError(f"cursor agent failed: {result.result}")
+        return result
+
+    def _run_cursor_agent_controlled(self, task: TaskRecord, issue_body: str) -> str:
+        prompt = (
+            "connectivity/controlled acceptance only; do not modify files.\n"
+            f"Issue #{task.issue_number} context:\n{issue_body}\n\n"
+            f"Reply with exactly: {CURSOR_RUNTIME_OK_MARKER}"
+        )
+        result = self._invoke_cursor_agent(prompt)
+        output = (result.result or "").strip()
+        if CURSOR_RUNTIME_OK_MARKER not in output:
+            raise RuntimeError(
+                f"controlled acceptance failed: expected {CURSOR_RUNTIME_OK_MARKER}, got: {output[:200]}"
+            )
+        return CURSOR_RUNTIME_OK_MARKER
+
+    def _run_cursor_agent(self, task: TaskRecord, issue_body: str) -> str:
         prompt = (
             f"Execute GitHub Issue #{task.issue_number} as sole SSOT.\n\n"
             f"{issue_body}\n\n"
             "Rules: run tests, git add -A, commit, push origin main, "
             "verify HEAD==origin/main, stop. No next product phase."
         )
-        try:
-            result = Agent.prompt(
-                prompt,
-                AgentOptions(
-                    api_key=self.settings.cursor_api_key,
-                    model="composer-2.5",
-                    local=LocalAgentOptions(cwd=str(self.repo_root)),
-                ),
-            )
-            if result.status == "error":
-                raise RuntimeError(f"cursor agent failed: {result.result}")
-        except CursorAgentError as exc:
-            raise RuntimeError(str(exc)) from exc
+        self._invoke_cursor_agent(prompt)
         head = self._run(["git", "rev-parse", "HEAD"], check=True)
         return head.stdout.strip()
 

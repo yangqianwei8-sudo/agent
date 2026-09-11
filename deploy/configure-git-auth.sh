@@ -5,6 +5,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+PYTHON="$ROOT/.venv/bin/python"
+if [[ ! -x "$PYTHON" ]]; then
+  echo "ERROR: project venv required at $PYTHON (python>=3.11)" >&2
+  exit 1
+fi
+
 if [[ -f "$ROOT/deploy/load-env.sh" ]]; then
   # shellcheck disable=SC1091
   source "$ROOT/deploy/load-env.sh" "$ROOT/.env"
@@ -17,7 +23,7 @@ while IFS= read -r line; do
     export "$key=$val"
   fi
 done < <(
-  python3 - <<'PY'
+  "$PYTHON" - <<'PY'
 import os
 from autonomous_dev.config import get_autonomous_settings
 
@@ -59,7 +65,7 @@ git config --local core.askPass /bin/false
 git config --global --unset-all credential.https://github.com.helper 2>/dev/null || true
 
 AUTH_MODE="$(
-  python3 - <<'PY'
+  "$PYTHON" - <<'PY'
 from autonomous_dev.github_auth import resolve_github_auth
 auth = resolve_github_auth()
 print(auth.mode)
@@ -69,7 +75,7 @@ PY
 case "$AUTH_MODE" in
   ssh)
     KEY="$(
-      python3 - <<'PY'
+      "$PYTHON" - <<'PY'
 from autonomous_dev.github_auth import resolve_github_auth
 auth = resolve_github_auth()
 print(auth.ssh_key_path or "")

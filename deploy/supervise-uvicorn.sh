@@ -20,10 +20,14 @@ fi
 echo $$ > "$PIDFILE"
 trap 'rm -f "$PIDFILE"' EXIT
 
-if [[ -f "$ROOT/.venv/bin/activate" ]]; then
-  # shellcheck disable=SC1091
-  source "$ROOT/.venv/bin/activate"
+VENV_PYTHON="$ROOT/.venv/bin/python"
+VENV_UVICORN="$ROOT/.venv/bin/uvicorn"
+if [[ ! -x "$VENV_PYTHON" || ! -x "$VENV_UVICORN" ]]; then
+  echo "ERROR: project venv required at $ROOT/.venv (python>=3.11)" >&2
+  exit 1
 fi
+# shellcheck disable=SC1091
+source "$ROOT/.venv/bin/activate"
 
 if [[ -f "$ROOT/deploy/load-env.sh" ]]; then
   # shellcheck disable=SC1091
@@ -41,7 +45,7 @@ echo "[$(date -Is)] supervisor started root=$ROOT host=$HOST port=$PORT" >> "$LO
 
 while true; do
   echo "[$(date -Is)] starting uvicorn" >> "$LOGFILE"
-  uvicorn backend.main:app --host "$HOST" --port "$PORT" >> "$LOGFILE" 2>&1 || true
+  "$VENV_UVICORN" backend.main:app --host "$HOST" --port "$PORT" >> "$LOGFILE" 2>&1 || true
   echo "[$(date -Is)] uvicorn exited — restarting in 2s" >> "$LOGFILE"
   sleep 2
 done

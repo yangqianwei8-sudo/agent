@@ -15,7 +15,12 @@ from autonomous_dev.github_webhook import WebhookVerificationError, verify_githu
 from autonomous_dev.review_bridge import ReviewBridge
 from autonomous_dev.state import StateStore, TaskStatus
 from autonomous_dev.task_router import TaskRouter
-from autonomous_dev.worker import PRODUCT_DECISION_MARKER, Worker
+from autonomous_dev.worker import (
+    CURSOR_RUNTIME_ACCEPTANCE_MARKER,
+    CURSOR_RUNTIME_OK_MARKER,
+    PRODUCT_DECISION_MARKER,
+    Worker,
+)
 from fastapi.testclient import TestClient
 
 from backend.main import app
@@ -239,3 +244,138 @@ def test_healthz_endpoint(infra_env):
     res = client.get("/healthz")
     assert res.status_code == 200
     assert res.json()["status"] == "ok"
+
+
+def test_cursor_model_from_env(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CURSOR_MODEL", "custom-model-x")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    assert settings.cursor_model == "custom-model-x"
+
+
+def test_cursor_sdk_config_validation_missing_api_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
+    monkeypatch.setenv("CURSOR_API_KEY", "")
+    monkeypatch.setenv("CURSOR_MODEL", "composer-2")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    with pytest.raises(RuntimeError, match="CURSOR_API_KEY"):
+        settings.validate_cursor_sdk_config()
+
+
+def test_cursor_sdk_config_validation_missing_model(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
+    monkeypatch.setenv("CURSOR_API_KEY", "test-key")
+    monkeypatch.setenv("CURSOR_MODEL", "   ")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    with pytest.raises(RuntimeError, match="CURSOR_MODEL"):
+        settings.validate_cursor_sdk_config()
+
+
+def test_deterministic_mode_skips_cursor_validation(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "deterministic")
+    monkeypatch.setenv("CURSOR_API_KEY", "")
+    monkeypatch.setenv("CURSOR_MODEL", "")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    settings.validate_cursor_sdk_config()
+
+
+def test_cursor_sdk_passes_model_to_agent_options(
+    infra_env, monkeypatch: pytest.MonkeyPatch
+):
+    repo, db = infra_env
+    monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
+    monkeypatch.setenv("CURSOR_API_KEY", "test-cursor-key")
+    monkeypatch.setenv("CURSOR_MODEL", "composer-2-test")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    worker = Worker(settings, store, repo_root=repo)
+
+    captured: dict[str, str] = {}
+
+    class FakeResult:
+        status = "completed"
+        result = CURSOR_RUNTIME_OK_MARKER
+
+    def fake_prompt(prompt, options):
+        captured["model"] = options.model
+        captured["api_key"] = options.api_key
+        return FakeResult()
+
+    monkeypatch.setattr("cursor_sdk.Agent.prompt", fake_prompt)
+
+    task = store.create_task(issue_number=99, delivery_id="cursor-model-1")
+    store.try_acquire_lock(99, task.id)
+    result = worker.run_task(
+        task,
+        issue_body=f"{CURSOR_RUNTIME_ACCEPTANCE_MARKER} connectivity check",
+    )
+    assert captured["model"] == "composer-2-test"
+    assert captured["api_key"] == "test-cursor-key"
+    assert result.commit_sha == CURSOR_RUNTIME_OK_MARKER
+
+
+def test_cursor_sdk_missing_api_key_fail_closed(infra_env, monkeypatch: pytest.MonkeyPatch):
+    repo, db = infra_env
+    monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
+    monkeypatch.setenv("CURSOR_API_KEY", "")
+    monkeypatch.setenv("CURSOR_MODEL", "composer-2")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    worker = Worker(settings, store, repo_root=repo)
+
+    task = store.create_task(issue_number=100, delivery_id="cursor-no-key")
+    store.try_acquire_lock(100, task.id)
+    result = worker.run_task(task, issue_body="test")
+    assert result.status == TaskStatus.NEEDS_FIX
+    assert "CURSOR_API_KEY" in (result.error or "")
+
+
+def test_cursor_sdk_missing_model_fail_closed(infra_env, monkeypatch: pytest.MonkeyPatch):
+    repo, db = infra_env
+    monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
+    monkeypatch.setenv("CURSOR_API_KEY", "test-key")
+    monkeypatch.setenv("CURSOR_MODEL", "")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    worker = Worker(settings, store, repo_root=repo)
+
+    task = store.create_task(issue_number=101, delivery_id="cursor-no-model")
+    store.try_acquire_lock(101, task.id)
+    result = worker.run_task(task, issue_body="test")
+    assert result.status == TaskStatus.NEEDS_FIX
+    assert "CURSOR_MODEL" in (result.error or "")
+
+
+def test_cursor_sdk_secrets_not_in_error(infra_env, monkeypatch: pytest.MonkeyPatch):
+    repo, db = infra_env
+    secret = "super-secret-cursor-key-xyz"
+    monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
+    monkeypatch.setenv("CURSOR_API_KEY", secret)
+    monkeypatch.setenv("CURSOR_MODEL", "composer-2")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    worker = Worker(settings, store, repo_root=repo)
+
+    def fake_prompt(prompt, options):
+        raise RuntimeError("simulated agent failure")
+
+    monkeypatch.setattr("cursor_sdk.Agent.prompt", fake_prompt)
+
+    task = store.create_task(issue_number=102, delivery_id="cursor-secret")
+    store.try_acquire_lock(102, task.id)
+    result = worker.run_task(
+        task,
+        issue_body=f"{CURSOR_RUNTIME_ACCEPTANCE_MARKER} secret check",
+    )
+    assert result.status == TaskStatus.NEEDS_FIX
+    assert secret not in (result.error or "")
+    updated = store.get_task(task.id)
+    assert updated is not None
+    assert secret not in (updated.error or "")
