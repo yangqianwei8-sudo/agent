@@ -1,0 +1,93 @@
+{
+  "generated_at": "2026-09-11T09:03:12.123225+00:00",
+  "issue": 20,
+  "original_issue": 15,
+  "artifacts": {
+    "1_reviewer_bridge_unit_tests": {
+      "label": "reviewer_bridge_unit_tests",
+      "command": "/home/devbox/project/.venv/bin/python -m pytest backend/tests/unit/test_autonomous_dev.py -v --tb=short",
+      "exit_code": 0,
+      "passed": true,
+      "output": "============================= test session starts ==============================\nplatform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python\ncachedir: .pytest_cache\nrootdir: /home/devbox/project\nconfigfile: pyproject.toml\nplugins: anyio-4.15.1\ncollecting ... collected 50 items\n\nbackend/tests/unit/test_autonomous_dev.py::test_webhook_signature_verification PASSED [  2%]\nbackend/tests/unit/test_autonomous_dev.py::test_duplicate_delivery_idempotency PASSED [  4%]\nbackend/tests/unit/test_autonomous_dev.py::test_invalid_signature_rejected PASSED [  6%]\nbackend/tests/unit/test_autonomous_dev.py::test_issue_routing_starts_worker PASSED [  8%]\nbackend/tests/unit/test_autonomous_dev.py::test_single_current_task_lock PASSED [ 10%]\nbackend/tests/unit/test_autonomous_dev.py::test_push_correlation PASSED  [ 12%]\nbackend/tests/unit/test_autonomous_dev.py::test_product_decision_pause PASSED [ 14%]\nbackend/tests/unit/test_autonomous_dev.py::test_worker_git_completion_verification PASSED [ 16%]\nbackend/tests/unit/test_autonomous_dev.py::test_state_transitions PASSED [ 18%]\nbackend/tests/unit/test_autonomous_dev.py::test_review_bridge_adapter PASSED [ 20%]\nbackend/tests/unit/test_autonomous_dev.py::test_healthz_endpoint PASSED  [ 22%]\nbackend/tests/unit/test_autonomous_dev.py::test_cursor_model_from_env PASSED [ 24%]\nbackend/tests/unit/test_autonomous_dev.py::test_cursor_sdk_config_validation_missing_api_key PASSED [ 26%]\nbackend/tests/unit/test_autonomous_dev.py::test_cursor_sdk_config_validation_missing_model PASSED [ 28%]\nbackend/tests/unit/test_autonomous_dev.py::test_deterministic_mode_skips_cursor_validation PASSED [ 30%]\nbackend/tests/unit/test_autonomous_dev.py::test_cursor_sdk_passes_model_to_agent_options PASSED [ 32%]\nbackend/tests/unit/test_autonomous_dev.py::test_cursor_sdk_missing_api_key_fail_closed PASSED [ 34%]\nbackend/tests/unit/test_autonomous_dev.py::test_cursor_sdk_missing_model_fail_closed PASSED [ 36%]\nbackend/tests/unit/test_autonomous_dev.py::test_cursor_sdk_secrets_not_in_error PASSED [ 38%]\nbackend/tests/unit/test_autonomous_dev.py::test_execution_key_from_payload PASSED [ 40%]\nbackend/tests/unit/test_autonomous_dev.py::test_duplicate_active_execution_blocked PASSED [ 42%]\nbackend/tests/unit/test_autonomous_dev.py::test_lease_blocks_second_worker PASSED [ 44%]\nbackend/tests/unit/test_autonomous_dev.py::test_stale_lease_recovery PASSED [ 46%]\nbackend/tests/unit/test_autonomous_dev.py::test_heartbeat_extends_lease PASSED [ 48%]\nbackend/tests/unit/test_autonomous_dev.py::test_github_client_fail_closed_without_token PASSED [ 50%]\nbackend/tests/unit/test_autonomous_dev.py::test_push_correlation_no_fallback PASSED [ 52%]\nbackend/tests/unit/test_autonomous_dev.py::test_push_correlation_via_commit_message_before_db_commit PASSED [ 54%]\nbackend/tests/unit/test_autonomous_dev.py::test_lease_acquire_failed_marks_task_failed PASSED [ 56%]\nbackend/tests/unit/test_autonomous_dev.py::test_push_correlation_idempotent PASSED [ 58%]\nbackend/tests/unit/test_autonomous_dev.py::test_reviewer_pass_completes_task PASSED [ 60%]\nbackend/tests/unit/test_autonomous_dev.py::test_labeled_existing_open_issue_activates PASSED [ 62%]\nbackend/tests/unit/test_autonomous_dev.py::test_failed_task_status_roundtrip PASSED [ 64%]\nbackend/tests/unit/test_autonomous_dev.py::test_review_trigger_dedup_metadata PASSED [ 66%]\nbackend/tests/unit/test_autonomous_dev.py::test_reviewer_pass_completes_task_via_executor PASSED [ 68%]\nbackend/tests/unit/test_autonomous_dev.py::test_reviewer_fail_creates_repair_issue PASSED [ 70%]\nbackend/tests/unit/test_autonomous_dev.py::test_reviewer_product_decision_packet PASSED [ 72%]\nbackend/tests/unit/test_autonomous_dev.py::test_reviewer_exactly_once_idempotent PASSED [ 74%]\nbackend/tests/unit/test_autonomous_dev.py::test_reviewer_lock_blocks_concurrent PASSED [ 76%]\nbackend/tests/unit/test_autonomous_dev.py::test_openai_adapter_credential_blocker PASSED [ 78%]\nbackend/tests/unit/test_autonomous_dev.py::test_llm_api_key_does_not_configure_reviewer PASSED [ 80%]\nbackend/tests/unit/test_autonomous_dev.py::test_openai_adapter_schedules_in_deterministic_mode PASSED [ 82%]\nbackend/tests/unit/test_autonomous_dev.py::test_push_triggers_reviewer_bridge PASSED [ 84%]\nbackend/tests/unit/test_autonomous_dev.py::test_reviewer_service_deterministic_pass PASSED [ 86%]\nbackend/tests/unit/test_autonomous_dev.py::test_reviewer_evidence_includes_pytest_and_ruff PASSED [ 88%]\nbackend/tests/unit/test_autonomous_dev.py::test_failed_review_becomes_retryable PASSED [ 90%]\nbackend/tests/unit/test_autonomous_dev.py::test_transient_failure_retries_to_single_verdict PASSED [ 92%]\nbackend/tests/unit/test_autonomous_dev.py::test_stale_running_review_recovered PASSED [ 94%]\nbackend/tests/unit/test_autonomous_dev.py::test_review_worker_no_deadlock_on_transient_kick PASSED [ 96%]\nbackend/tests/unit/test_autonomous_dev.py::test_finalize_obsolete_review_invocations PASSED [ 98%]\nbackend/tests/unit/test_autonomous_dev.py::test_verdict_persisted_when_github_apply_fails PASSED [100%]\n\n=============================== warnings summary ===============================\n.venv/lib/python3.11/site-packages/fastapi/testclient.py:1\n  /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n======================== 50 passed, 1 warning in 13.82s ========================\n"
+    },
+    "2_webhook_router_integration": {
+      "label": "webhook_router_integration",
+      "command": "/home/devbox/project/.venv/bin/python -m pytest backend/tests/unit/test_autonomous_dev.py -v -k webhook or router or review_bridge or push_triggers --tb=short",
+      "exit_code": 0,
+      "passed": true,
+      "output": "============================= test session starts ==============================\nplatform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python\ncachedir: .pytest_cache\nrootdir: /home/devbox/project\nconfigfile: pyproject.toml\nplugins: anyio-4.15.1\ncollecting ... collected 50 items / 47 deselected / 3 selected\n\nbackend/tests/unit/test_autonomous_dev.py::test_webhook_signature_verification PASSED [ 33%]\nbackend/tests/unit/test_autonomous_dev.py::test_review_bridge_adapter PASSED [ 66%]\nbackend/tests/unit/test_autonomous_dev.py::test_push_triggers_reviewer_bridge PASSED [100%]\n\n=============================== warnings summary ===============================\n.venv/lib/python3.11/site-packages/fastapi/testclient.py:1\n  /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n================= 3 passed, 47 deselected, 1 warning in 0.88s ==================\n"
+    },
+    "3_autonomous_infra_regression": {
+      "label": "autonomous_infra_regression",
+      "command": "/home/devbox/project/.venv/bin/python -m pytest backend/tests/unit/test_autonomous_dev.py -q",
+      "exit_code": 0,
+      "passed": true,
+      "output": "..................................................                       [100%]\n=============================== warnings summary ===============================\n.venv/lib/python3.11/site-packages/fastapi/testclient.py:1\n  /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n50 passed, 1 warning in 13.46s\n"
+    },
+    "4_full_pytest": {
+      "label": "full_pytest",
+      "command": "/home/devbox/project/.venv/bin/python -m pytest -q",
+      "exit_code": 0,
+      "passed": true,
+      "output": "sssssss..ssss.....sssssssssssssssss.ssssssssssssssssssssssssssssssssssss [ 14%]\nssss...s.sssssssssssssssssssss.sssssssssssssssssssssssssssssssssssssssss [ 29%]\nssssssssssssssssssssssssssssssssssssssss..ssssssssssssssssssssssssssssss [ 44%]\nsssss.sssss.ssssssssssssssssss.ss.ssssssssssssss.sss.s........ssssssssss [ 59%]\nsssssssssssssssssss.ssssssssssssssssssssssssssssssssssssssssss.......... [ 74%]\n.................................................................sss.... [ 89%]\n.....s.........ssssssssssssssss.....ssssssssssssss                       [100%]\n=============================== warnings summary ===============================\n.venv/lib/python3.11/site-packages/fastapi/testclient.py:1\n  /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n    from starlette.testclient import TestClient as TestClient  # noqa\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n128 passed, 354 skipped, 1 warning in 13.64s\n"
+    },
+    "5_ruff_check": {
+      "label": "ruff_check",
+      "command": "/home/devbox/project/.venv/bin/python -m ruff check .",
+      "exit_code": 0,
+      "passed": true,
+      "output": "\u001b[1;32mAll checks passed!\u001b[0m\n"
+    },
+    "6_secret_scan": {
+      "passed": true,
+      "findings_count": 0,
+      "findings": [],
+      "env_tracked": false,
+      "suspected_secrets": 0
+    },
+    "7_live_acceptance": {
+      "label": "live_p02_reviewer_acceptance",
+      "command": "/home/devbox/project/.venv/bin/python /home/devbox/project/backend/scripts/live_p02_reviewer_acceptance.py",
+      "exit_code": 0,
+      "passed": true,
+      "output": "=== P0.2 Reviewer Bridge Live Acceptance ===\nA_issue_labeled: PASS\nB_healthz_2xx: PASS\nC_one_worker: PASS\nD_worker_executed: PASS\nE_harmless_change: PASS\nFAIL_controlled: PASS\nFAIL_one_repair: PASS\nFAIL_repair_task: PASS\nG_push_webhook: PASS\nH_ready_for_review: PASS\nI_reviewer_bridge_auto: PASS\nI_reviewer_configured: PASS\nJ_reviewer_executed: PASS\nK_verdict_persisted: PASS\nK_verdict_posted: PASS\nL_pass_closes: PASS\nM_replay_idempotent: PASS\nN_clean_tree: PASS\nN_head_equals_origin: PASS\nPD_controlled: PASS\nPD_packet: PASS\nPD_stops: PASS\nRESTART_single_completion: PASS\nRESTART_stale_running: PASS\nRETRY_auto_recovery: PASS\nRETRY_completed_once: PASS\nRETRY_single_verdict: PASS\nRETRY_transient_fail: PASS\nwebhook_fail_closed: PASS\nFinal: PASS\n/home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.\n  from starlette.testclient import TestClient as TestClient  # noqa\nreview failed task=4 invocation=5f387d2d-c9c1-4484-bb15-6d597887e934\nTraceback (most recent call last):\n  File \"/home/devbox/project/autonomous_dev/review_executor.py\", line 185, in _execute_review\n    result = self._reviewer.review(ctx, invocation_id=invocation_id)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/devbox/project/backend/scripts/live_p02_reviewer_acceptance.py\", line 307, in _flaky_review\n    raise RuntimeError(\"simulated transient reviewer API 503\")\nRuntimeError: simulated transient reviewer API 503\nrecovered stale RUNNING review invocation_id=ed35fa3d-a41e-4879-95e3-2ec049e382aa\n"
+    }
+  },
+  "git": {
+    "status": {
+      "command": "git status",
+      "exit_code": 0,
+      "output": "On branch main\nYour branch is up to date with 'origin/main'.\n\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n  (use \"git restore <file>...\" to discard changes in working directory)\n\tmodified:   backend/tests/fixtures/sample.docx\n\tmodified:   backend/tests/fixtures/sample_scanned.pdf\n\tmodified:   backend/tests/fixtures/sample_text.pdf\n\nno changes added to commit (use \"git add\" and/or \"git commit -a\")"
+    },
+    "diff_stat": {
+      "command": "git diff --stat",
+      "exit_code": 0,
+      "output": "backend/tests/fixtures/sample.docx        | Bin 36780 -> 36780 bytes\n backend/tests/fixtures/sample_scanned.pdf |   4 ++--\n backend/tests/fixtures/sample_text.pdf    |   4 ++--\n 3 files changed, 4 insertions(+), 4 deletions(-)"
+    },
+    "diff_full": {
+      "command": "git diff",
+      "exit_code": 0,
+      "output": "diff --git a/backend/tests/fixtures/sample.docx b/backend/tests/fixtures/sample.docx\nindex 18b10e3..7d3bc0e 100644\nBinary files a/backend/tests/fixtures/sample.docx and b/backend/tests/fixtures/sample.docx differ\ndiff --git a/backend/tests/fixtures/sample_scanned.pdf b/backend/tests/fixtures/sample_scanned.pdf\nindex ced619e..b305e39 100644\n--- a/backend/tests/fixtures/sample_scanned.pdf\n+++ b/backend/tests/fixtures/sample_scanned.pdf\n@@ -37,7 +37,7 @@ endobj\n endobj\n 6 0 obj\n <<\n-/Author (anonymous) /CreationDate (D:20260911002748+08'00') /Creator (anonymous) /Keywords () /ModDate (D:20260911002748+08'00') /Producer (ReportLab PDF Library - \\(opensource\\)) \n+/Author (anonymous) /CreationDate (D:20260911090344+00'00') /Creator (anonymous) /Keywords () /ModDate (D:20260911090344+00'00') /Producer (ReportLab PDF Library - \\(opensource\\)) \n   /Subject (unspecified) /Title (untitled) /Trapped /False\n >>\n endobj\n@@ -75,7 +75,7 @@ xref\n trailer\n <<\n /ID \n-[<a720244d3d0f9aa539e770072824034e><a720244d3d0f9aa539e770072824034e>]\n+[<5088732a5f8c7a9c09dccaef04d8e70b><5088732a5f8c7a9c09dccaef04d8e70b>]\n % ReportLab generated PDF document -- digest (opensource)\n \n /Info 6 0 R\ndiff --git a/backend/tests/fixtures/sample_text.pdf b/backend/tests/fixtures/sample_text.pdf\nindex 3c75762..652d7e8 100644\n--- a/backend/tests/fixtures/sample_text.pdf\n+++ b/backend/tests/fixtures/sample_text.pdf\n@@ -37,7 +37,7 @@ endobj\n endobj\n 6 0 obj\n <<\n-/Author (anonymous) /CreationDate (D:20260911002748+08'00') /Creator (anonymous) /Keywords () /ModDate (D:20260911002748+08'00') /Producer (ReportLab PDF Library - \\(opensource\\)) \n+/Author (anonymous) /CreationDate (D:20260911090344+00'00') /Creator (anonymous) /Keywords () /ModDate (D:20260911090344+00'00') /Producer (ReportLab PDF Library - \\(opensource\\)) \n   /Subject (unspecified) /Title (untitled) /Trapped /False\n >>\n endobj\n@@ -75,7 +75,7 @@ xref\n trailer\n <<\n /ID \n-[<0fd1a494378bc9f3665a4325ad0a3253><0fd1a494378bc9f3665a4325ad0a3253>]\n+[<1c5cfb6cd218dadfa6742c1f99cc105e><1c5cfb6cd218dadfa6742c1f99cc105e>]\n % ReportLab generated PDF document -- digest (opensource)\n \n /Info 6 0 R"
+    },
+    "head": {
+      "command": "git rev-parse HEAD",
+      "exit_code": 0,
+      "output": "596f969d8880013736f5cf7cf42512ca061b5222"
+    },
+    "origin_main": {
+      "command": "git rev-parse origin/main",
+      "exit_code": 0,
+      "output": "596f969d8880013736f5cf7cf42512ca061b5222"
+    },
+    "porcelain": {
+      "command": "git status --porcelain",
+      "exit_code": 0,
+      "output": "M backend/tests/fixtures/sample.docx\n M backend/tests/fixtures/sample_scanned.pdf\n M backend/tests/fixtures/sample_text.pdf"
+    }
+  },
+  "reviewer_independence": {
+    "llm_fallback_removed": true,
+    "rationale": "Reviewer uses OPENAI_API_KEY + REVIEWER_* only. LLM_API_KEY/LLM_BASE_URL/LLM_MODEL configure the worker LLM (DeepSeek) and are intentionally excluded so the independent reviewer cannot be silently substituted by the same provider the Cursor worker uses."
+  },
+  "overall_passed": true
+}
