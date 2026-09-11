@@ -2,37 +2,30 @@
 
 from __future__ import annotations
 
+import logging
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 from datetime import UTC, datetime
 from typing import Any
 
 from autonomous_dev.config import AutonomousDevSettings
-from autonomous_dev.state import (
-    StateStore,
-    TaskRecord,
-)
+from autonomous_dev.state import StateStore, TaskRecord
 from autonomous_dev.status_deriver import (
     WorkerLeaseSnapshot,
     derive_current_phase,
     derive_pipeline_stages,
     derive_system_status,
+    is_worker_runtime_stale,
     parse_generation,
     redact_secrets,
     sanitize_for_json,
     summarize_error,
 )
 
+logger = logging.getLogger(__name__)
 
-def _lease_snapshot(store: StateStore) -> WorkerLeaseSnapshot:
-    lease = store.get_lease()
-    return WorkerLeaseSnapshot(
-        locked=lease.locked,
-        owner=lease.owner,
-        task_id=lease.task_id,
-        issue_number=lease.issue_number,
-        acquired_at=lease.acquired_at,
-        heartbeat_at=lease.heartbeat_at,
-        lease_expires_at=lease.lease_expires_at,
-    )
+DASHBOARD_GITHUB_TIMEOUT_SECONDS = 1.5
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="dashboard-io")
 
 
 def _parse_ts(value: str | None) -> datetime | None:
@@ -44,108 +37,90 @@ def _parse_ts(value: str | None) -> datetime | None:
         return None
 
 
-def _select_primary_task(store: StateStore) -> TaskRecord | None:
-    active = store.get_active_task()
-    if active is not None:
-        return active
-    with store._conn() as conn:  # noqa: SLF001
-        row = conn.execute(
-            """
-            SELECT * FROM task_executions
-            WHERE status IN ('product-decision', 'needs-fix', 'failed')
-            ORDER BY id DESC LIMIT 1
-            """
-        ).fetchone()
-    return store._row_to_task(row) if row else None  # noqa: SLF001
-
-
-def _select_current_task(store: StateStore) -> TaskRecord | None:
-    with store._conn() as conn:  # noqa: SLF001
-        row = conn.execute(
-            """
-            SELECT * FROM task_executions
-            WHERE status IN ('queued', 'running', 'ready-for-review')
-            ORDER BY id DESC LIMIT 1
-            """
-        ).fetchone()
-    return store._row_to_task(row) if row else None  # noqa: SLF001
-
-
-def _recent_failed_task(store: StateStore) -> TaskRecord | None:
-    with store._conn() as conn:  # noqa: SLF001
-        row = conn.execute(
-            """
-            SELECT * FROM task_executions
-            WHERE status = 'failed'
-            ORDER BY id DESC LIMIT 1
-            """
-        ).fetchone()
-    return store._row_to_task(row) if row else None  # noqa: SLF001
-
-
-def _latest_review_invocation(store: StateStore, task_id: int | None) -> Any:
-    if task_id is None:
-        return None
-    with store._conn() as conn:  # noqa: SLF001
-        row = conn.execute(
-            """
-            SELECT * FROM review_invocations
-            WHERE task_id = ?
-            ORDER BY created_at DESC LIMIT 1
-            """,
-            (task_id,),
-        ).fetchone()
-    return store._row_to_review_invocation(row) if row else None  # noqa: SLF001
-
-
-def _recent_completed(store: StateStore, *, limit: int = 5) -> list[dict[str, Any]]:
-    with store._conn() as conn:  # noqa: SLF001
-        rows = conn.execute(
-            """
-            SELECT te.*, ri.verdict AS review_verdict
-            FROM task_executions te
-            LEFT JOIN review_invocations ri ON ri.task_id = te.id
-            WHERE te.status = 'completed'
-            ORDER BY te.updated_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-    items: list[dict[str, Any]] = []
-    for row in rows:
-        items.append(
-            {
-                "issue_number": row["issue_number"],
-                "title": None,
-                "verdict": row["review_verdict"] or "PASS",
-                "commit_sha": row["commit_sha"],
-                "completed_at": row["updated_at"],
-            }
-        )
-    return items
-
-
-def _fetch_issue_summary(
-    settings: AutonomousDevSettings,
-    issue_number: int | None,
-) -> tuple[str | None, list[str]]:
-    if issue_number is None:
-        return None, []
-    try:
-        from autonomous_dev.github_client import GitHubClient
-
-        client = GitHubClient(settings)
-        labels = sorted(client.get_issue_labels(issue_number))
-        return None, labels
-    except Exception:
-        return None, []
-
-
 def _elapsed_seconds(started_at: str | None, *, now: datetime) -> int | None:
     start = _parse_ts(started_at)
     if start is None:
         return None
     return max(0, int((now - start).total_seconds()))
+
+
+def _fetch_issue_labels_sync(settings: AutonomousDevSettings, issue_number: int) -> list[str]:
+    from autonomous_dev.github_client import GitHubClient
+
+    client = GitHubClient(settings)
+    return sorted(client.get_issue_labels(issue_number))
+
+
+def _fetch_issue_labels_bounded(
+    settings: AutonomousDevSettings,
+    issue_number: int | None,
+    *,
+    timeout_seconds: float = DASHBOARD_GITHUB_TIMEOUT_SECONDS,
+) -> tuple[list[str], str | None]:
+    if issue_number is None:
+        return [], None
+    future = _executor.submit(_fetch_issue_labels_sync, settings, issue_number)
+    try:
+        return future.result(timeout=timeout_seconds), None
+    except FuturesTimeout:
+        future.cancel()
+        return [], "github_labels_timeout"
+    except Exception as exc:  # noqa: BLE001 — degrade, never fail dashboard
+        logger.debug("dashboard github labels failed issue=%s: %s", issue_number, exc)
+        return [], "github_labels_unavailable"
+
+
+def _activity_from_snapshot(
+    delivery_rows: list[dict[str, Any]],
+    task_rows: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for row in delivery_rows:
+        action = row.get("action") or ""
+        summary = f"Webhook 收到 {row.get('event_type') or 'unknown'}"
+        if action:
+            summary += f" / {action}"
+        summary += f" ({row.get('status')})"
+        events.append(
+            {
+                "at": row.get("received_at"),
+                "kind": "webhook_received",
+                "summary": redact_secrets(summary),
+            }
+        )
+
+    for row in task_rows:
+        status = row.get("status")
+        issue_number = row.get("issue_number")
+        kind = "task_update"
+        summary = f"Issue #{issue_number} 任务状态 → {status}"
+        if status == "running":
+            kind = "worker_started"
+            summary = f"Issue #{issue_number} Worker 已启动"
+        elif status == "ready-for-review":
+            kind = "ready_for_review"
+            summary = f"Issue #{issue_number} 进入 ready-for-review"
+        elif status == "completed":
+            kind = "verdict"
+            summary = f"Issue #{issue_number} 已完成"
+        elif status == "failed":
+            kind = "failure"
+            summary = f"Issue #{issue_number} 失败"
+        elif status == "product-decision":
+            kind = "waiting_user"
+            summary = f"Issue #{issue_number} 等待产品决策"
+        events.append(
+            {
+                "at": row.get("updated_at"),
+                "kind": kind,
+                "summary": redact_secrets(summary),
+            }
+        )
+
+    events.sort(key=lambda item: item.get("at") or "", reverse=True)
+    return events[:limit]
 
 
 def _task_to_dict(
@@ -155,15 +130,15 @@ def _task_to_dict(
     system_status: Any,
     lease: WorkerLeaseSnapshot,
     now: datetime,
+    labels: list[str],
 ) -> dict[str, Any] | None:
     if task is None:
         return None
-    title, labels = _fetch_issue_summary(settings, task.issue_number)
     started_at = task.created_at
     return {
         "repo": settings.github_repo,
         "issue_number": task.issue_number,
-        "title": title,
+        "title": None,
         "task_id": task.id,
         "generation": parse_generation(task.execution_key),
         "task_status": task.status.value,
@@ -181,80 +156,29 @@ def _task_to_dict(
     }
 
 
-def build_recent_activity(store: StateStore, *, limit: int = 20) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
-
-    with store._conn() as conn:  # noqa: SLF001
-        for row in conn.execute(
-            """
-            SELECT delivery_id, event_type, action, status, received_at, error
-            FROM webhook_deliveries
-            ORDER BY received_at DESC LIMIT ?
-            """,
-            (limit,),
-        ):
-            action = row["action"] or ""
-            summary = f"Webhook 收到 {row['event_type']}"
-            if action:
-                summary += f" / {action}"
-            summary += f" ({row['status']})"
-            events.append(
-                {
-                    "at": row["received_at"],
-                    "kind": "webhook_received",
-                    "summary": redact_secrets(summary),
-                }
-            )
-
-        for row in conn.execute(
-            """
-            SELECT id, issue_number, status, updated_at, error
-            FROM task_executions
-            ORDER BY updated_at DESC LIMIT ?
-            """,
-            (limit,),
-        ):
-            status = row["status"]
-            kind = "task_update"
-            summary = f"Issue #{row['issue_number']} 任务状态 → {status}"
-            if status == "running":
-                kind = "worker_started"
-                summary = f"Issue #{row['issue_number']} Worker 已启动"
-            elif status == "ready-for-review":
-                kind = "ready_for_review"
-                summary = f"Issue #{row['issue_number']} 进入 ready-for-review"
-            elif status == "completed":
-                kind = "verdict"
-                summary = f"Issue #{row['issue_number']} 已完成"
-            elif status == "failed":
-                kind = "failure"
-                summary = f"Issue #{row['issue_number']} 失败"
-            elif status == "product-decision":
-                kind = "waiting_user"
-                summary = f"Issue #{row['issue_number']} 等待产品决策"
-            events.append(
-                {
-                    "at": row["updated_at"],
-                    "kind": kind,
-                    "summary": redact_secrets(summary),
-                }
-            )
-
-    events.sort(key=lambda item: item.get("at") or "", reverse=True)
-    return events[:limit]
-
-
 def build_dashboard_payload(
     settings: AutonomousDevSettings,
     store: StateStore,
 ) -> dict[str, Any]:
-    now = datetime.now(UTC)
-    lease = _lease_snapshot(store)
-    primary_task = _select_primary_task(store)
-    current_task = _select_current_task(store)
-    active_review = _latest_review_invocation(store, primary_task.id if primary_task else None)
-    reviewer_configured = settings.resolve_reviewer_credentials() is not None
-    reviewer_locked = store.is_reviewer_locked()
+    generated_at = datetime.now(UTC)
+    degraded_reasons: list[str] = []
+    snapshot = store.load_dashboard_snapshot(activity_limit=15, completed_limit=5)
+
+    lease_raw = snapshot["lease"]
+    lease = WorkerLeaseSnapshot(
+        locked=lease_raw.locked,
+        owner=lease_raw.owner,
+        task_id=lease_raw.task_id,
+        issue_number=lease_raw.issue_number,
+        acquired_at=lease_raw.acquired_at,
+        heartbeat_at=lease_raw.heartbeat_at,
+        lease_expires_at=lease_raw.lease_expires_at,
+    )
+    primary_task = snapshot["primary_task"]
+    current_task = snapshot["current_task"]
+    active_review = snapshot["active_review"]
+    reviewer_locked = snapshot["reviewer_locked"]
+    worker_locked = snapshot["worker_locked"]
 
     system_status = derive_system_status(
         primary_task=primary_task,
@@ -262,25 +186,31 @@ def build_dashboard_payload(
         reviewer_locked=reviewer_locked,
         active_review=active_review,
         lease_ttl_seconds=settings.worker_lease_ttl_seconds,
-        now=now,
-        recent_failed_task=_recent_failed_task(store),
+        now=generated_at,
+        recent_failed_task=snapshot["recent_failed"],
     )
+
+    labels: list[str] = []
+    label_issue = current_task.issue_number if current_task else None
+    fetched_labels, label_reason = _fetch_issue_labels_bounded(settings, label_issue)
+    if label_reason:
+        degraded_reasons.append(label_reason)
+    else:
+        labels = fetched_labels
 
     heartbeat_at = lease.heartbeat_at
     heartbeat_age: int | None = None
     hb_ts = _parse_ts(heartbeat_at)
     if hb_ts is not None:
-        heartbeat_age = max(0, int((now - hb_ts).total_seconds()))
+        heartbeat_age = max(0, int((generated_at - hb_ts).total_seconds()))
 
     runtime_stale = False
     if primary_task is not None:
-        from autonomous_dev.status_deriver import is_worker_runtime_stale
-
         runtime_stale = is_worker_runtime_stale(
             primary_task,
             lease,
             lease_ttl_seconds=settings.worker_lease_ttl_seconds,
-            now=now,
+            now=generated_at,
         )
 
     latest_error = None
@@ -298,6 +228,17 @@ def build_dashboard_payload(
         ),
     }
 
+    recent_completed = [
+        {
+            "issue_number": row["issue_number"],
+            "title": None,
+            "verdict": row["review_verdict"] or "PASS",
+            "commit_sha": row["commit_sha"],
+            "completed_at": row["updated_at"],
+        }
+        for row in snapshot["completed_rows"]
+    ]
+
     payload: dict[str, Any] = {
         "system_status": system_status.value,
         "current_task": _task_to_dict(
@@ -305,7 +246,8 @@ def build_dashboard_payload(
             settings=settings,
             system_status=system_status,
             lease=lease,
-            now=now,
+            now=generated_at,
+            labels=labels,
         ),
         "pipeline_stages": derive_pipeline_stages(
             current_task or primary_task,
@@ -314,15 +256,17 @@ def build_dashboard_payload(
             active_review=active_review,
         ),
         "runtime_evidence": {
-            "worker_locked": store.is_locked(),
+            "worker_locked": worker_locked,
             "worker_lease_acquired_at": lease.acquired_at,
             "worker_lease_expires_at": lease.lease_expires_at,
             "last_worker_heartbeat": heartbeat_at,
             "heartbeat_age_seconds": heartbeat_age,
-            "reviewer_configured": reviewer_configured,
+            "reviewer_configured": settings.resolve_reviewer_credentials() is not None,
             "reviewer_locked": reviewer_locked,
             "reviewer_status": (
-                active_review.status.value if active_review else ("locked" if reviewer_locked else "idle")
+                active_review.status.value
+                if active_review
+                else ("locked" if reviewer_locked else "idle")
             ),
             "last_reviewer_invocation": (
                 {
@@ -337,13 +281,29 @@ def build_dashboard_payload(
             "latest_error_summary": latest_error,
             "runtime_stale": runtime_stale,
             "worker_mode": settings.autonomous_worker_mode,
+            "dashboard_degraded": bool(degraded_reasons),
+            "degraded_reason": ", ".join(degraded_reasons) if degraded_reasons else None,
+            "payload_generated_at": generated_at.isoformat(),
         },
-        "recent_activity": build_recent_activity(store, limit=15),
+        "recent_activity": _activity_from_snapshot(
+            snapshot["delivery_rows"],
+            snapshot["task_rows"],
+            limit=15,
+        ),
         "owner_attention": owner_attention,
-        "recent_completed": _recent_completed(store),
-        "last_updated": now.isoformat(),
+        "recent_completed": recent_completed,
+        "last_updated": generated_at.isoformat(),
     }
     return sanitize_for_json(payload)
+
+
+def build_recent_activity(store: StateStore, *, limit: int = 20) -> list[dict[str, Any]]:
+    snapshot = store.load_dashboard_snapshot(activity_limit=limit, completed_limit=1)
+    return _activity_from_snapshot(
+        snapshot["delivery_rows"],
+        snapshot["task_rows"],
+        limit=limit,
+    )
 
 
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -382,6 +342,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .stage.unknown { background: #1f2937; color: #9ca3af; }
     ul { margin: 0; padding-left: 18px; }
     .error { color: #fca5a5; }
+    .degraded { color: #fed7aa; font-size: 0.85rem; margin-top: 6px; }
     @media (max-width: 640px) { body { padding: 10px; } .status-banner { font-size: 1.05rem; } }
   </style>
 </head>
@@ -390,6 +351,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="muted">只读运行视图 · 每 7 秒自动刷新 JSON</div>
   <div id="status-banner" class="status-banner status-IDLE">加载中…</div>
   <div class="muted" id="last-updated"></div>
+  <div id="degraded" class="degraded"></div>
 
   <section>
     <h2>当前任务</h2>
@@ -445,6 +407,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       banner.textContent = `${STATUS_LABELS[status] || status} (${status})`;
       document.getElementById("last-updated").textContent = `最后更新: ${data.last_updated || "—"}`;
 
+      const rt = data.runtime_evidence || {};
+      const degradedEl = document.getElementById("degraded");
+      if (rt.dashboard_degraded) {
+        degradedEl.textContent = `部分外部数据降级: ${rt.degraded_reason || "unknown"}`;
+      } else {
+        degradedEl.textContent = "";
+      }
+
       const task = data.current_task;
       const taskEl = document.getElementById("current-task");
       if (!task) {
@@ -472,7 +442,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         (s) => `<span class="stage ${s.state}">${s.label}: ${s.state}</span>`
       ).join("");
 
-      const rt = data.runtime_evidence || {};
       document.getElementById("runtime").innerHTML = [
         kv("Worker Locked", rt.worker_locked),
         kv("Lease Acquired", rt.worker_lease_acquired_at),
@@ -485,6 +454,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         kv("Runtime Stale", rt.runtime_stale),
         kv("Worker Mode", rt.worker_mode),
         kv("Latest Error", rt.latest_error_summary),
+        kv("Payload Generated", rt.payload_generated_at),
       ].join("");
 
       const owner = data.owner_attention || {};

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
@@ -51,8 +52,7 @@ def reset_autonomous_singletons() -> None:
     reset_review_worker_singleton()
 
 
-@router.get("/healthz")
-def healthz() -> dict[str, str]:
+def _build_healthz_payload() -> dict[str, str]:
     settings = get_autonomous_settings()
     store = _get_store()
     reviewer_creds = settings.resolve_reviewer_credentials()
@@ -60,21 +60,27 @@ def healthz() -> dict[str, str]:
         "status": "ok",
         "autonomous_dev_enabled": str(settings.autonomous_dev_enabled).lower(),
         "worker_mode": settings.autonomous_worker_mode,
-        "worker_locked": str(store.is_locked()).lower(),
+        "worker_locked": str(store.peek_worker_locked()).lower(),
         "reviewer_configured": str(reviewer_creds is not None).lower(),
-        "reviewer_locked": str(store.is_reviewer_locked()).lower(),
+        "reviewer_locked": str(store.peek_reviewer_locked()).lower(),
     }
 
 
+@router.get("/healthz")
+async def healthz() -> dict[str, str]:
+    return await asyncio.to_thread(_build_healthz_payload)
+
+
 @router.get("/autonomous/status.json")
-def autonomous_status_json() -> JSONResponse:
+async def autonomous_status_json() -> JSONResponse:
     settings = get_autonomous_settings()
-    payload = build_dashboard_payload(settings, _get_store())
+    store = _get_store()
+    payload = await asyncio.to_thread(build_dashboard_payload, settings, store)
     return JSONResponse(content=payload)
 
 
 @router.get("/autonomous/status", response_class=HTMLResponse)
-def autonomous_status_page() -> Response:
+async def autonomous_status_page() -> Response:
     return HTMLResponse(content=DASHBOARD_HTML, headers={"Cache-Control": "no-store"})
 
 

@@ -86,19 +86,39 @@ class ReviewInvocationRecord:
 
 
 class StateStore:
+    _BUSY_TIMEOUT_MS = 2000
+
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._init_schema()
 
+    @classmethod
+    def _configure_connection(cls, conn: sqlite3.Connection) -> None:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(f"PRAGMA busy_timeout={cls._BUSY_TIMEOUT_MS}")
+        conn.execute("PRAGMA synchronous=NORMAL")
+
     @contextmanager
     def _conn(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        self._configure_connection(conn)
         try:
             yield conn
             conn.commit()
+        finally:
+            conn.close()
+
+    @contextmanager
+    def _read_conn(self) -> Iterator[sqlite3.Connection]:
+        """Short read-only connection for dashboard / observability."""
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        self._configure_connection(conn)
+        try:
+            yield conn
         finally:
             conn.close()
 
@@ -455,19 +475,152 @@ class StateStore:
             return [self._row_to_task(r) for r in rows]
 
     def get_lease(self) -> LeaseRecord:
-        with self._conn() as conn:
-            row = conn.execute("SELECT * FROM worker_lock WHERE id = 1").fetchone()
-            if not row:
-                return LeaseRecord(False, None, None, None, None, None, None)
-            return LeaseRecord(
-                locked=bool(row["locked"]),
-                owner=row["owner"],
-                issue_number=row["issue_number"],
-                task_id=row["task_id"],
-                acquired_at=row["acquired_at"],
-                heartbeat_at=row["heartbeat_at"],
-                lease_expires_at=row["lease_expires_at"],
+        with self._read_conn() as conn:
+            return self._lease_from_row(conn.execute("SELECT * FROM worker_lock WHERE id = 1").fetchone())
+
+    @staticmethod
+    def _lease_from_row(row: sqlite3.Row | None) -> LeaseRecord:
+        if not row:
+            return LeaseRecord(False, None, None, None, None, None, None)
+        return LeaseRecord(
+            locked=bool(row["locked"]),
+            owner=row["owner"],
+            issue_number=row["issue_number"],
+            task_id=row["task_id"],
+            acquired_at=row["acquired_at"],
+            heartbeat_at=row["heartbeat_at"],
+            lease_expires_at=row["lease_expires_at"],
+        )
+
+    @staticmethod
+    def _lease_is_valid(lease: LeaseRecord, *, now_iso: str) -> bool:
+        if not lease.locked:
+            return False
+        if lease.lease_expires_at and lease.lease_expires_at < now_iso:
+            return False
+        return True
+
+    def peek_worker_locked(self) -> bool:
+        """Read-only lease check — no stale recovery side effects."""
+        now_iso = datetime.now(UTC).isoformat()
+        return self._lease_is_valid(self.get_lease(), now_iso=now_iso)
+
+    def peek_reviewer_locked(self) -> bool:
+        """Read-only reviewer lock check — no stale recovery side effects."""
+        now_iso = datetime.now(UTC).isoformat()
+        with self._read_conn() as conn:
+            row = conn.execute("SELECT * FROM reviewer_lock WHERE id = 1").fetchone()
+            if not row or not row["locked"]:
+                return False
+            expires = row["lease_expires_at"]
+            return not (expires and expires < now_iso)
+
+    def load_dashboard_snapshot(
+        self,
+        *,
+        activity_limit: int = 15,
+        completed_limit: int = 5,
+    ) -> dict[str, Any]:
+        """Single short read transaction for dashboard observability."""
+        with self._read_conn() as conn:
+            lease = self._lease_from_row(
+                conn.execute("SELECT * FROM worker_lock WHERE id = 1").fetchone()
             )
+            reviewer_row = conn.execute("SELECT * FROM reviewer_lock WHERE id = 1").fetchone()
+            now_iso = datetime.now(UTC).isoformat()
+            reviewer_locked = bool(
+                reviewer_row
+                and reviewer_row["locked"]
+                and not (
+                    reviewer_row["lease_expires_at"]
+                    and reviewer_row["lease_expires_at"] < now_iso
+                )
+            )
+
+            primary_row = conn.execute(
+                """
+                SELECT * FROM task_executions
+                WHERE status IN (
+                    'queued', 'running', 'ready-for-review', 'product-decision',
+                    'needs-fix', 'failed'
+                )
+                ORDER BY id DESC LIMIT 1
+                """
+            ).fetchone()
+            primary_task = self._row_to_task(primary_row) if primary_row else None
+
+            current_row = conn.execute(
+                """
+                SELECT * FROM task_executions
+                WHERE status IN ('queued', 'running', 'ready-for-review')
+                ORDER BY id DESC LIMIT 1
+                """
+            ).fetchone()
+            current_task = self._row_to_task(current_row) if current_row else None
+
+            failed_row = conn.execute(
+                """
+                SELECT * FROM task_executions
+                WHERE status = 'failed'
+                ORDER BY id DESC LIMIT 1
+                """
+            ).fetchone()
+            recent_failed = self._row_to_task(failed_row) if failed_row else None
+
+            review_task_id = primary_task.id if primary_task else None
+            active_review = None
+            if review_task_id is not None:
+                review_row = conn.execute(
+                    """
+                    SELECT * FROM review_invocations
+                    WHERE task_id = ?
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (review_task_id,),
+                ).fetchone()
+                if review_row:
+                    active_review = self._row_to_review_invocation(review_row)
+
+            delivery_rows = conn.execute(
+                """
+                SELECT delivery_id, event_type, action, status, received_at, error
+                FROM webhook_deliveries
+                ORDER BY received_at DESC LIMIT ?
+                """,
+                (activity_limit,),
+            ).fetchall()
+            task_rows = conn.execute(
+                """
+                SELECT id, issue_number, status, updated_at, error
+                FROM task_executions
+                ORDER BY updated_at DESC LIMIT ?
+                """,
+                (activity_limit,),
+            ).fetchall()
+            completed_rows = conn.execute(
+                """
+                SELECT te.*, ri.verdict AS review_verdict
+                FROM task_executions te
+                LEFT JOIN review_invocations ri ON ri.task_id = te.id
+                WHERE te.status = 'completed'
+                ORDER BY te.updated_at DESC
+                LIMIT ?
+                """,
+                (completed_limit,),
+            ).fetchall()
+
+        return {
+            "lease": lease,
+            "worker_locked": self._lease_is_valid(lease, now_iso=now_iso),
+            "reviewer_locked": reviewer_locked,
+            "primary_task": primary_task,
+            "current_task": current_task,
+            "recent_failed": recent_failed,
+            "active_review": active_review,
+            "delivery_rows": [dict(r) for r in delivery_rows],
+            "task_rows": [dict(r) for r in task_rows],
+            "completed_rows": [dict(r) for r in completed_rows],
+        }
 
     def recover_stale_lease(self) -> bool:
         now = datetime.now(UTC).isoformat()

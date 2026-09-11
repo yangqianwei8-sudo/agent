@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import subprocess
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -1586,8 +1587,8 @@ def test_worker_running_label_stale_heartbeat_is_stale(infra_env, monkeypatch):
             (past, past),
         )
     monkeypatch.setattr(
-        "autonomous_dev.dashboard._fetch_issue_summary",
-        lambda *a, **k: (None, ["cursor-task", "worker-running"]),
+        "autonomous_dev.dashboard._fetch_issue_labels_bounded",
+        lambda *a, **k: ([], None),
     )
     payload = build_dashboard_payload(settings, store)
     assert payload["system_status"] == SystemStatus.STALE.value
@@ -1782,3 +1783,137 @@ def test_autonomous_status_html_smoke(infra_env):
     resp = client.get("/autonomous/status")
     assert resp.status_code == 200
     assert "自主开发 Dashboard" in resp.text
+
+
+def test_dashboard_json_while_worker_running(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    AutonomousDevSettings()
+
+
+    task = store.create_task(
+        issue_number=30,
+        delivery_id="busy-worker",
+        status=TaskStatus.RUNNING,
+    )
+    datetime.now(UTC)
+    store.try_acquire_lease(30, task.id, owner=f"worker-{task.id}", ttl_seconds=300)
+    client = TestClient(app)
+    resp = client.get("/autonomous/status.json")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["system_status"] in {"RUNNING", "STALE", "REVIEWING", "IDLE", "FAILED"}
+
+
+def test_dashboard_github_failure_still_200(infra_env, monkeypatch):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    store.create_task(issue_number=31, delivery_id="gh-fail", status=TaskStatus.RUNNING)
+
+    def _slow_labels(*args, **kwargs):
+        import time
+
+        time.sleep(5)
+        return ["worker-running"]
+
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard._fetch_issue_labels_sync",
+        _slow_labels,
+    )
+    monkeypatch.setattr("autonomous_dev.dashboard.DASHBOARD_GITHUB_TIMEOUT_SECONDS", 0.1)
+
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    payload = build_dashboard_payload(settings, store)
+    assert payload["system_status"]
+    assert payload["runtime_evidence"]["dashboard_degraded"] is True
+    client = TestClient(app)
+    resp = client.get("/autonomous/status.json")
+    assert resp.status_code == 200
+
+
+def test_dashboard_github_error_degrades(infra_env, monkeypatch):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    store.create_task(issue_number=32, delivery_id="gh-err", status=TaskStatus.RUNNING)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("github down")
+
+    monkeypatch.setattr("autonomous_dev.dashboard._fetch_issue_labels_sync", _boom)
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    payload = build_dashboard_payload(settings, store)
+    assert payload["runtime_evidence"]["dashboard_degraded"] is True
+    assert payload["system_status"]
+
+
+def test_dashboard_reviewer_block_does_not_block(infra_env, monkeypatch):
+    repo, db = infra_env
+    store = StateStore(db)
+    store.update_task(
+        store.create_task(issue_number=33, delivery_id="rev").id,
+        status=TaskStatus.READY_FOR_REVIEW,
+    )
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard._fetch_issue_labels_bounded",
+        lambda *a, **k: ([], None),
+    )
+    client = TestClient(app)
+    resp = client.get("/autonomous/status.json")
+    assert resp.status_code == 200
+    assert resp.json()["system_status"] == "REVIEWING"
+
+
+def test_dashboard_db_busy_degrades_not_hang(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    store.create_task(issue_number=34, delivery_id="db-busy", status=TaskStatus.RUNNING)
+    hold = threading.Event()
+    blocker_done = threading.Event()
+
+    def _hold_lock():
+        with store._lock:
+            hold.set()
+            blocker_done.wait(timeout=3)
+
+    t = threading.Thread(target=_hold_lock, daemon=True)
+    t.start()
+    assert hold.wait(timeout=2)
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    payload = build_dashboard_payload(settings, store)
+    blocker_done.set()
+    t.join(timeout=2)
+    assert payload["system_status"]
+
+
+def test_dashboard_no_unbounded_external_io(infra_env, monkeypatch):
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard.DASHBOARD_GITHUB_TIMEOUT_SECONDS",
+        0.05,
+    )
+    calls = {"n": 0}
+
+    def _count(*args, **kwargs):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr("autonomous_dev.dashboard._fetch_issue_labels_sync", _count)
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    store.create_task(issue_number=35, delivery_id="io-bound", status=TaskStatus.RUNNING)
+    import time
+
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    start = time.monotonic()
+    build_dashboard_payload(settings, store)
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0
+    assert calls["n"] <= 1
+
