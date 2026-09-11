@@ -53,9 +53,19 @@ class _MockGitHubClient:
         self.labels: dict[int, set[str]] = {}
         self.comments: list[tuple[int, str]] = []
         self.bodies: dict[int, str] = {}
+        self.titles: dict[int, str] = {}
         self.created_issues: list[dict] = []
         self.closed: list[int] = []
         self._next_issue = 9000
+
+    def _issue_dict(self, number: int) -> dict:
+        return {
+            "number": number,
+            "state": "closed" if number in self.closed else "open",
+            "title": self.titles.get(number, f"Issue #{number}"),
+            "body": self.bodies.get(number, ""),
+            "labels": [{"name": n} for n in sorted(self.labels.get(number, set()))],
+        }
 
     def sync_worker_running(self, issue_number: int) -> None:
         self.labels[issue_number] = {"cursor-task", "worker-running"}
@@ -94,6 +104,7 @@ class _MockGitHubClient:
         if labels:
             self.labels[num] = set(labels)
         self.bodies[num] = body
+        self.titles[num] = title
         return num
 
     def update_issue_body(self, issue_number: int, body: str) -> None:
@@ -103,10 +114,50 @@ class _MockGitHubClient:
         self.labels.get(issue_number, set()).discard(label)
 
     def find_open_issue_by_title_prefix(self, prefix: str) -> int | None:
+        for num, title in self.titles.items():
+            if num in self.closed:
+                continue
+            if prefix in title:
+                return num
         for issue in self.created_issues:
             if prefix in issue["title"]:
                 return issue["number"]
         return None
+
+    def find_open_issue_by_body_marker(self, marker: str) -> int | None:
+        for num, body in self.bodies.items():
+            if num in self.closed:
+                continue
+            if marker in body:
+                return num
+        return None
+
+    def list_open_issues_with_label(
+        self,
+        label: str,
+        *,
+        limit: int = 30,
+        state: str = "open",
+    ) -> list[dict]:
+        issues: list[dict] = []
+        all_nums = set(self.labels.keys()) | set(self.titles.keys()) | set(self.bodies.keys())
+        for num in sorted(all_nums):
+            issue = self._issue_dict(num)
+            if state == "open" and issue["state"] != "open":
+                continue
+            labels = {lbl["name"] for lbl in issue["labels"]}
+            if label and label not in labels:
+                continue
+            issues.append(issue)
+            if len(issues) >= limit:
+                break
+        return issues
+
+    def enforce_single_current_task(self, keep_issue_number: int) -> None:
+        for num in list(self.labels.keys()):
+            if num != keep_issue_number:
+                self.labels.get(num, set()).discard("current-task")
+        self.labels.setdefault(keep_issue_number, set()).update({"cursor-task", "current-task"})
 
 
 @pytest.fixture(autouse=True)
@@ -120,6 +171,8 @@ def _mock_github_client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("autonomous_dev.task_router.GitHubClient", _factory)
     monkeypatch.setattr("autonomous_dev.review_bridge.GitHubClient", _factory)
     monkeypatch.setattr("autonomous_dev.review_executor.GitHubClient", _factory)
+    monkeypatch.setattr("autonomous_dev.task_handoff.GitHubClient", _factory)
+    monkeypatch.setattr("autonomous_dev.next_task_resolver.GitHubClient", _factory)
     return mock
 
 
@@ -2656,4 +2709,221 @@ def test_runtime_version_module(infra_env, monkeypatch):
     v = get_runtime_version()
     assert v["git_sha"] == "sha999"
     assert v["image_tag"] == "sha999"
+
+
+def test_handoff_pass_activates_queued_next_task_once(infra_env, _mock_github_client):
+    from autonomous_dev.state import HandoffStatus
+    from autonomous_dev.task_handoff import TaskHandoffEngine
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    _mock_github_client.labels[100] = {"cursor-task"}
+    _mock_github_client.bodies[100] = "Queued task B"
+    _mock_github_client.titles[100] = "Task B"
+    task_a = store.create_task(issue_number=99, delivery_id="handoff-a")
+    store.update_task(task_a.id, status=TaskStatus.COMPLETED, commit_sha="abc123456789")
+    engine = TaskHandoffEngine(settings, store, github=_mock_github_client)
+    result = engine.perform_handoff(task_a, commit_sha="abc123456789")
+    assert result["status"] == "activated"
+    assert result["next_issue_number"] == "100"
+    assert _mock_github_client.labels[100] == {"cursor-task", "current-task"}
+    handoff = store.get_handoff_by_key(f"handoff:{task_a.id}:abc123456789")
+    assert handoff is not None
+    allowed = {HandoffStatus.ACTIVATED, HandoffStatus.WORKER_STARTED, HandoffStatus.PENDING}
+    assert handoff.status in allowed
+
+
+def test_handoff_pass_replay_no_duplicate_activation(infra_env, _mock_github_client):
+    from autonomous_dev.task_handoff import TaskHandoffEngine
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    _mock_github_client.labels[101] = {"cursor-task"}
+    _mock_github_client.titles[101] = "Task B replay"
+    task_a = store.create_task(issue_number=98, delivery_id="handoff-replay")
+    store.update_task(task_a.id, status=TaskStatus.COMPLETED, commit_sha="replay123456")
+    engine = TaskHandoffEngine(settings, store, github=_mock_github_client)
+    first = engine.perform_handoff(task_a, commit_sha="replay123456", trigger_worker=False)
+    created_before = len(_mock_github_client.created_issues)
+    second = engine.perform_handoff(task_a, commit_sha="replay123456", trigger_worker=False)
+    assert first["status"] == "activated"
+    assert second["status"] == "idempotent"
+    assert len(_mock_github_client.created_issues) == created_before
+
+
+def test_handoff_duplicate_webhook_watchdog_race_one_worker(infra_env, _mock_github_client):
+    from autonomous_dev.task_handoff import TaskHandoffEngine
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    _mock_github_client.labels[102] = {"cursor-task"}
+    _mock_github_client.titles[102] = "Race task B"
+    task_a = store.create_task(issue_number=97, delivery_id="handoff-race")
+    store.update_task(task_a.id, status=TaskStatus.COMPLETED, commit_sha="race12345678")
+    engine = TaskHandoffEngine(settings, store, github=_mock_github_client)
+    engine.perform_handoff(task_a, commit_sha="race12345678", trigger_worker=True)
+    engine.recover_pending_handoffs()
+    workers = [
+        t for t in [store.get_task_by_issue(102)]
+        if t is not None and t.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}
+    ]
+    assert len(workers) <= 1
+
+
+def test_handoff_restart_after_pass_recovers_once(infra_env, _mock_github_client):
+    from autonomous_dev.state import HandoffStatus
+    from autonomous_dev.task_handoff import TaskHandoffEngine
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    _mock_github_client.labels[103] = {"cursor-task"}
+    _mock_github_client.titles[103] = "Restart B"
+    task_a = store.create_task(issue_number=96, delivery_id="handoff-restart")
+    store.update_task(task_a.id, status=TaskStatus.COMPLETED, commit_sha="restart12345")
+    engine = TaskHandoffEngine(settings, store, github=_mock_github_client)
+    engine.perform_handoff(task_a, commit_sha="restart12345", trigger_worker=False)
+    store2 = StateStore(db)
+    engine2 = TaskHandoffEngine(settings, store2, github=_mock_github_client)
+    replay = engine2.perform_handoff(task_a, commit_sha="restart12345", trigger_worker=False)
+    assert replay["status"] == "idempotent"
+    handoffs = store2.list_active_handoffs()
+    assert len(handoffs) == 1
+    assert handoffs[0].next_issue_number == 103
+    assert handoffs[0].status in {HandoffStatus.ACTIVATED, HandoffStatus.PENDING}
+
+
+def test_handoff_active_current_task_enforces_sole_current(infra_env, _mock_github_client):
+    from autonomous_dev.task_handoff import TaskHandoffEngine
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    _mock_github_client.labels[200] = {"cursor-task", "current-task"}
+    _mock_github_client.labels[201] = {"cursor-task"}
+    _mock_github_client.titles[201] = "Would-be next"
+    _mock_github_client.bodies[95] = "NEXT_TASK: Would-be next"
+    task_a = store.create_task(issue_number=95, delivery_id="handoff-block")
+    store.update_task(task_a.id, status=TaskStatus.COMPLETED, commit_sha="block1234567")
+    engine = TaskHandoffEngine(settings, store, github=_mock_github_client)
+    result = engine.perform_handoff(task_a, commit_sha="block1234567", trigger_worker=False)
+    assert result["status"] == "activated"
+    assert "current-task" not in _mock_github_client.labels.get(200, set())
+    assert _mock_github_client.labels[201] == {"cursor-task", "current-task"}
+
+
+def test_handoff_ambiguous_next_waiting_product_no_issue_invented(infra_env, _mock_github_client):
+    from autonomous_dev.state import HandoffStatus
+    from autonomous_dev.task_handoff import TaskHandoffEngine
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    _mock_github_client.labels[301] = {"cursor-task"}
+    _mock_github_client.labels[302] = {"cursor-task"}
+    _mock_github_client.titles[301] = "Ambiguous A"
+    _mock_github_client.titles[302] = "Ambiguous B"
+    task_a = store.create_task(issue_number=94, delivery_id="handoff-ambig")
+    store.update_task(task_a.id, status=TaskStatus.COMPLETED, commit_sha="ambig1234567")
+    created_before = len(_mock_github_client.created_issues)
+    engine = TaskHandoffEngine(settings, store, github=_mock_github_client)
+    result = engine.perform_handoff(task_a, commit_sha="ambig1234567", trigger_worker=False)
+    assert result["status"] == "waiting_product"
+    assert len(_mock_github_client.created_issues) == created_before
+    handoff = store.get_handoff_by_key(f"handoff:{task_a.id}:ambig1234567")
+    assert handoff is not None
+    assert handoff.status == HandoffStatus.WAITING_PRODUCT
+
+
+def test_handoff_stalled_after_delay_then_retry(infra_env, _mock_github_client, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from autonomous_dev.state import HandoffStatus
+    from autonomous_dev.task_handoff import TaskHandoffEngine, derive_handoff_dashboard_state
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    _mock_github_client.labels[104] = {"cursor-task"}
+    _mock_github_client.titles[104] = "Stall B"
+    task_a = store.create_task(issue_number=93, delivery_id="handoff-stall")
+    store.update_task(task_a.id, status=TaskStatus.COMPLETED, commit_sha="stall1234567")
+    engine = TaskHandoffEngine(settings, store, github=_mock_github_client)
+    engine.perform_handoff(task_a, commit_sha="stall1234567", trigger_worker=False)
+    handoff = store.get_handoff_by_key(f"handoff:{task_a.id}:stall1234567")
+    assert handoff is not None
+    old = (datetime.now(UTC) - timedelta(seconds=25)).isoformat()
+    store.update_handoff(handoff.handoff_id, activated_at=old, status=HandoffStatus.STALLED)
+    state = derive_handoff_dashboard_state(
+        store.get_handoff(handoff.handoff_id),
+        has_live_worker=False,
+        stall_seconds=20,
+    )
+    assert state == "HANDOFF_STALLED"
+    engine.recover_pending_handoffs()
+    updated = store.get_handoff(handoff.handoff_id)
+    assert updated is not None
+    allowed = {HandoffStatus.ACTIVATED, HandoffStatus.WORKER_STARTED, HandoffStatus.STALLED}
+    assert updated.status in allowed
+
+
+def test_handoff_stale_worker_running_label_not_active_worker(infra_env, _mock_github_client):
+    from autonomous_dev.task_handoff import TaskHandoffEngine
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    _mock_github_client.labels[105] = {"cursor-task", "current-task", "worker-running"}
+    _mock_github_client.titles[105] = "Stale label B"
+    task_a = store.create_task(issue_number=92, delivery_id="handoff-stale-label")
+    store.update_task(task_a.id, status=TaskStatus.COMPLETED, commit_sha="stale1234567")
+    engine = TaskHandoffEngine(settings, store, github=_mock_github_client)
+    engine.perform_handoff(task_a, commit_sha="stale1234567", trigger_worker=False)
+    assert not engine._has_valid_worker_for_issue(105)
+
+
+def test_dashboard_not_idle_during_handoff_pending(infra_env, _mock_github_client):
+    from autonomous_dev.dashboard import build_dashboard_payload
+    from autonomous_dev.task_handoff import TaskHandoffEngine
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    _mock_github_client.labels[106] = {"cursor-task"}
+    _mock_github_client.titles[106] = "Dash B"
+    task_a = store.create_task(issue_number=91, delivery_id="handoff-dash")
+    store.update_task(task_a.id, status=TaskStatus.COMPLETED, commit_sha="dash12345678")
+    engine = TaskHandoffEngine(settings, store, github=_mock_github_client)
+    engine.perform_handoff(task_a, commit_sha="dash12345678", trigger_worker=False)
+    payload = build_dashboard_payload(settings, store)
+    assert payload["system_status"] in {"HANDOFF_PENDING", "HANDOFF_STALLED", "RUNNING"}
+    assert payload["system_status"] != "IDLE"
+    assert payload["handoff"] is not None
+    assert payload["handoff"]["next_issue_number"] == 106
+
+
+def test_reviewer_pass_triggers_handoff_via_executor(infra_env, _mock_github_client):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("acceptance ok\n", encoding="utf-8")
+    _mock_github_client.labels[107] = {"cursor-task"}
+    _mock_github_client.titles[107] = "Executor handoff B"
+    task = store.create_task(issue_number=90, delivery_id="rev-handoff")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="exec12345678")
+    body = f"{REVIEWER_ACCEPTANCE_MARKER}\nHandoff acceptance."
+    _mock_github_client.bodies[90] = body
+    executor = ReviewExecutor(settings, store)
+    result = executor.run_review_sync(task, commit_sha="exec12345678", issue_body=body)
+    assert result["verdict"] == "PASS"
+    handoff = store.get_handoff_by_key(f"handoff:{task.id}:exec12345678")
+    assert handoff is not None
+    assert handoff.next_issue_number == 107
+    assert "cursor-task" in _mock_github_client.labels[107]
+    assert _mock_github_client.labels[107] & {"current-task", "worker-running"}
 

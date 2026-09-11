@@ -31,6 +31,9 @@ class SystemStatus(StrEnum):
     RUNNING = "RUNNING"
     REVIEWING = "REVIEWING"
     WAITING_USER = "WAITING_USER"
+    WAITING_PRODUCT_DIRECTION = "WAITING_PRODUCT_DIRECTION"
+    HANDOFF_PENDING = "HANDOFF_PENDING"
+    HANDOFF_STALLED = "HANDOFF_STALLED"
     FAILED = "FAILED"
     STALE = "STALE"
     IDLE = "IDLE"
@@ -113,8 +116,16 @@ def derive_system_status(
     lease_ttl_seconds: int,
     now: datetime | None = None,
     recent_failed_task: TaskRecord | None = None,
+    handoff_state: str | None = None,
 ) -> SystemStatus:
     now = now or datetime.now(UTC)
+
+    if handoff_state == "WAITING_PRODUCT_DIRECTION":
+        return SystemStatus.WAITING_PRODUCT_DIRECTION
+    if handoff_state == "HANDOFF_STALLED":
+        return SystemStatus.HANDOFF_STALLED
+    if handoff_state == "HANDOFF_PENDING":
+        return SystemStatus.HANDOFF_PENDING
 
     if primary_task is None:
         if recent_failed_task is not None and recent_failed_task.status == TaskStatus.FAILED:

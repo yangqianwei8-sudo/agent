@@ -123,11 +123,17 @@ def _tick() -> None:
         logger.warning("watchdog recovered stale worker lease")
 
     from autonomous_dev.review_worker import process_due_reviews
+    from autonomous_dev.task_handoff import TaskHandoffEngine
 
     try:
         process_due_reviews(settings, store)
     except Exception:
         logger.exception("watchdog review recovery failed")
+
+    try:
+        TaskHandoffEngine(settings, store).recover_pending_handoffs()
+    except Exception:
+        logger.exception("watchdog handoff recovery failed")
 
 
 def _tick_full_scan(settings: AutonomousDevSettings) -> None:

@@ -17,12 +17,15 @@ from autonomous_dev.status_deriver import (
     derive_current_phase,
     derive_pipeline_stages,
     derive_system_status,
+    is_heartbeat_fresh,
+    is_lease_valid,
     is_worker_runtime_stale,
     parse_generation,
     redact_secrets,
     sanitize_for_json,
     summarize_error,
 )
+from autonomous_dev.task_handoff import derive_handoff_dashboard_state
 
 logger = logging.getLogger(__name__)
 
@@ -237,6 +240,21 @@ def build_dashboard_payload(
     reviewer_locked = snapshot["reviewer_locked"]
     worker_locked = snapshot["worker_locked"]
 
+    handoff_record = snapshot.get("active_handoff")
+    handoff_issue = handoff_record.next_issue_number if handoff_record else None
+    has_live_worker = (
+        is_lease_valid(lease, now=generated_at)
+        and is_heartbeat_fresh(lease, lease_ttl_seconds=settings.worker_lease_ttl_seconds, now=generated_at)
+        and handoff_issue is not None
+        and lease.issue_number == handoff_issue
+    )
+    handoff_state = derive_handoff_dashboard_state(
+        handoff_record,
+        has_live_worker=has_live_worker,
+        stall_seconds=settings.handoff_stall_seconds,
+        now=generated_at,
+    )
+
     system_status = derive_system_status(
         primary_task=primary_task,
         lease=lease,
@@ -245,6 +263,7 @@ def build_dashboard_payload(
         lease_ttl_seconds=settings.worker_lease_ttl_seconds,
         now=generated_at,
         recent_failed_task=snapshot["recent_failed"],
+        handoff_state=handoff_state,
     )
 
     labels: list[str] = []
@@ -300,9 +319,10 @@ def build_dashboard_payload(
     events = (
         store.list_execution_events(task_id=trace_task.id, limit=100) if trace_task else []
     )
+    snapshot_with_handoff = {**snapshot, "handoff_state": handoff_state}
     execution_trace = build_execution_trace(
         settings=settings,
-        snapshot=snapshot,
+        snapshot=snapshot_with_handoff,
         events=events,
         trace_task=trace_task,
         now=generated_at,
@@ -380,6 +400,20 @@ def build_dashboard_payload(
         },
         "last_updated": generated_at.isoformat(),
         "display_timezone": "Asia/Shanghai",
+        "handoff": (
+            {
+                "handoff_id": handoff_record.handoff_id,
+                "status": handoff_record.status.value,
+                "dashboard_state": handoff_state,
+                "source_issue_number": handoff_record.source_issue_number,
+                "next_issue_number": handoff_record.next_issue_number,
+                "activated_at": handoff_record.activated_at,
+                "worker_started_at": handoff_record.worker_started_at,
+                "reason": handoff_record.reason,
+            }
+            if handoff_record
+            else None
+        ),
     }
     return sanitize_for_json(payload)
 
@@ -411,6 +445,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .status-FAILED { background: #7f1d1d; color: #fecaca; }
     .status-STALE { background: #78350f; color: #fed7aa; }
     .status-IDLE { background: #334155; color: #cbd5e1; }
+    .status-HANDOFF_PENDING { background: #312e81; color: #c7d2fe; }
+    .status-HANDOFF_STALLED { background: #78350f; color: #fed7aa; }
+    .status-WAITING_PRODUCT_DIRECTION { background: #713f12; color: #fde68a; }
     section { background: #1a2332; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
     section h2 { margin: 0 0 10px; font-size: 1.05rem; }
     .grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
@@ -437,6 +474,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .motion-IDLE { background: #334155; color: #cbd5e1; }
     .motion-WAITING { background: #1e3a5f; color: #bfdbfe; }
     .motion-FAILED { background: #7f1d1d; color: #fecaca; }
+    .motion-HANDOFF_PENDING { background: #312e81; color: #c7d2fe; }
+    .motion-HANDOFF_STALLED { background: #78350f; color: #fed7aa; }
     .hero { background: #111827; border: 1px solid #334155; border-radius: 12px; padding: 16px; margin: 12px 0 16px; }
     .hero-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top: 12px; }
     .hero-title { font-size: 1.35rem; font-weight: 700; margin: 0; }
@@ -507,8 +546,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <script>
     let lastPayload = null;
     let lastEventCount = 0;
-    const STATUS_LABELS = { RUNNING: "运行中", REVIEWING: "审查中", WAITING_USER: "等待用户决策", FAILED: "失败", STALE: "运行时过期", IDLE: "空闲" };
-    const MOTION_LABELS = { MOVING: "推进中", WAITING: "等待中", REVIEWING: "审查中", STALLED: "疑似卡住", STALE: "失联", IDLE: "空闲", FAILED: "失败" };
+    const STATUS_LABELS = { RUNNING: "运行中", REVIEWING: "审查中", WAITING_USER: "等待用户决策", WAITING_PRODUCT_DIRECTION: "等待产品方向", HANDOFF_PENDING: "交接等待 Worker", HANDOFF_STALLED: "交接卡住", FAILED: "失败", STALE: "运行时过期", IDLE: "空闲" };
+    const MOTION_LABELS = { MOVING: "推进中", WAITING: "等待中", REVIEWING: "审查中", HANDOFF_PENDING: "交接等待 Worker", HANDOFF_STALLED: "交接卡住", STALLED: "疑似卡住", STALE: "失联", IDLE: "空闲", FAILED: "失败" };
 
     const TIMEZONE = "Asia/Shanghai";
 

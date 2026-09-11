@@ -83,6 +83,8 @@ class MotionStatus(StrEnum):
     MOVING = "MOVING"
     WAITING = "WAITING"
     REVIEWING = "REVIEWING"
+    HANDOFF_PENDING = "HANDOFF_PENDING"
+    HANDOFF_STALLED = "HANDOFF_STALLED"
     STALLED = "STALLED"
     STALE = "STALE"
     IDLE = "IDLE"
@@ -577,8 +579,17 @@ def derive_motion_status(
     cursor_long_op_suspect_seconds: int,
     lease_ttl_seconds: int,
     now: datetime | None = None,
+    handoff_state: str | None = None,
 ) -> MotionStatus:
     now = now or datetime.now(UTC)
+
+    if handoff_state == "HANDOFF_STALLED":
+        return MotionStatus.HANDOFF_STALLED
+    if handoff_state == "HANDOFF_PENDING":
+        return MotionStatus.HANDOFF_PENDING
+    if handoff_state == "WAITING_PRODUCT_DIRECTION":
+        return MotionStatus.WAITING
+
     review_running = reviewer_locked or (
         active_review is not None
         and active_review.status == ReviewInvocationStatus.RUNNING
@@ -599,6 +610,8 @@ def derive_motion_status(
     }:
         if review_running:
             return MotionStatus.REVIEWING
+        if handoff_state in {"HANDOFF_PENDING", "HANDOFF_STALLED"}:
+            return MotionStatus(handoff_state)
         return MotionStatus.IDLE
 
     if primary_task.status in {TaskStatus.RUNNING, TaskStatus.QUEUED} and (
@@ -830,6 +843,7 @@ def build_execution_trace(
         cursor_long_op_suspect_seconds=settings.cursor_long_op_suspect_seconds,
         lease_ttl_seconds=settings.worker_lease_ttl_seconds,
         now=now,
+        handoff_state=snapshot.get("handoff_state"),
     )
 
     progress_times = [_parse_ts(e.created_at) for e in events if _parse_ts(e.created_at)]

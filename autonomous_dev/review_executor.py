@@ -24,6 +24,7 @@ from autonomous_dev.state import (
     TaskRecord,
     TaskStatus,
 )
+from autonomous_dev.task_handoff import TaskHandoffEngine
 
 logger = logging.getLogger(__name__)
 
@@ -305,7 +306,7 @@ class ReviewExecutor:
             self._github.close_issue(task.issue_number, reason=f"Reviewer PASS: {reason[:200]}")
         except GitHubClientError:
             logger.warning("close issue failed issue=#%s", task.issue_number)
-        self._maybe_activate_next_task(task)
+        self._perform_handoff(task, commit_sha)
 
     def _apply_fail(self, task: TaskRecord, result) -> None:
         self.store.update_task(
@@ -367,29 +368,13 @@ class ReviewExecutor:
             labels={LABEL_CURSOR_TASK, LABEL_CURRENT_TASK},
         )
 
-    def _maybe_activate_next_task(self, task: TaskRecord) -> None:
-        body = self._fetch_issue_body(task.issue_number)
-        marker = "NEXT_TASK:"
-        if marker not in body:
-            return
-        for line in body.splitlines():
-            if line.strip().startswith(marker):
-                next_title = line.split(marker, 1)[1].strip()
-                if not next_title:
-                    return
-                existing = self._github.find_open_issue_by_title_prefix(next_title[:40])
-                if existing:
-                    self._github.set_issue_labels(
-                        existing,
-                        {LABEL_CURSOR_TASK, LABEL_CURRENT_TASK},
-                    )
-                    return
-                self._github.create_issue(
-                    title=next_title,
-                    body=f"Auto-activated after PASS on issue #{task.issue_number}",
-                    labels={LABEL_CURSOR_TASK, LABEL_CURRENT_TASK},
-                )
-                return
+    def _perform_handoff(self, task: TaskRecord, commit_sha: str) -> None:
+        try:
+            body = self._fetch_issue_body(task.issue_number)
+            engine = TaskHandoffEngine(self.settings, self.store, github=self._github)
+            engine.perform_handoff(task, commit_sha=commit_sha, issue_body=body)
+        except Exception:  # noqa: BLE001 — handoff must not block review completion
+            logger.exception("task handoff failed task=%s", task.id)
 
     def _fetch_issue_body(self, issue_number: int) -> str:
         try:

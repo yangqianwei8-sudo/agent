@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -43,6 +44,15 @@ class ReviewInvocationStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class HandoffStatus(StrEnum):
+    PENDING = "pending"
+    ACTIVATED = "activated"
+    WORKER_STARTED = "worker_started"
+    STALLED = "stalled"
+    WAITING_PRODUCT = "waiting_product"
+    COMPLETED = "completed"
 
 
 @dataclass
@@ -84,6 +94,22 @@ class LeaseRecord:
     acquired_at: str | None
     heartbeat_at: str | None
     lease_expires_at: str | None
+
+
+@dataclass
+class HandoffRecord:
+    handoff_id: str
+    idempotency_key: str
+    source_task_id: int
+    source_issue_number: int
+    commit_sha: str
+    status: HandoffStatus
+    next_issue_number: int | None
+    reason: str | None
+    created_at: str
+    activated_at: str | None
+    worker_started_at: str | None
+    retry_count: int = 0
 
 
 @dataclass
@@ -225,6 +251,22 @@ class StateStore:
                     ON execution_events(task_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_execution_events_created
                     ON execution_events(created_at DESC);
+                CREATE TABLE IF NOT EXISTS task_handoffs (
+                    handoff_id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    source_task_id INTEGER NOT NULL,
+                    source_issue_number INTEGER NOT NULL,
+                    commit_sha TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    next_issue_number INTEGER,
+                    reason TEXT,
+                    created_at TEXT NOT NULL,
+                    activated_at TEXT,
+                    worker_started_at TEXT,
+                    retry_count INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_task_handoffs_status
+                    ON task_handoffs(status, created_at DESC);
                 """
             )
             conn.execute(
@@ -646,6 +688,8 @@ class StateStore:
                 (completed_limit,),
             ).fetchall()
 
+        active_handoff = self.get_latest_active_handoff()
+
         return {
             "lease": lease,
             "worker_locked": self._lease_is_valid(lease, now_iso=now_iso),
@@ -654,6 +698,7 @@ class StateStore:
             "current_task": current_task,
             "recent_failed": recent_failed,
             "active_review": active_review,
+            "active_handoff": active_handoff,
             "delivery_rows": [dict(r) for r in delivery_rows],
             "task_rows": [dict(r) for r in task_rows],
             "completed_rows": [dict(r) for r in completed_rows],
@@ -756,14 +801,26 @@ class StateStore:
             created_at=row["created_at"],
         )
 
-    def recover_stale_lease(self) -> bool:
-        now = datetime.now(UTC).isoformat()
+    def recover_stale_lease(self, *, heartbeat_ttl_seconds: int = 300) -> bool:
+        now_dt = datetime.now(UTC)
+        now = now_dt.isoformat()
         with self._lock, self._conn() as conn:
             row = conn.execute("SELECT * FROM worker_lock WHERE id = 1").fetchone()
             if not row or not row["locked"]:
                 return False
             expires = row["lease_expires_at"]
-            if expires and expires >= now:
+            heartbeat = row["heartbeat_at"]
+            lease_expired = bool(expires and expires < now)
+            heartbeat_stale = False
+            if heartbeat:
+                try:
+                    hb_dt = datetime.fromisoformat(heartbeat.replace("Z", "+00:00"))
+                    if hb_dt.tzinfo is None:
+                        hb_dt = hb_dt.replace(tzinfo=UTC)
+                    heartbeat_stale = (now_dt - hb_dt).total_seconds() > heartbeat_ttl_seconds
+                except ValueError:
+                    heartbeat_stale = True
+            if not lease_expired and not heartbeat_stale:
                 return False
             task_id = row["task_id"]
             if task_id:
@@ -1193,6 +1250,155 @@ class StateStore:
                 self.recover_stale_reviewer_lock()
                 return False
             return True
+
+    def create_handoff(
+        self,
+        *,
+        idempotency_key: str,
+        source_task_id: int,
+        source_issue_number: int,
+        commit_sha: str,
+        status: HandoffStatus,
+        next_issue_number: int | None = None,
+        reason: str | None = None,
+    ) -> HandoffRecord:
+        now = datetime.now(UTC).isoformat()
+        handoff_id = str(uuid.uuid4())
+        with self._lock, self._conn() as conn:
+            existing = conn.execute(
+                "SELECT * FROM task_handoffs WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if existing:
+                return self._row_to_handoff(existing)
+            conn.execute(
+                """
+                INSERT INTO task_handoffs
+                (handoff_id, idempotency_key, source_task_id, source_issue_number,
+                 commit_sha, status, next_issue_number, reason, created_at, retry_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                """,
+                (
+                    handoff_id,
+                    idempotency_key,
+                    source_task_id,
+                    source_issue_number,
+                    commit_sha,
+                    status.value,
+                    next_issue_number,
+                    reason,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM task_handoffs WHERE handoff_id = ?",
+                (handoff_id,),
+            ).fetchone()
+            assert row is not None
+            return self._row_to_handoff(row)
+
+    def get_handoff(self, handoff_id: str) -> HandoffRecord | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM task_handoffs WHERE handoff_id = ?",
+                (handoff_id,),
+            ).fetchone()
+            return self._row_to_handoff(row) if row else None
+
+    def get_handoff_by_key(self, idempotency_key: str) -> HandoffRecord | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM task_handoffs WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            return self._row_to_handoff(row) if row else None
+
+    def update_handoff(
+        self,
+        handoff_id: str,
+        *,
+        status: HandoffStatus | None = None,
+        next_issue_number: int | None = None,
+        activated_at: str | None = None,
+        worker_started_at: str | None = None,
+        retry_count: int | None = None,
+        reason: str | None = None,
+    ) -> HandoffRecord:
+        with self._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM task_handoffs WHERE handoff_id = ?",
+                (handoff_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"handoff {handoff_id} not found")
+            new_status = status.value if status else row["status"]
+            new_next = next_issue_number if next_issue_number is not None else row["next_issue_number"]
+            new_activated = activated_at if activated_at is not None else row["activated_at"]
+            new_worker = worker_started_at if worker_started_at is not None else row["worker_started_at"]
+            new_retry = retry_count if retry_count is not None else row["retry_count"]
+            new_reason = reason if reason is not None else row["reason"]
+            conn.execute(
+                """
+                UPDATE task_handoffs
+                SET status = ?, next_issue_number = ?, activated_at = ?,
+                    worker_started_at = ?, retry_count = ?, reason = ?
+                WHERE handoff_id = ?
+                """,
+                (
+                    new_status,
+                    new_next,
+                    new_activated,
+                    new_worker,
+                    new_retry,
+                    new_reason,
+                    handoff_id,
+                ),
+            )
+            updated = conn.execute(
+                "SELECT * FROM task_handoffs WHERE handoff_id = ?",
+                (handoff_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._row_to_handoff(updated)
+
+    def list_active_handoffs(self) -> list[HandoffRecord]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM task_handoffs
+                WHERE status IN ('pending', 'activated', 'stalled', 'worker_started')
+                ORDER BY created_at DESC
+                """
+            ).fetchall()
+            return [self._row_to_handoff(r) for r in rows]
+
+    def get_latest_active_handoff(self) -> HandoffRecord | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM task_handoffs
+                WHERE status IN ('pending', 'activated', 'stalled', 'worker_started', 'waiting_product')
+                ORDER BY created_at DESC LIMIT 1
+                """
+            ).fetchone()
+            return self._row_to_handoff(row) if row else None
+
+    @staticmethod
+    def _row_to_handoff(row: sqlite3.Row) -> HandoffRecord:
+        return HandoffRecord(
+            handoff_id=row["handoff_id"],
+            idempotency_key=row["idempotency_key"],
+            source_task_id=row["source_task_id"],
+            source_issue_number=row["source_issue_number"],
+            commit_sha=row["commit_sha"],
+            status=HandoffStatus(row["status"]),
+            next_issue_number=row["next_issue_number"],
+            reason=row["reason"],
+            created_at=row["created_at"],
+            activated_at=row["activated_at"],
+            worker_started_at=row["worker_started_at"],
+            retry_count=int(row["retry_count"]),
+        )
 
     @staticmethod
     def _row_to_review_invocation(row: sqlite3.Row) -> ReviewInvocationRecord:

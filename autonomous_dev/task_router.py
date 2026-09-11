@@ -19,6 +19,7 @@ from autonomous_dev.github_webhook import (
 from autonomous_dev.review_bridge import ReviewBridge
 from autonomous_dev.review_handoff import transition_ready_for_review
 from autonomous_dev.state import DeliveryStatus, StateStore, TaskStatus
+from autonomous_dev.task_handoff import TaskHandoffEngine
 from autonomous_dev.worker import Worker
 
 logger = logging.getLogger(__name__)
@@ -173,11 +174,23 @@ class TaskRouter:
                 f"issue #{issue_number} task status={task.status}, expected ready-for-review"
             )
         self._github.sync_completed(issue_number)
-        updated = self.store.update_task(task.id, status=TaskStatus.COMPLETED)
+        updated = self.store.update_task(
+            task.id,
+            status=TaskStatus.COMPLETED,
+            commit_sha=task.commit_sha,
+        )
+        handoff_result: dict[str, str] = {}
+        if task.commit_sha:
+            engine = TaskHandoffEngine(self.settings, self.store, github=self._github)
+            handoff_result = engine.perform_handoff(
+                updated,
+                commit_sha=task.commit_sha,
+            )
         return {
             "status": "completed",
             "task_id": updated.id,
             "issue_number": issue_number,
+            "handoff": handoff_result,
         }
 
     def _handle_push(self, delivery_id: str, payload: dict[str, Any]) -> dict[str, Any]:

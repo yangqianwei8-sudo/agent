@@ -139,6 +139,8 @@ class GitHubClient:
         self._request_with_retry("PATCH", url, json={"body": body})
 
     def remove_label(self, issue_number: int, label: str) -> None:
+        if label not in self.get_issue_labels(issue_number):
+            return
         url = (
             f"{self._base}/repos/{self._settings.github_repo}/issues/"
             f"{issue_number}/labels/{label}"
@@ -146,14 +148,43 @@ class GitHubClient:
         self._request_with_retry("DELETE", url)
 
     def find_open_issue_by_title_prefix(self, prefix: str) -> int | None:
-        url = f"{self._base}/repos/{self._settings.github_repo}/issues"
-        resp = self._request_with_retry(
-            "GET",
-            url,
-            params={"state": "open", "per_page": 30},
-        )
-        for issue in resp.json():
+        for issue in self.list_open_issues_with_label("", limit=50, state="open"):
             title = issue.get("title") or ""
             if title.startswith(prefix) or prefix in title:
                 return int(issue["number"])
         return None
+
+    def find_open_issue_by_body_marker(self, marker: str) -> int | None:
+        for issue in self.list_open_issues_with_label(LABEL_CURSOR_TASK, limit=50):
+            body = str(issue.get("body") or "")
+            if marker in body:
+                return int(issue["number"])
+        return None
+
+    def list_open_issues_with_label(
+        self,
+        label: str,
+        *,
+        limit: int = 30,
+        state: str = "open",
+    ) -> list[dict]:
+        url = f"{self._base}/repos/{self._settings.github_repo}/issues"
+        params: dict[str, str | int] = {"state": state, "per_page": min(limit, 100)}
+        if label:
+            params["labels"] = label
+        resp = self._request_with_retry("GET", url, params=params)
+        return list(resp.json())
+
+    def enforce_single_current_task(self, keep_issue_number: int) -> None:
+        for issue in self.list_open_issues_with_label(LABEL_CURRENT_TASK, limit=20):
+            num = int(issue["number"])
+            if num == keep_issue_number:
+                continue
+            try:
+                self.remove_label(num, LABEL_CURRENT_TASK)
+            except GitHubClientError:
+                logger.warning("failed removing current-task from issue #%s", num)
+        self.set_issue_labels(
+            keep_issue_number,
+            {LABEL_CURSOR_TASK, LABEL_CURRENT_TASK},
+        )
