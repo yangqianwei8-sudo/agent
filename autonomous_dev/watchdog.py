@@ -31,7 +31,11 @@ def is_current_task_recoverable(
     if execution_key:
         if store.get_active_execution(execution_key) is not None:
             return False
-        if store.get_task_by_execution_key(execution_key) is not None:
+        existing = store.get_task_by_execution_key(execution_key)
+        if existing is not None and existing.status in {
+            TaskStatus.COMPLETED,
+            TaskStatus.PRODUCT_DECISION,
+        }:
             return False
 
     in_flight = store.get_running_task_for_issue(issue_number)

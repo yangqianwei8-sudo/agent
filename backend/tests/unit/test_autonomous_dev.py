@@ -1435,6 +1435,62 @@ def test_watchdog_webhook_race_one_worker(infra_env, monkeypatch: pytest.MonkeyP
     assert handle_calls == []
 
 
+def test_watchdog_recovers_failed_same_generation(infra_env, monkeypatch: pytest.MonkeyPatch):
+    """Same-generation FAILED + current-task reactivation -> recovers (matches webhook path)."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    payload = _issue_payload(number=20)
+    execution_key = compute_execution_key(settings, payload)
+    store.create_task(
+        issue_number=20,
+        delivery_id="prior-failed-same-gen",
+        execution_key=execution_key,
+        status=TaskStatus.FAILED,
+    )
+    _mock_github_issues(monkeypatch, [payload["issue"]])
+    handle_calls: list[str] = []
+
+    def _track_handle(self, **kwargs):
+        handle_calls.append(kwargs["delivery_id"])
+        return {"status": "worker_started", "task_id": 6, "issue_number": 20}
+
+    monkeypatch.setattr(TaskRouter, "handle", _track_handle)
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert len(handle_calls) == 1
+
+
+def test_is_current_task_recoverable_same_gen_failed(infra_env):
+    """FAILED same generation is recoverable; COMPLETED same generation is not."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    payload = _issue_payload(number=20)
+    execution_key = compute_execution_key(settings, payload)
+    store.create_task(
+        issue_number=20,
+        delivery_id="failed-same-gen",
+        execution_key=execution_key,
+        status=TaskStatus.FAILED,
+    )
+    from autonomous_dev.watchdog import is_current_task_recoverable
+
+    assert is_current_task_recoverable(store, execution_key=execution_key, issue_number=20)
+
+    store.create_task(
+        issue_number=21,
+        delivery_id="completed-same-gen",
+        execution_key=compute_execution_key(settings, _issue_payload(number=21)),
+        status=TaskStatus.COMPLETED,
+    )
+    completed_key = compute_execution_key(settings, _issue_payload(number=21))
+    assert not is_current_task_recoverable(
+        store, execution_key=completed_key, issue_number=21
+    )
+
+
 def test_old_failed_execution_remains_historical(infra_env):
     """Old FAILED execution remains historical/auditable after recovery."""
     repo, db = infra_env
