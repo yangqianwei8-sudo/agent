@@ -15,6 +15,7 @@ from backend.application.pleading_writer import PleadingWriterService
 from backend.domain.errors import ValidationError
 from backend.main import app
 from backend.models import (
+    Claim,
     ClaimFactLink,
     ClaimIssueLink,
     DocumentDraft,
@@ -357,6 +358,25 @@ def test_superseded_issue_relation_excluded(db_session, owner_id, actor_id):
     assert inp.issues[0].issue_version == v2.version
     assert all(r.issue_version != v1 for r in inp.claim_issue_relations)
     assert all(r.issue_version != v1 for r in inp.issue_fact_relations)
+
+
+def test_stale_claim_relation_excluded(db_session, owner_id, actor_id):
+    svc, case, _, _, _, confirmed, _ = _seed_production_world(
+        db_session, owner_id, actor_id
+    )
+    claim_row = db_session.scalars(
+        select(Claim).where(
+            Claim.claim_key == confirmed.claim_key,
+            Claim.version == confirmed.version,
+        )
+    ).first()
+    assert claim_row is not None
+    claim_row.stale = True
+    db_session.flush()
+    inp = _build_production_input(db_session, case.id)
+    assert inp.claims == []
+    assert inp.claim_issue_relations == []
+    assert inp.claim_fact_relations == []
 
 
 def test_stale_issue_relation_excluded(db_session, owner_id, actor_id):
