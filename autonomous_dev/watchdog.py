@@ -33,6 +33,17 @@ def start_watchdog() -> None:
     _thread = threading.Thread(target=_loop, name="autonomous-watchdog", daemon=True)
     _thread.start()
     logger.info("watchdog started interval=%ss", settings.watchdog_interval_seconds)
+    # Recover missed activations promptly when webhook delivery is delayed/unavailable.
+    threading.Thread(target=_startup_tick, name="autonomous-watchdog-startup", daemon=True).start()
+
+
+def _startup_tick() -> None:
+    if _stop.wait(3):
+        return
+    try:
+        _tick()
+    except Exception:
+        logger.exception("watchdog startup tick failed")
 
 
 def stop_watchdog() -> None:
