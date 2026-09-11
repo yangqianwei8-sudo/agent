@@ -14,6 +14,9 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ghcr.io/yangqianwei8-sudo/agent
+  K8S_NAMESPACE: ns-dqyh88ke
+  K8S_DEPLOYMENT: lawyer-agent-orchestrator
+  K8S_CONTAINER: app
 
 jobs:
   test:
@@ -96,20 +99,57 @@ jobs:
         env:
           KUBECONFIG_B64: ${{ secrets.SEALOS_KUBECONFIG }}
           IMAGE_TAG: ${{ github.sha }}
+          BUILD_TIME: ${{ github.event.head_commit.timestamp }}
+          PUBLIC_URL: https://ynboesvphjna.sealosbja.site
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.kube"
           echo "${KUBECONFIG_B64}" | base64 -d > "$HOME/.kube/config"
           chmod 600 "$HOME/.kube/config"
-          kubectl set image deployment/lawyer-agent-orchestrator \
-            app=ghcr.io/yangqianwei8-sudo/agent:${IMAGE_TAG} \
-            --record
-          kubectl rollout status deployment/lawyer-agent-orchestrator --timeout=180s
-          kubectl set env deployment/lawyer-agent-orchestrator \
-            GIT_SHA="${IMAGE_TAG}" \
-            IMAGE_TAG="${IMAGE_TAG}" \
-            BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          NS="${K8S_NAMESPACE}"
+          DEP="${K8S_DEPLOYMENT}"
+          CTR="${K8S_CONTAINER}"
+          IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+          BT="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+          kubectl get deployment "${DEP}" -n "${NS}"
+          kubectl patch deployment "${DEP}" -n "${NS}" --type=strategic --patch "
+          spec:
+            template:
+              spec:
+                containers:
+                - name: ${CTR}
+                  image: ${IMAGE}
+                  env:
+                  - name: GIT_SHA
+                    value: \"${IMAGE_TAG}\"
+                  - name: IMAGE_TAG
+                    value: \"${IMAGE_TAG}\"
+                  - name: BUILD_TIME
+                    value: \"${BT}\"
+          "
+          kubectl rollout status deployment/"${DEP}" -n "${NS}" --timeout=300s
+          kubectl get deployment "${DEP}" -n "${NS}" -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+          for i in $(seq 1 30); do
+            code="$(curl -sS -m 15 -o /tmp/healthz.json -w '%{http_code}' "${PUBLIC_URL}/healthz" || echo 000)"
+            if [ "${code}" = "200" ]; then
+              python3 - <<'PY'
+          import json, os, sys
+          data = json.load(open("/tmp/healthz.json"))
+          expected = os.environ["IMAGE_TAG"]
+          actual = data.get("git_sha") or ""
+          print(f"healthz git_sha={actual}")
+          if actual != expected and not (actual.startswith(expected[:7]) or expected.startswith(actual[:7])):
+              sys.exit(f"healthz SHA mismatch expected={expected} actual={actual}")
+          PY
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "healthz verification failed after rollout"
+          exit 1
 
       - name: Deploy credential missing
         if: steps.creds.outputs.present != 'true'
-        run: echo "DEPLOY_CREDENTIAL_MISSING — set GitHub secret SEALOS_KUBECONFIG"
+        run: |
+          echo "BLOCKER_SEALOS_KUBECONFIG"
+          exit 1
