@@ -1,4 +1,4 @@
-"""Hourly watchdog fallback — scans stale runnable tasks."""
+"""Hourly watchdog fallback — stale lock recovery + overdue review scan."""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ import uuid
 import httpx
 
 from autonomous_dev.config import get_autonomous_settings
+from autonomous_dev.execution_identity import compute_execution_key
+from autonomous_dev.github_auth import resolve_github_token
 from autonomous_dev.github_webhook import is_current_cursor_task
+from autonomous_dev.review_bridge import ReviewBridge
 from autonomous_dev.state import StateStore, TaskStatus
 from autonomous_dev.task_router import TaskRouter
 
@@ -38,7 +41,7 @@ def stop_watchdog() -> None:
 
 def _loop() -> None:
     settings = get_autonomous_settings()
-    interval = getattr(settings, "watchdog_interval_seconds", 3600)
+    interval = settings.watchdog_interval_seconds
     while not _stop.wait(interval):
         try:
             _tick()
@@ -49,15 +52,36 @@ def _loop() -> None:
 def _tick() -> None:
     settings = get_autonomous_settings()
     store = StateStore(settings.state_db_path)
-    if store.is_locked():
+    if store.recover_stale_lease():
+        logger.warning("watchdog recovered stale worker lease")
+
+    token = resolve_github_token()
+    if not token:
+        logger.debug("watchdog skip: no GitHub token")
         return
-    if not settings.github_token:
+
+    review_bridge = ReviewBridge(settings, store)
+    stale_tasks = store.get_stale_ready_for_review_tasks(
+        older_than_seconds=settings.review_watchdog_stale_seconds,
+    )
+    for task in stale_tasks:
+        _, count = store.get_review_trigger(task.id)
+        if count >= 3:
+            logger.info("watchdog skip review re-trigger task=%s count=%s", task.id, count)
+            continue
+        if not task.commit_sha:
+            continue
+        logger.info("watchdog review fallback task=%s issue=#%s", task.id, task.issue_number)
+        review_bridge.notify_ready_for_review(task, commit_sha=task.commit_sha)
+
+    if store.is_locked():
         return
 
     url = f"https://api.github.com/repos/{settings.github_repo}/issues"
     headers = {
-        "Authorization": f"Bearer {settings.github_token}",
+        "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
     with httpx.Client(timeout=30.0) as client:
         resp = client.get(
@@ -74,6 +98,9 @@ def _tick() -> None:
         if not is_current_cursor_task(payload):
             continue
         num = issue["number"]
+        execution_key = compute_execution_key(settings, payload)
+        if execution_key and store.get_active_execution(execution_key):
+            continue
         existing = store.get_task_by_issue(num)
         if existing and existing.status in {
             TaskStatus.RUNNING,

@@ -12,9 +12,12 @@ spec:
       labels:
         app: lawyer-agent-orchestrator
     spec:
+      restartPolicy: Always
       containers:
         - name: app
           image: ghcr.io/yangqianwei8-sudo/agent:latest
+          command: ["/app/.venv/bin/uvicorn"]
+          args: ["backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
           ports:
             - containerPort: 8000
           envFrom:
@@ -26,10 +29,16 @@ spec:
             httpGet:
               path: /healthz
               port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            failureThreshold: 3
           volumeMounts:
             - name: state
               mountPath: /app/data

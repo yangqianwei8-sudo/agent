@@ -11,8 +11,10 @@ from pathlib import Path
 import pytest
 from autonomous_dev.app import reset_autonomous_singletons
 from autonomous_dev.config import AutonomousDevSettings, clear_autonomous_settings_cache
+from autonomous_dev.execution_identity import compute_execution_key
+from autonomous_dev.github_client import LABEL_READY_FOR_REVIEW, GitHubClient, GitHubClientError
 from autonomous_dev.github_webhook import WebhookVerificationError, verify_github_signature
-from autonomous_dev.review_bridge import ReviewBridge
+from autonomous_dev.review_bridge import ReviewBridge, ReviewTriggerAdapter, ReviewTriggerResult
 from autonomous_dev.state import StateStore, TaskStatus
 from autonomous_dev.task_router import TaskRouter
 from autonomous_dev.worker import (
@@ -24,6 +26,49 @@ from autonomous_dev.worker import (
 from fastapi.testclient import TestClient
 
 from backend.main import app
+
+
+class _MockGitHubClient:
+    def __init__(self, *args, **kwargs) -> None:
+        self.labels: dict[int, set[str]] = {}
+        self.comments: list[tuple[int, str]] = []
+
+    def sync_worker_running(self, issue_number: int) -> None:
+        self.labels[issue_number] = {"cursor-task", "worker-running"}
+
+    def sync_ready_for_review(self, issue_number: int) -> None:
+        self.labels[issue_number] = {"cursor-task", LABEL_READY_FOR_REVIEW}
+
+    def sync_needs_fix(self, issue_number: int) -> None:
+        self.labels[issue_number] = {"cursor-task", "needs-fix"}
+
+    def sync_product_decision(self, issue_number: int) -> None:
+        self.labels[issue_number] = {"cursor-task", "product-decision"}
+
+    def sync_completed(self, issue_number: int) -> None:
+        self.labels[issue_number] = {"cursor-task", "completed"}
+
+    def add_comment(self, issue_number: int, body: str) -> None:
+        self.comments.append((issue_number, body))
+
+    def set_issue_labels(self, issue_number: int, labels: set[str]) -> None:
+        self.labels[issue_number] = set(labels)
+
+    def get_issue_labels(self, issue_number: int) -> set[str]:
+        return self.labels.get(issue_number, set())
+
+
+@pytest.fixture(autouse=True)
+def _mock_github_client(monkeypatch: pytest.MonkeyPatch):
+    mock = _MockGitHubClient()
+
+    def _factory(*args, **kwargs):
+        return mock
+
+    monkeypatch.setattr("autonomous_dev.worker.GitHubClient", _factory)
+    monkeypatch.setattr("autonomous_dev.task_router.GitHubClient", _factory)
+    monkeypatch.setattr("autonomous_dev.review_bridge.GitHubClient", _factory)
+    return mock
 
 
 @pytest.fixture(autouse=True)
@@ -75,6 +120,8 @@ def _issue_payload(*, number: int = 2, labels: list[str] | None = None, body: st
             "state": "open",
             "body": body,
             "labels": label_objs,
+            "updated_at": "2026-09-11T02:00:00Z",
+            "created_at": "2026-09-10T12:00:00Z",
         },
     }
 
@@ -233,7 +280,12 @@ def test_review_bridge_adapter(infra_env):
     store = StateStore(db)
     task = store.create_task(issue_number=11, delivery_id="rb-1")
     task = store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="abc")
-    bridge = ReviewBridge()
+
+    class FakeAdapter(ReviewTriggerAdapter):
+        def trigger(self, task, *, commit_sha: str) -> ReviewTriggerResult:
+            return ReviewTriggerResult(triggered=True, adapter="fake", detail="ok")
+
+    bridge = ReviewBridge(adapters=[FakeAdapter()])
     results = bridge.notify_ready_for_review(task, commit_sha="abc123")
     assert results
     assert any(r.triggered for r in results)
@@ -379,3 +431,134 @@ def test_cursor_sdk_secrets_not_in_error(infra_env, monkeypatch: pytest.MonkeyPa
     updated = store.get_task(task.id)
     assert updated is not None
     assert secret not in (updated.error or "")
+
+
+def test_execution_key_from_payload(infra_env):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    payload = _issue_payload(number=7)
+    key = compute_execution_key(settings, payload)
+    assert key == f"{settings.github_repo}#7#2026-09-11T02:00:00Z"
+
+
+def test_duplicate_active_execution_blocked(infra_env):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    router = TaskRouter(settings, store)
+    payload = _issue_payload(number=55)
+    execution_key = compute_execution_key(settings, payload)
+    store.create_task(
+        issue_number=55,
+        delivery_id="first",
+        execution_key=execution_key,
+        status=TaskStatus.RUNNING,
+    )
+    result = router.handle(
+        event_type="issues",
+        action="labeled",
+        delivery_id="second-delivery",
+        payload=payload,
+    )
+    assert result["status"] == "ignored"
+    assert result["reason"] == "duplicate active execution"
+
+
+def test_lease_blocks_second_worker(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    assert store.try_acquire_lease(1, 10, owner="worker-10", ttl_seconds=60)
+    assert not store.try_acquire_lease(2, 11, owner="worker-11", ttl_seconds=60)
+    store.release_lease("worker-10")
+    assert store.try_acquire_lease(2, 11, owner="worker-11", ttl_seconds=60)
+
+
+def test_stale_lease_recovery(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    assert store.try_acquire_lease(1, 10, owner="worker-10", ttl_seconds=1)
+    import time
+
+    time.sleep(1.1)
+    assert store.recover_stale_lease()
+    assert not store.is_locked()
+    assert store.try_acquire_lease(2, 11, owner="worker-11", ttl_seconds=60)
+
+
+def test_heartbeat_extends_lease(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    assert store.try_acquire_lease(1, 10, owner="worker-10", ttl_seconds=2)
+    import time
+
+    time.sleep(1)
+    assert store.heartbeat_lease("worker-10", ttl_seconds=5)
+    time.sleep(1.5)
+    assert store.is_locked()
+
+
+def test_github_client_fail_closed_without_token(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "")
+    monkeypatch.setenv("GITHUB_AUTH_MODE", "pat")
+    clear_autonomous_settings_cache()
+    client = GitHubClient(AutonomousDevSettings())
+    with pytest.raises(GitHubClientError, match="not configured"):
+        client.set_issue_labels(1, {"cursor-task"})
+
+
+def test_push_correlation_no_fallback(infra_env):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    router = TaskRouter(settings, store)
+    store.create_task(issue_number=8, delivery_id="unrelated", status=TaskStatus.RUNNING)
+    result = router.handle(
+        event_type="push",
+        action=None,
+        delivery_id="push-unrelated",
+        payload={"ref": "refs/heads/main", "after": "deadbeef999999"},
+    )
+    assert result["status"] == "ignored"
+    assert result["reason"] == "no correlated task"
+
+
+def test_push_correlation_idempotent(infra_env):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    router = TaskRouter(settings, store)
+    task = store.create_task(issue_number=9, delivery_id="push-idem")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="abc123def456")
+    result = router.handle(
+        event_type="push",
+        action=None,
+        delivery_id="push-idem-dup",
+        payload={"ref": "refs/heads/main", "after": "abc123def4567890"},
+    )
+    assert result["status"] == "ready_for_review"
+    assert result.get("idempotent") is True
+
+
+def test_reviewer_pass_completes_task(infra_env):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    router = TaskRouter(settings, store)
+    task = store.create_task(issue_number=12, delivery_id="review-pass")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="sha")
+    result = router.seal_review_pass(12)
+    assert result["status"] == "completed"
+    updated = store.get_task(task.id)
+    assert updated is not None
+    assert updated.status == TaskStatus.COMPLETED
+
+
+def test_review_trigger_dedup_metadata(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    task = store.create_task(issue_number=13, delivery_id="review-meta")
+    store.record_review_trigger(task.id)
+    store.record_review_trigger(task.id)
+    ts, count = store.get_review_trigger(task.id)
+    assert ts is not None
+    assert count == 2

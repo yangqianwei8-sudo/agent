@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter, Header, HTTPException, Request, status
 
 from autonomous_dev.config import get_autonomous_settings
+from autonomous_dev.github_client import GitHubClientError
 from autonomous_dev.github_webhook import (
     WebhookVerificationError,
     parse_json_payload,
@@ -109,3 +110,27 @@ async def github_webhook(
         result.get("status"),
     )
     return {"delivery_id": x_github_delivery, **result}
+
+
+@router.post("/autonomous/review/pass")
+async def review_pass(
+    request: Request,
+    x_autonomous_secret: str | None = Header(default=None, alias="X-Autonomous-Secret"),
+) -> dict[str, object]:
+    """Reviewer PASS — transitions ready-for-review → completed (not worker-initiated)."""
+    settings = get_autonomous_settings()
+    if not settings.autonomous_dev_enabled:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="autonomous dev disabled")
+    if x_autonomous_secret != settings.github_webhook_secret:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid secret")
+
+    body = await request.json()
+    issue_number = body.get("issue_number")
+    if not isinstance(issue_number, int):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="issue_number required")
+
+    try:
+        result = _get_router().seal_review_pass(issue_number)
+    except (GitHubClientError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return result

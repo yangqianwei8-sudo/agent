@@ -10,7 +10,37 @@ GitHub Issue (cursor-task + current-task)
   → push webhook → ready-for-review
 ```
 
-Hourly ChatGPT watchdog remains fallback via `WatchdogFallbackAdapter`.
+Hourly watchdog scans stale `ready-for-review` tasks and orphaned `current-task` issues as fallback only.
+
+## State machine (GitHub labels = external SSOT)
+
+```text
+current-task → worker-running → ready-for-review → completed
+failures: worker-running → needs-fix
+product ambiguity: worker-running → product-decision
+```
+
+- GitHub labels are updated via `GitHubClient` (fail-closed — missing token or API failure raises error)
+- SQLite (`StateStore`) holds local execution/delivery state
+- `completed` only via reviewer PASS (`POST /autonomous/review/pass`), never by Worker
+
+## Exactly-once execution
+
+In addition to `X-GitHub-Delivery` dedup, task execution identity is:
+
+```text
+{GITHUB_REPO}#{issue_number}#{issue.updated_at}
+```
+
+Same active execution (queued/running/ready-for-review) blocks duplicate worker starts even with a new delivery ID.
+
+## Lease lock
+
+Worker lease persisted in SQLite: `owner`, `acquired_at`, `heartbeat_at`, `lease_expires_at`.
+
+- Heartbeat extends lease during long runs
+- Stale lease auto-recovered on next webhook or watchdog tick
+- Only one worker holds lease at a time
 
 ## Python runtime (required)
 
@@ -44,6 +74,10 @@ python3.11 -m venv .venv
 | `AUTONOMOUS_WORKER_MODE` | `deterministic` (tests), `live`, or `cursor_sdk` |
 | `AUTONOMOUS_REPO_ROOT` | Repository root path |
 | `AUTONOMOUS_STATE_DB_PATH` | SQLite state DB (default `data/autonomous_dev.db`) |
+| `WORKER_LEASE_TTL_SECONDS` | Worker lease TTL (default 300) |
+| `WORKER_HEARTBEAT_INTERVAL_SECONDS` | Lease heartbeat interval (default 30) |
+| `WATCHDOG_INTERVAL_SECONDS` | Hourly fallback scan interval (default 3600) |
+| `REVIEW_WATCHDOG_STALE_SECONDS` | Re-trigger review handoff after this age (default 3600) |
 
 Never commit `.env`. **Do not** leave `GITHUB_TOKEN=` or `CURSOR_API_KEY=` empty in `.env` — empty values overwrite secrets injected by Sealos/DevBox.
 
@@ -132,6 +166,47 @@ Worker controlled acceptance (cursor_sdk branch, no legal business execution):
 ```
 
 Controlled acceptance uses issue body marker `[CURSOR-RUNTIME-ACCEPTANCE]` — safe prompt only, no file modifications.
+
+P0 production live acceptance (full A–M):
+
+```bash
+pkill -f "uvicorn backend.main:app" || true
+nohup .venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000 &
+.venv/bin/python backend/scripts/live_p0_production_acceptance.py
+```
+
+## Sealos deployment
+
+Manifests in `deploy/sealos/`:
+
+- `deployment.yaml` — Deployment with `.venv/bin/uvicorn`, readiness/liveness on `/healthz`, restartPolicy Always
+- `service.yaml` — ClusterIP port 8000
+- `ingress.yaml` — `/webhooks/github`, `/healthz`
+- `pvc.yaml` — persistent SQLite state at `/app/data`
+- `configmap.yaml` — non-secret env (worker mode, repo, lease/watchdog intervals)
+- `secret.example.yaml` — template for webhook secret, GitHub token, Cursor API key (never commit real values)
+
+Apply:
+
+```bash
+kubectl apply -f deploy/sealos/pvc.yaml
+kubectl apply -f deploy/sealos/configmap.yaml
+kubectl apply -f deploy/sealos/secret.example.yaml   # replace with real Secret first
+kubectl apply -f deploy/sealos/deployment.yaml
+kubectl apply -f deploy/sealos/service.yaml
+kubectl apply -f deploy/sealos/ingress.yaml
+```
+
+## Reviewer PASS (seal)
+
+```bash
+curl -X POST http://127.0.0.1:8000/autonomous/review/pass \
+  -H "X-Autonomous-Secret: $GITHUB_WEBHOOK_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"issue_number": 2}'
+```
+
+Transitions `ready-for-review` → `completed` on GitHub and in DB.
 
 ## Failure recovery
 
