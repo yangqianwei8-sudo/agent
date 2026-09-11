@@ -14,8 +14,20 @@ from autonomous_dev.config import AutonomousDevSettings, clear_autonomous_settin
 from autonomous_dev.execution_identity import compute_execution_key
 from autonomous_dev.github_client import LABEL_READY_FOR_REVIEW, GitHubClient, GitHubClientError
 from autonomous_dev.github_webhook import WebhookVerificationError, verify_github_signature
-from autonomous_dev.review_bridge import ReviewBridge, ReviewTriggerAdapter, ReviewTriggerResult
-from autonomous_dev.state import StateStore, TaskStatus
+from autonomous_dev.review_bridge import (
+    OpenAIApiReviewAdapter,
+    ReviewBridge,
+    ReviewTriggerAdapter,
+    ReviewTriggerResult,
+)
+from autonomous_dev.review_executor import ReviewExecutor
+from autonomous_dev.reviewer_service import (
+    REVIEWER_ACCEPTANCE_MARKER,
+    REVIEWER_FAIL_MARKER,
+    REVIEWER_PRODUCT_DECISION_MARKER,
+    ReviewerService,
+)
+from autonomous_dev.state import ReviewInvocationStatus, ReviewVerdict, StateStore, TaskStatus
 from autonomous_dev.task_router import TaskRouter
 from autonomous_dev.worker import (
     CURSOR_RUNTIME_ACCEPTANCE_MARKER,
@@ -32,6 +44,10 @@ class _MockGitHubClient:
     def __init__(self, *args, **kwargs) -> None:
         self.labels: dict[int, set[str]] = {}
         self.comments: list[tuple[int, str]] = []
+        self.bodies: dict[int, str] = {}
+        self.created_issues: list[dict] = []
+        self.closed: list[int] = []
+        self._next_issue = 9000
 
     def sync_worker_running(self, issue_number: int) -> None:
         self.labels[issue_number] = {"cursor-task", "worker-running"}
@@ -57,6 +73,33 @@ class _MockGitHubClient:
     def get_issue_labels(self, issue_number: int) -> set[str]:
         return self.labels.get(issue_number, set())
 
+    def get_issue_body(self, issue_number: int) -> str:
+        return self.bodies.get(issue_number, "")
+
+    def close_issue(self, issue_number: int, *, reason: str = "") -> None:
+        self.closed.append(issue_number)
+
+    def create_issue(self, *, title: str, body: str, labels: set[str] | None = None) -> int:
+        num = self._next_issue
+        self._next_issue += 1
+        self.created_issues.append({"number": num, "title": title, "body": body, "labels": labels})
+        if labels:
+            self.labels[num] = set(labels)
+        self.bodies[num] = body
+        return num
+
+    def update_issue_body(self, issue_number: int, body: str) -> None:
+        self.bodies[issue_number] = body
+
+    def remove_label(self, issue_number: int, label: str) -> None:
+        self.labels.get(issue_number, set()).discard(label)
+
+    def find_open_issue_by_title_prefix(self, prefix: str) -> int | None:
+        for issue in self.created_issues:
+            if prefix in issue["title"]:
+                return issue["number"]
+        return None
+
 
 @pytest.fixture(autouse=True)
 def _mock_github_client(monkeypatch: pytest.MonkeyPatch):
@@ -68,6 +111,7 @@ def _mock_github_client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("autonomous_dev.worker.GitHubClient", _factory)
     monkeypatch.setattr("autonomous_dev.task_router.GitHubClient", _factory)
     monkeypatch.setattr("autonomous_dev.review_bridge.GitHubClient", _factory)
+    monkeypatch.setattr("autonomous_dev.review_executor.GitHubClient", _factory)
     return mock
 
 
@@ -644,3 +688,171 @@ def test_review_trigger_dedup_metadata(infra_env):
     ts, count = store.get_review_trigger(task.id)
     assert ts is not None
     assert count == 2
+
+
+def test_reviewer_pass_completes_task_via_executor(infra_env, _mock_github_client):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("acceptance ok\n", encoding="utf-8")
+    task = store.create_task(issue_number=20, delivery_id="rev-pass")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="abc123def456")
+    _mock_github_client.bodies[20] = f"{REVIEWER_ACCEPTANCE_MARKER}\nHarmless acceptance."
+    executor = ReviewExecutor(settings, store)
+    result = executor.run_review_sync(
+        task,
+        commit_sha="abc123def456",
+        issue_body=_mock_github_client.bodies[20],
+    )
+    assert result["verdict"] == "PASS"
+    updated = store.get_task(task.id)
+    assert updated is not None
+    assert updated.status == TaskStatus.COMPLETED
+    inv = store.get_review_invocation(task.id, "abc123def456")
+    assert inv is not None
+    assert inv.verdict == ReviewVerdict.PASS
+    assert inv.status == ReviewInvocationStatus.COMPLETED
+
+
+def test_reviewer_fail_creates_repair_issue(infra_env, _mock_github_client):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("missing magic\n", encoding="utf-8")
+    task = store.create_task(issue_number=21, delivery_id="rev-fail")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="fail12345678")
+    body = f"{REVIEWER_FAIL_MARKER}\nControlled fail acceptance."
+    _mock_github_client.bodies[21] = body
+    executor = ReviewExecutor(settings, store)
+    result = executor.run_review_sync(task, commit_sha="fail12345678", issue_body=body)
+    assert result["verdict"] == "FAIL"
+    updated = store.get_task(task.id)
+    assert updated is not None
+    assert updated.status == TaskStatus.NEEDS_FIX
+    assert len(_mock_github_client.created_issues) == 1
+    repair = _mock_github_client.created_issues[0]
+    assert repair["labels"] == {"cursor-task", "current-task"}
+
+
+def test_reviewer_product_decision_packet(infra_env, _mock_github_client):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    task = store.create_task(issue_number=22, delivery_id="rev-pd")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="pd1234567890")
+    body = f"{REVIEWER_PRODUCT_DECISION_MARKER}\nProduct ambiguity test."
+    _mock_github_client.bodies[22] = body
+    executor = ReviewExecutor(settings, store)
+    result = executor.run_review_sync(task, commit_sha="pd1234567890", issue_body=body)
+    assert result["verdict"] == "PRODUCT_DECISION"
+    updated = store.get_task(task.id)
+    assert updated is not None
+    assert updated.status == TaskStatus.PRODUCT_DECISION
+    comments = [c for n, c in _mock_github_client.comments if n == 22]
+    assert any("【需要产品决策】" in c for c in comments)
+
+
+def test_reviewer_exactly_once_idempotent(infra_env, _mock_github_client):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok\n", encoding="utf-8")
+    task = store.create_task(issue_number=23, delivery_id="rev-idem")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="idem12345678")
+    body = f"{REVIEWER_ACCEPTANCE_MARKER}\nAcceptance."
+    _mock_github_client.bodies[23] = body
+    executor = ReviewExecutor(settings, store)
+    executor.run_review_sync(task, commit_sha="idem12345678", issue_body=body)
+    first_count = len(_mock_github_client.created_issues)
+    outcome = executor.schedule_review(task, commit_sha="idem12345678")
+    assert outcome["status"] == "idempotent"
+    assert len(_mock_github_client.created_issues) == first_count
+
+
+def test_reviewer_lock_blocks_concurrent(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    assert store.try_acquire_reviewer_lock(1, owner="r1", ttl_seconds=60)
+    assert not store.try_acquire_reviewer_lock(2, owner="r2", ttl_seconds=60)
+    store.release_reviewer_lock("r1")
+    assert store.try_acquire_reviewer_lock(2, owner="r2", ttl_seconds=60)
+
+
+def test_openai_adapter_credential_blocker(infra_env, monkeypatch: pytest.MonkeyPatch):
+    repo, db = infra_env
+    monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("LLM_API_KEY", "")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    task = store.create_task(issue_number=24, delivery_id="cred-block")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="cred12345678")
+    adapter = OpenAIApiReviewAdapter(settings, store)
+    result = adapter.trigger(task, commit_sha="cred12345678")
+    assert result.triggered is False
+    assert "credential blocker" in result.detail.lower()
+
+
+def test_openai_adapter_schedules_in_deterministic_mode(infra_env):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    task = store.create_task(issue_number=25, delivery_id="sched")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="sch123456789")
+    adapter = OpenAIApiReviewAdapter(settings, store)
+    result = adapter.trigger(task, commit_sha="sch123456789")
+    assert result.triggered is True
+    assert result.adapter == "openai_api"
+
+
+def test_push_triggers_reviewer_bridge(infra_env, _mock_github_client):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok\n", encoding="utf-8")
+    router = TaskRouter(settings, store)
+    task = store.create_task(issue_number=26, delivery_id="push-rev")
+    store.update_task(task.id, status=TaskStatus.RUNNING)
+    _mock_github_client.bodies[26] = f"{REVIEWER_ACCEPTANCE_MARKER}\nPush review test."
+    router.handle(
+        event_type="push",
+        action=None,
+        delivery_id="push-rev-001",
+        payload={
+            "ref": "refs/heads/main",
+            "after": "rev1234567890",
+            "commits": [{"message": "chore: issue #26"}],
+        },
+    )
+    import time
+
+    for _ in range(20):
+        inv = store.get_review_invocation(task.id, "rev1234567890")
+        if inv and inv.status == ReviewInvocationStatus.COMPLETED:
+            break
+        time.sleep(0.1)
+    inv = store.get_review_invocation(task.id, "rev1234567890")
+    assert inv is not None
+    assert inv.verdict == ReviewVerdict.PASS
+
+
+def test_reviewer_service_deterministic_pass(infra_env):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    svc = ReviewerService(settings, repo_root=repo)
+    ctx = svc.gather_context(
+        issue_number=1,
+        issue_body=f"{REVIEWER_ACCEPTANCE_MARKER}\ntest",
+        commit_sha="abc123",
+    )
+    result = svc.review(ctx)
+    assert result.verdict == "PASS"

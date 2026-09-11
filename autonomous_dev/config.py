@@ -36,6 +36,11 @@ class AutonomousDevSettings(BaseSettings):
     worker_heartbeat_interval_seconds: int = 30
     review_watchdog_stale_seconds: int = 3600
     webhook_public_url: str = ""
+    openai_api_key: str = ""
+    reviewer_model: str = ""
+    reviewer_base_url: str = ""
+    reviewer_max_retries: int = 2
+    reviewer_lease_ttl_seconds: int = 300
 
     @property
     def repo_root(self) -> Path:
@@ -56,6 +61,29 @@ class AutonomousDevSettings(BaseSettings):
             raise RuntimeError("CURSOR_API_KEY required for cursor_sdk mode")
         if not self.cursor_model.strip():
             raise RuntimeError("CURSOR_MODEL required for cursor_sdk mode")
+
+    def resolve_reviewer_credentials(self) -> tuple[str, str, str] | None:
+        """Return (api_key, base_url, model) or None if reviewer credentials absent."""
+        import os
+
+        api_key = (self.openai_api_key or os.environ.get("OPENAI_API_KEY") or "").strip()
+        if not api_key:
+            api_key = (os.environ.get("LLM_API_KEY") or "").strip()
+        base_url = (
+            self.reviewer_base_url
+            or os.environ.get("REVIEWER_BASE_URL")
+            or os.environ.get("LLM_BASE_URL")
+            or "https://api.openai.com/v1"
+        ).strip().rstrip("/")
+        model = (
+            self.reviewer_model
+            or os.environ.get("REVIEWER_MODEL")
+            or os.environ.get("LLM_MODEL")
+            or "gpt-4o-mini"
+        ).strip()
+        if not api_key:
+            return None
+        return api_key, base_url, model
 
 
 @lru_cache

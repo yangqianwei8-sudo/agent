@@ -50,11 +50,14 @@ def reset_autonomous_singletons() -> None:
 def healthz() -> dict[str, str]:
     settings = get_autonomous_settings()
     store = _get_store()
+    reviewer_creds = settings.resolve_reviewer_credentials()
     return {
         "status": "ok",
         "autonomous_dev_enabled": str(settings.autonomous_dev_enabled).lower(),
         "worker_mode": settings.autonomous_worker_mode,
         "worker_locked": str(store.is_locked()).lower(),
+        "reviewer_configured": str(reviewer_creds is not None).lower(),
+        "reviewer_locked": str(store.is_reviewer_locked()).lower(),
     }
 
 

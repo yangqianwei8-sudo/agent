@@ -31,6 +31,20 @@ class DeliveryStatus(StrEnum):
     FAILED = "failed"
 
 
+class ReviewVerdict(StrEnum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    PRODUCT_DECISION = "PRODUCT_DECISION"
+    SKIP = "SKIP"
+
+
+class ReviewInvocationStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 @dataclass
 class TaskRecord:
     id: int
@@ -53,6 +67,19 @@ class LeaseRecord:
     acquired_at: str | None
     heartbeat_at: str | None
     lease_expires_at: str | None
+
+
+@dataclass
+class ReviewInvocationRecord:
+    invocation_id: str
+    task_id: int
+    issue_number: int
+    commit_sha: str
+    verdict: ReviewVerdict | None
+    status: ReviewInvocationStatus
+    error: str | None
+    created_at: str
+    completed_at: str | None
 
 
 class StateStore:
@@ -114,8 +141,33 @@ class StateStore:
                     last_review_trigger_at TEXT,
                     trigger_count INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS review_invocations (
+                    invocation_id TEXT PRIMARY KEY,
+                    task_id INTEGER NOT NULL,
+                    issue_number INTEGER NOT NULL,
+                    commit_sha TEXT NOT NULL,
+                    verdict TEXT,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    UNIQUE(task_id, commit_sha)
+                );
+                CREATE TABLE IF NOT EXISTS reviewer_lock (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    locked INTEGER NOT NULL DEFAULT 0,
+                    task_id INTEGER,
+                    owner TEXT,
+                    acquired_at TEXT,
+                    lease_expires_at TEXT
+                );
                 INSERT OR IGNORE INTO worker_lock (id, locked) VALUES (1, 0);
+                INSERT OR IGNORE INTO reviewer_lock (id, locked) VALUES (1, 0);
                 """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_review_invocations_task "
+                "ON review_invocations(task_id, commit_sha)"
             )
             cols = {row[1] for row in conn.execute("PRAGMA table_info(task_executions)").fetchall()}
             if "execution_key" not in cols:
@@ -486,6 +538,186 @@ class StateStore:
 
     def release_lock(self) -> None:
         self.release_lease()
+
+    def create_review_invocation(
+        self,
+        *,
+        invocation_id: str,
+        task_id: int,
+        issue_number: int,
+        commit_sha: str,
+    ) -> ReviewInvocationRecord | None:
+        """Insert pending invocation; returns None if (task_id, commit_sha) already exists."""
+        now = datetime.now(UTC).isoformat()
+        with self._lock, self._conn() as conn:
+            existing = conn.execute(
+                """
+                SELECT * FROM review_invocations
+                WHERE task_id = ? AND commit_sha = ?
+                """,
+                (task_id, commit_sha),
+            ).fetchone()
+            if existing:
+                return self._row_to_review_invocation(existing)
+            conn.execute(
+                """
+                INSERT INTO review_invocations
+                (invocation_id, task_id, issue_number, commit_sha, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    invocation_id,
+                    task_id,
+                    issue_number,
+                    commit_sha,
+                    ReviewInvocationStatus.PENDING.value,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM review_invocations WHERE invocation_id = ?",
+                (invocation_id,),
+            ).fetchone()
+            assert row is not None
+            return self._row_to_review_invocation(row)
+
+    def get_review_invocation(self, task_id: int, commit_sha: str) -> ReviewInvocationRecord | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM review_invocations
+                WHERE task_id = ? AND commit_sha = ?
+                """,
+                (task_id, commit_sha),
+            ).fetchone()
+            return self._row_to_review_invocation(row) if row else None
+
+    def update_review_invocation(
+        self,
+        invocation_id: str,
+        *,
+        status: ReviewInvocationStatus | None = None,
+        verdict: ReviewVerdict | None = None,
+        error: str | None = None,
+    ) -> ReviewInvocationRecord:
+        now = datetime.now(UTC).isoformat()
+        with self._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM review_invocations WHERE invocation_id = ?",
+                (invocation_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"review invocation {invocation_id} not found")
+            new_status = status.value if status else row["status"]
+            new_verdict = verdict.value if verdict else row["verdict"]
+            new_error = error if error is not None else row["error"]
+            completed_at = now if status in {
+                ReviewInvocationStatus.COMPLETED,
+                ReviewInvocationStatus.FAILED,
+            } else row["completed_at"]
+            conn.execute(
+                """
+                UPDATE review_invocations
+                SET status = ?, verdict = ?, error = ?, completed_at = ?
+                WHERE invocation_id = ?
+                """,
+                (new_status, new_verdict, new_error, completed_at, invocation_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM review_invocations WHERE invocation_id = ?",
+                (invocation_id,),
+            ).fetchone()
+            assert updated is not None
+            return self._row_to_review_invocation(updated)
+
+    def recover_stale_reviewer_lock(self) -> bool:
+        now = datetime.now(UTC).isoformat()
+        with self._lock, self._conn() as conn:
+            row = conn.execute("SELECT * FROM reviewer_lock WHERE id = 1").fetchone()
+            if not row or not row["locked"]:
+                return False
+            expires = row["lease_expires_at"]
+            if expires and expires >= now:
+                return False
+            conn.execute(
+                """
+                UPDATE reviewer_lock
+                SET locked = 0, task_id = NULL, owner = NULL,
+                    acquired_at = NULL, lease_expires_at = NULL
+                WHERE id = 1
+                """
+            )
+            return conn.total_changes > 0
+
+    def try_acquire_reviewer_lock(
+        self,
+        task_id: int,
+        *,
+        owner: str,
+        ttl_seconds: int = 300,
+    ) -> bool:
+        self.recover_stale_reviewer_lock()
+        now = datetime.now(UTC)
+        now_iso = now.isoformat()
+        expires = (now + timedelta(seconds=ttl_seconds)).isoformat()
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE reviewer_lock
+                SET locked = 1, task_id = ?, owner = ?, acquired_at = ?, lease_expires_at = ?
+                WHERE id = 1 AND locked = 0
+                """,
+                (task_id, owner, now_iso, expires),
+            )
+            return conn.total_changes > 0
+
+    def release_reviewer_lock(self, owner: str | None = None) -> None:
+        with self._lock, self._conn() as conn:
+            if owner:
+                conn.execute(
+                    """
+                    UPDATE reviewer_lock
+                    SET locked = 0, task_id = NULL, owner = NULL,
+                        acquired_at = NULL, lease_expires_at = NULL
+                    WHERE id = 1 AND owner = ?
+                    """,
+                    (owner,),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE reviewer_lock
+                    SET locked = 0, task_id = NULL, owner = NULL,
+                        acquired_at = NULL, lease_expires_at = NULL
+                    WHERE id = 1
+                    """
+                )
+
+    def is_reviewer_locked(self) -> bool:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM reviewer_lock WHERE id = 1").fetchone()
+            if not row or not row["locked"]:
+                return False
+            expires = row["lease_expires_at"]
+            if expires and expires < datetime.now(UTC).isoformat():
+                self.recover_stale_reviewer_lock()
+                return False
+            return True
+
+    @staticmethod
+    def _row_to_review_invocation(row: sqlite3.Row) -> ReviewInvocationRecord:
+        verdict_raw = row["verdict"]
+        return ReviewInvocationRecord(
+            invocation_id=row["invocation_id"],
+            task_id=row["task_id"],
+            issue_number=row["issue_number"],
+            commit_sha=row["commit_sha"],
+            verdict=ReviewVerdict(verdict_raw) if verdict_raw else None,
+            status=ReviewInvocationStatus(row["status"]),
+            error=row["error"],
+            created_at=row["created_at"],
+            completed_at=row["completed_at"],
+        )
 
     @staticmethod
     def _row_to_task(row: sqlite3.Row) -> TaskRecord:

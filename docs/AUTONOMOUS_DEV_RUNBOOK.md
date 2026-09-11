@@ -8,6 +8,8 @@ GitHub Issue (cursor-task + current-task)
   → TaskRouter → Worker (one at a time)
   → tests → commit → push main
   → push webhook → ready-for-review
+  → event-driven OpenAI reviewer bridge
+  → PASS/FAIL/PRODUCT_DECISION → GitHub state transition
 ```
 
 Hourly watchdog scans stale `ready-for-review` tasks and orphaned `current-task` issues as fallback only.
@@ -22,7 +24,7 @@ product ambiguity: worker-running → product-decision
 
 - GitHub labels are updated via `GitHubClient` (fail-closed — missing token or API failure raises error)
 - SQLite (`StateStore`) holds local execution/delivery state
-- `completed` only via reviewer PASS (`POST /autonomous/review/pass`), never by Worker
+- `completed` via event-driven reviewer PASS (OpenAI API) or manual `POST /autonomous/review/pass`, never by Worker
 
 ## Exactly-once execution
 
@@ -78,6 +80,10 @@ python3.11 -m venv .venv
 | `WORKER_HEARTBEAT_INTERVAL_SECONDS` | Lease heartbeat interval (default 30) |
 | `WATCHDOG_INTERVAL_SECONDS` | Hourly fallback scan interval (default 3600) |
 | `REVIEW_WATCHDOG_STALE_SECONDS` | Re-trigger review handoff after this age (default 3600) |
+| `OPENAI_API_KEY` | Independent reviewer API key (falls back to `LLM_API_KEY`) |
+| `REVIEWER_MODEL` | Reviewer model (default `gpt-4o-mini` or `LLM_MODEL`) |
+| `REVIEWER_BASE_URL` | Reviewer API base URL (default OpenAI or `LLM_BASE_URL`) |
+| `REVIEWER_LEASE_TTL_SECONDS` | Reviewer lock TTL (default 300) |
 
 Never commit `.env`. **Do not** leave `GITHUB_TOKEN=` or `CURSOR_API_KEY=` empty in `.env` — empty values overwrite secrets injected by Sealos/DevBox.
 
@@ -201,7 +207,25 @@ kubectl apply -f deploy/sealos/service.yaml
 kubectl apply -f deploy/sealos/ingress.yaml
 ```
 
-## Reviewer PASS (seal)
+## Event-driven reviewer bridge (P0.2)
+
+Primary path: push webhook → `ready-for-review` → `OpenAIApiReviewAdapter` → `ReviewExecutor` → OpenAI API.
+
+- Exactly-once per `(task_id, commit_sha)` in `review_invocations` table
+- Reviewer lock prevents concurrent reviews on same task
+- Idempotent replay on duplicate push deliveries
+- Watchdog fallback re-schedules stale reviews (hourly only)
+- Credential blocker: missing `OPENAI_API_KEY`/`LLM_API_KEY` → fail closed, no Cursor substitution
+
+Verdicts: `PASS` (seal/close), `FAIL` (repair issue + `current-task`), `PRODUCT_DECISION` (Chinese packet, halt).
+
+P0.2 live acceptance:
+
+```bash
+.venv/bin/python backend/scripts/live_p02_reviewer_acceptance.py
+```
+
+## Reviewer PASS (manual seal fallback)
 
 ```bash
 curl -X POST http://127.0.0.1:8000/autonomous/review/pass \

@@ -104,3 +104,56 @@ class GitHubClient:
 
     def sync_completed(self, issue_number: int) -> None:
         self.set_issue_labels(issue_number, {LABEL_CURSOR_TASK, LABEL_COMPLETED})
+
+    def get_issue_body(self, issue_number: int) -> str:
+        url = f"{self._base}/repos/{self._settings.github_repo}/issues/{issue_number}"
+        resp = self._request_with_retry("GET", url)
+        return str(resp.json().get("body") or "")
+
+    def close_issue(self, issue_number: int, *, reason: str = "") -> None:
+        url = f"{self._base}/repos/{self._settings.github_repo}/issues/{issue_number}"
+        payload: dict[str, str] = {"state": "closed"}
+        self._request_with_retry("PATCH", url, json=payload)
+        if reason:
+            self.add_comment(issue_number, f"Issue closed: {reason[:500]}")
+        logger.info("GitHub issue #%s closed", issue_number)
+
+    def create_issue(
+        self,
+        *,
+        title: str,
+        body: str,
+        labels: set[str] | None = None,
+    ) -> int:
+        url = f"{self._base}/repos/{self._settings.github_repo}/issues"
+        payload: dict[str, object] = {"title": title, "body": body}
+        if labels:
+            payload["labels"] = sorted(labels)
+        resp = self._request_with_retry("POST", url, json=payload)
+        number = int(resp.json()["number"])
+        logger.info("GitHub issue #%s created: %s", number, title[:80])
+        return number
+
+    def update_issue_body(self, issue_number: int, body: str) -> None:
+        url = f"{self._base}/repos/{self._settings.github_repo}/issues/{issue_number}"
+        self._request_with_retry("PATCH", url, json={"body": body})
+
+    def remove_label(self, issue_number: int, label: str) -> None:
+        url = (
+            f"{self._base}/repos/{self._settings.github_repo}/issues/"
+            f"{issue_number}/labels/{label}"
+        )
+        self._request_with_retry("DELETE", url)
+
+    def find_open_issue_by_title_prefix(self, prefix: str) -> int | None:
+        url = f"{self._base}/repos/{self._settings.github_repo}/issues"
+        resp = self._request_with_retry(
+            "GET",
+            url,
+            params={"state": "open", "per_page": 30},
+        )
+        for issue in resp.json():
+            title = issue.get("title") or ""
+            if title.startswith(prefix) or prefix in title:
+                return int(issue["number"])
+        return None

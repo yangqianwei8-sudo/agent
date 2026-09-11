@@ -12,7 +12,6 @@ from autonomous_dev.config import get_autonomous_settings
 from autonomous_dev.execution_identity import compute_execution_key
 from autonomous_dev.github_auth import resolve_github_token
 from autonomous_dev.github_webhook import is_current_cursor_task
-from autonomous_dev.review_bridge import ReviewBridge
 from autonomous_dev.state import StateStore, TaskStatus
 from autonomous_dev.task_router import TaskRouter
 
@@ -71,7 +70,6 @@ def _tick() -> None:
         logger.debug("watchdog skip: no GitHub token")
         return
 
-    review_bridge = ReviewBridge(settings, store)
     stale_tasks = store.get_stale_ready_for_review_tasks(
         older_than_seconds=settings.review_watchdog_stale_seconds,
     )
@@ -83,7 +81,10 @@ def _tick() -> None:
         if not task.commit_sha:
             continue
         logger.info("watchdog review fallback task=%s issue=#%s", task.id, task.issue_number)
-        review_bridge.notify_ready_for_review(task, commit_sha=task.commit_sha)
+        from autonomous_dev.review_executor import ReviewExecutor
+
+        executor = ReviewExecutor(settings, store)
+        executor.schedule_review(task, commit_sha=task.commit_sha)
 
     if store.is_locked():
         return
