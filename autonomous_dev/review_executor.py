@@ -183,14 +183,27 @@ class ReviewExecutor:
                 commit_sha=commit_sha,
             )
             result = self._reviewer.review(ctx, invocation_id=invocation_id)
-            self._apply_verdict(task, commit_sha, result.verdict, result)
+            # Persist verdict before GitHub mutations — API review succeeded.
             self.store.update_review_invocation(
                 invocation_id,
                 status=ReviewInvocationStatus.COMPLETED,
                 verdict=ReviewVerdict(result.verdict),
                 clear_started_at=True,
             )
-            self._post_verdict_comment(task.issue_number, result.verdict, result.reason, invocation_id)
+            try:
+                self._apply_verdict(task, commit_sha, result.verdict, result)
+                self._post_verdict_comment(
+                    task.issue_number,
+                    result.verdict,
+                    result.reason,
+                    invocation_id,
+                )
+            except Exception:  # noqa: BLE001 — GitHub apply must not block queue
+                logger.exception(
+                    "verdict GitHub apply failed task=%s invocation=%s (verdict persisted)",
+                    task.id,
+                    invocation_id,
+                )
             return {
                 "status": "completed",
                 "verdict": result.verdict,
@@ -238,7 +251,6 @@ class ReviewExecutor:
             next_retry_at=next_retry,
             clear_started_at=True,
         )
-        self._kick_review_worker()
         return {
             "status": "failed",
             "error": error[:500],

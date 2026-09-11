@@ -733,17 +733,71 @@ class StateStore:
                 recovered.append(row["invocation_id"])
         return recovered
 
+    def finalize_obsolete_review_invocations(self) -> list[str]:
+        """Complete invocations whose task left ready-for-review or are acceptance fakes."""
+        finalized: list[str] = []
+        with self._lock, self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT ri.invocation_id, ri.status, te.status AS task_status
+                FROM review_invocations ri
+                JOIN task_executions te ON te.id = ri.task_id
+                WHERE ri.status IN (?, ?, ?)
+                  AND (
+                    te.status != ?
+                    OR te.issue_number >= 10000
+                  )
+                """,
+                (
+                    ReviewInvocationStatus.PENDING.value,
+                    ReviewInvocationStatus.RUNNING.value,
+                    ReviewInvocationStatus.FAILED.value,
+                    TaskStatus.READY_FOR_REVIEW.value,
+                ),
+            ).fetchall()
+            verdict_by_task = {
+                TaskStatus.COMPLETED.value: ReviewVerdict.PASS.value,
+                TaskStatus.NEEDS_FIX.value: ReviewVerdict.FAIL.value,
+                TaskStatus.PRODUCT_DECISION.value: ReviewVerdict.PRODUCT_DECISION.value,
+            }
+            for row in rows:
+                verdict = verdict_by_task.get(row["task_status"], ReviewVerdict.SKIP.value)
+                conn.execute(
+                    """
+                    UPDATE review_invocations
+                    SET status = ?, verdict = ?, started_at = NULL, next_retry_at = NULL
+                    WHERE invocation_id = ?
+                    """,
+                    (
+                        ReviewInvocationStatus.COMPLETED.value,
+                        verdict,
+                        row["invocation_id"],
+                    ),
+                )
+                finalized.append(row["invocation_id"])
+        return finalized
+
     def get_due_review_invocations(self, *, max_attempts: int) -> list[ReviewInvocationRecord]:
         now = datetime.now(UTC).isoformat()
         with self._conn() as conn:
             rows = conn.execute(
                 """
-                SELECT * FROM review_invocations
-                WHERE status = ?
-                   OR (status = ? AND attempt_count < ? AND (next_retry_at IS NULL OR next_retry_at <= ?))
-                ORDER BY created_at ASC
+                SELECT ri.* FROM review_invocations ri
+                JOIN task_executions te ON te.id = ri.task_id
+                WHERE te.status = ?
+                  AND te.issue_number < 10000
+                  AND (
+                    ri.status = ?
+                    OR (
+                      ri.status = ?
+                      AND ri.attempt_count < ?
+                      AND (ri.next_retry_at IS NULL OR ri.next_retry_at <= ?)
+                    )
+                  )
+                ORDER BY te.updated_at DESC, ri.created_at ASC
                 """,
                 (
+                    TaskStatus.READY_FOR_REVIEW.value,
                     ReviewInvocationStatus.PENDING.value,
                     ReviewInvocationStatus.FAILED.value,
                     max_attempts,

@@ -1012,3 +1012,100 @@ def test_stale_running_review_recovered(
     assert inv is not None
     assert inv.status == ReviewInvocationStatus.COMPLETED
     assert inv.verdict == ReviewVerdict.PASS
+
+
+def test_review_worker_no_deadlock_on_transient_kick(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Transient kick re-entering process_due_reviews must not deadlock."""
+    repo, db = infra_env
+    monkeypatch.setenv("REVIEW_RETRY_BACKOFF_SECONDS", "0")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok\n", encoding="utf-8")
+    task = store.create_task(issue_number=33, delivery_id="deadlock-kick")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="deadlock123456")
+    body = f"{REVIEWER_ACCEPTANCE_MARKER}\nDeadlock kick test."
+    _mock_github_client.bodies[33] = body
+
+    calls = {"count": 0}
+    real_review = ReviewerService.review
+
+    def flaky_review(self, ctx, *, invocation_id=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("simulated transient reviewer API 503")
+        return real_review(self, ctx, invocation_id=invocation_id)
+
+    reviewer = ReviewerService(settings, repo_root=repo)
+    monkeypatch.setattr(reviewer, "review", flaky_review.__get__(reviewer, ReviewerService))
+    executor = ReviewExecutor(settings, store, reviewer=reviewer)
+    reset_autonomous_singletons()
+    monkeypatch.setattr(
+        "autonomous_dev.review_worker._get_executor",
+        lambda _s, _st: executor,
+    )
+    executor.schedule_review(task, commit_sha="deadlock123456")
+    inv = store.get_review_invocation(task.id, "deadlock123456")
+    assert inv is not None
+    assert inv.status == ReviewInvocationStatus.COMPLETED
+    assert inv.verdict == ReviewVerdict.PASS
+
+
+def test_finalize_obsolete_review_invocations(infra_env):
+    _, db = infra_env
+    store = StateStore(db)
+    task = store.create_task(issue_number=99001, delivery_id="fake-acceptance")
+    store.update_task(task.id, status=TaskStatus.NEEDS_FIX, commit_sha="fake00000001")
+    invocation_id = "inv-obsolete"
+    store.create_review_invocation(
+        invocation_id=invocation_id,
+        task_id=task.id,
+        issue_number=99001,
+        commit_sha="fake00000001",
+    )
+    store.update_review_invocation(
+        invocation_id,
+        status=ReviewInvocationStatus.RUNNING,
+        started_at="2000-01-01T00:00:00+00:00",
+    )
+    finalized = store.finalize_obsolete_review_invocations()
+    assert invocation_id in finalized
+    inv = store.get_review_invocation(task.id, "fake00000001")
+    assert inv is not None
+    assert inv.status == ReviewInvocationStatus.COMPLETED
+    assert inv.verdict == ReviewVerdict.FAIL
+
+
+def test_verdict_persisted_when_github_apply_fails(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok\n", encoding="utf-8")
+    task = store.create_task(issue_number=34, delivery_id="github-apply-fail")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="ghfail1234567")
+    body = f"{REVIEWER_ACCEPTANCE_MARKER}\nGitHub apply fail test."
+    _mock_github_client.bodies[34] = body
+
+    def boom_sync_completed(self, issue_number: int) -> None:
+        raise GitHubClientError("simulated GitHub 404")
+
+    monkeypatch.setattr(
+        "autonomous_dev.github_client.GitHubClient.sync_completed",
+        boom_sync_completed,
+    )
+    executor = ReviewExecutor(settings, store)
+    result = executor.run_review_sync(task, commit_sha="ghfail1234567", issue_body=body)
+    assert result["status"] == "completed"
+    assert result["verdict"] == "PASS"
+    inv = store.get_review_invocation(task.id, "ghfail1234567")
+    assert inv is not None
+    assert inv.status == ReviewInvocationStatus.COMPLETED
+    assert inv.verdict == ReviewVerdict.PASS

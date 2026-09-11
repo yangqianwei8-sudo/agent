@@ -11,7 +11,7 @@ from autonomous_dev.state import StateStore
 
 logger = logging.getLogger(__name__)
 
-_worker_lock = threading.Lock()
+_worker_lock = threading.RLock()
 _executor: ReviewExecutor | None = None
 
 
@@ -40,37 +40,47 @@ def process_due_reviews(
 
     with _worker_lock:
         store.recover_stale_reviewer_lock()
+        finalized = store.finalize_obsolete_review_invocations()
+        for inv_id in finalized:
+            logger.info("finalized obsolete review invocation_id=%s", inv_id)
         recovered = store.recover_stale_running_reviews(
             older_than_seconds=settings.reviewer_lease_ttl_seconds,
         )
         for inv_id in recovered:
             logger.warning("recovered stale RUNNING review invocation_id=%s", inv_id)
 
-        due = store.get_due_review_invocations(max_attempts=settings.review_max_attempts)
         results: list[dict[str, str]] = []
-        for invocation in due:
-            task = store.get_task(invocation.task_id)
-            if task is None:
-                continue
-            owner = f"review-worker-{invocation.invocation_id[:8]}"
-            if not store.try_acquire_reviewer_lock(
-                task.id,
-                owner=owner,
-                ttl_seconds=settings.reviewer_lease_ttl_seconds,
-            ):
-                logger.debug(
-                    "review worker blocked by lock invocation_id=%s",
-                    invocation.invocation_id,
-                )
+        for _ in range(20):
+            due = store.get_due_review_invocations(max_attempts=settings.review_max_attempts)
+            if not due:
                 break
-            try:
-                result = executor.execute_review_invocation(
-                    task,
-                    invocation,
-                )
-                results.append(result)
-            finally:
-                store.release_reviewer_lock(owner)
+            progress = False
+            for invocation in due:
+                task = store.get_task(invocation.task_id)
+                if task is None:
+                    continue
+                owner = f"review-worker-{invocation.invocation_id[:8]}"
+                if not store.try_acquire_reviewer_lock(
+                    task.id,
+                    owner=owner,
+                    ttl_seconds=settings.reviewer_lease_ttl_seconds,
+                ):
+                    logger.debug(
+                        "review worker blocked by lock invocation_id=%s",
+                        invocation.invocation_id,
+                    )
+                    continue
+                try:
+                    result = executor.execute_review_invocation(
+                        task,
+                        invocation,
+                    )
+                    results.append(result)
+                    progress = True
+                finally:
+                    store.release_reviewer_lock(owner)
+            if not progress:
+                break
         return results
 
 
