@@ -403,6 +403,18 @@ class StateStore:
             ).fetchone()
             return self._row_to_task(row) if row else None
 
+    def get_task_by_execution_key(self, execution_key: str) -> TaskRecord | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM task_executions
+                WHERE execution_key = ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (execution_key,),
+            ).fetchone()
+            return self._row_to_task(row) if row else None
+
     def record_review_trigger(self, task_id: int) -> None:
         now = datetime.now(UTC).isoformat()
         with self._lock, self._conn() as conn:

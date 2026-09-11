@@ -1121,3 +1121,317 @@ def test_verdict_persisted_when_github_apply_fails(
     assert inv is not None
     assert inv.status == ReviewInvocationStatus.COMPLETED
     assert inv.verdict == ReviewVerdict.PASS
+
+
+def _mock_github_issues(monkeypatch: pytest.MonkeyPatch, issues: list[dict]) -> None:
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> list[dict]:
+            return issues
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def get(self, url, *, headers, params):
+            return _FakeResponse()
+
+    monkeypatch.setattr("autonomous_dev.watchdog.httpx.Client", _FakeClient)
+    monkeypatch.setattr("autonomous_dev.watchdog.resolve_github_token", lambda: "test-token")
+
+
+def test_watchdog_recovers_failed_new_generation(infra_env, monkeypatch: pytest.MonkeyPatch):
+    """FAILED prior task + fresh current-task generation -> starts exactly one Worker."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    old_key = f"{settings.github_repo}#20#2026-09-10T12:00:00Z"
+    store.create_task(
+        issue_number=20,
+        delivery_id="prior-failed",
+        execution_key=old_key,
+        status=TaskStatus.FAILED,
+    )
+    issue = {
+        "number": 20,
+        "state": "open",
+        "body": "reactivated",
+        "labels": [{"name": "cursor-task"}, {"name": "current-task"}],
+        "updated_at": "2026-09-11T08:00:00Z",
+        "created_at": "2026-09-10T12:00:00Z",
+    }
+    _mock_github_issues(monkeypatch, [issue])
+    handle_calls: list[str] = []
+
+    def _track_handle(self, **kwargs):
+        handle_calls.append(kwargs["delivery_id"])
+        return {"status": "worker_started", "task_id": 99, "issue_number": 20}
+
+    monkeypatch.setattr(TaskRouter, "handle", _track_handle)
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert len(handle_calls) == 1
+
+
+def test_watchdog_same_generation_active_no_duplicate(infra_env, monkeypatch: pytest.MonkeyPatch):
+    """Same generation active -> no duplicate Worker."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    payload = _issue_payload(number=20)
+    execution_key = compute_execution_key(settings, payload)
+    store.create_task(
+        issue_number=20,
+        delivery_id="active-run",
+        execution_key=execution_key,
+        status=TaskStatus.RUNNING,
+    )
+    issue = payload["issue"]
+    _mock_github_issues(monkeypatch, [issue])
+    handle_calls: list[str] = []
+
+    def _track_handle(self, **kwargs):
+        handle_calls.append(kwargs["delivery_id"])
+        return {"status": "worker_started"}
+
+    monkeypatch.setattr(TaskRouter, "handle", _track_handle)
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert handle_calls == []
+
+
+def test_watchdog_stale_lease_recovers_current_task(infra_env, monkeypatch: pytest.MonkeyPatch):
+    """Stale lease + current-task -> recovers once."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    assert store.try_acquire_lease(20, 1, owner="stale-worker", ttl_seconds=1)
+    import time
+
+    time.sleep(1.1)
+    issue = {
+        "number": 20,
+        "state": "open",
+        "body": "recover me",
+        "labels": [{"name": "cursor-task"}, {"name": "current-task"}],
+        "updated_at": "2026-09-11T09:00:00Z",
+        "created_at": "2026-09-10T12:00:00Z",
+    }
+    _mock_github_issues(monkeypatch, [issue])
+    handle_calls: list[str] = []
+
+    def _track_handle(self, **kwargs):
+        handle_calls.append(kwargs["delivery_id"])
+        return {"status": "worker_started", "task_id": 2, "issue_number": 20}
+
+    monkeypatch.setattr(TaskRouter, "handle", _track_handle)
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert len(handle_calls) == 1
+
+
+def test_startup_scan_triggers_missed_current_task(infra_env, monkeypatch: pytest.MonkeyPatch):
+    """Startup scan triggers missed current-task promptly."""
+    issue = {
+        "number": 21,
+        "state": "open",
+        "body": "missed webhook",
+        "labels": [{"name": "cursor-task"}, {"name": "current-task"}],
+        "updated_at": "2026-09-11T10:00:00Z",
+        "created_at": "2026-09-11T09:00:00Z",
+    }
+    _mock_github_issues(monkeypatch, [issue])
+    scan_calls: list[str] = []
+
+    def _track_scan(s):
+        scan_calls.append("scan")
+
+    monkeypatch.setattr("autonomous_dev.watchdog._scan_current_tasks", _track_scan)
+    monkeypatch.setattr("autonomous_dev.watchdog._stop.wait", lambda _timeout: False)
+    from autonomous_dev.watchdog import _startup_tick
+
+    _startup_tick()
+    assert scan_calls == ["scan"]
+
+
+def test_watchdog_completed_terminal_same_generation(infra_env, monkeypatch: pytest.MonkeyPatch):
+    """Completed remains terminal for the same generation."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    payload = _issue_payload(number=20)
+    execution_key = compute_execution_key(settings, payload)
+    store.create_task(
+        issue_number=20,
+        delivery_id="completed-run",
+        execution_key=execution_key,
+        status=TaskStatus.COMPLETED,
+    )
+    _mock_github_issues(monkeypatch, [payload["issue"]])
+    handle_calls: list[str] = []
+
+    def _track_handle(self, **kwargs):
+        handle_calls.append(kwargs["delivery_id"])
+        return {"status": "worker_started"}
+
+    monkeypatch.setattr(TaskRouter, "handle", _track_handle)
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert handle_calls == []
+
+
+def test_watchdog_completed_new_generation_recovers(infra_env, monkeypatch: pytest.MonkeyPatch):
+    """Completed with new generation (explicit reactivation) is recoverable."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    old_key = f"{settings.github_repo}#20#2026-09-10T12:00:00Z"
+    store.create_task(
+        issue_number=20,
+        delivery_id="old-completed",
+        execution_key=old_key,
+        status=TaskStatus.COMPLETED,
+    )
+    issue = {
+        "number": 20,
+        "state": "open",
+        "body": "reactivated after completion",
+        "labels": [{"name": "cursor-task"}, {"name": "current-task"}],
+        "updated_at": "2026-09-11T11:00:00Z",
+        "created_at": "2026-09-10T12:00:00Z",
+    }
+    _mock_github_issues(monkeypatch, [issue])
+    handle_calls: list[str] = []
+
+    def _track_handle(self, **kwargs):
+        handle_calls.append(kwargs["delivery_id"])
+        return {"status": "worker_started", "task_id": 3, "issue_number": 20}
+
+    monkeypatch.setattr(TaskRouter, "handle", _track_handle)
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert len(handle_calls) == 1
+
+
+def test_watchdog_product_decision_terminal(infra_env, monkeypatch: pytest.MonkeyPatch):
+    """Product-decision remains terminal for the same generation."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    payload = _issue_payload(number=22)
+    execution_key = compute_execution_key(settings, payload)
+    store.create_task(
+        issue_number=22,
+        delivery_id="pd-run",
+        execution_key=execution_key,
+        status=TaskStatus.PRODUCT_DECISION,
+    )
+    _mock_github_issues(monkeypatch, [payload["issue"]])
+    handle_calls: list[str] = []
+
+    def _track_handle(self, **kwargs):
+        handle_calls.append(kwargs["delivery_id"])
+        return {"status": "worker_started"}
+
+    monkeypatch.setattr(TaskRouter, "handle", _track_handle)
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert handle_calls == []
+
+
+def test_watchdog_webhook_race_one_worker(infra_env, monkeypatch: pytest.MonkeyPatch):
+    """Webhook + watchdog race -> one Worker only (same generation)."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    payload = _issue_payload(number=20)
+    execution_key = compute_execution_key(settings, payload)
+    running = store.create_task(
+        issue_number=20,
+        delivery_id="webhook-first",
+        execution_key=execution_key,
+        status=TaskStatus.RUNNING,
+    )
+    store.try_acquire_lease(20, running.id, owner="worker-1", ttl_seconds=300)
+    _mock_github_issues(monkeypatch, [payload["issue"]])
+    handle_calls: list[str] = []
+
+    def _track_handle(self, **kwargs):
+        handle_calls.append(kwargs["delivery_id"])
+        return {"status": "worker_started"}
+
+    monkeypatch.setattr(TaskRouter, "handle", _track_handle)
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert handle_calls == []
+
+
+def test_old_failed_execution_remains_historical(infra_env):
+    """Old FAILED execution remains historical/auditable after recovery."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    old_key = f"{settings.github_repo}#20#2026-09-10T12:00:00Z"
+    old_task = store.create_task(
+        issue_number=20,
+        delivery_id="historical-failed",
+        execution_key=old_key,
+        status=TaskStatus.FAILED,
+    )
+    store.update_task(old_task.id, error="simulated failure")
+    new_key = f"{settings.github_repo}#20#2026-09-11T08:00:00Z"
+    from autonomous_dev.watchdog import is_current_task_recoverable
+
+    assert is_current_task_recoverable(store, execution_key=new_key, issue_number=20)
+    assert store.get_task(old_task.id) is not None
+    assert store.get_task(old_task.id).status == TaskStatus.FAILED
+    assert store.get_task(old_task.id).error == "simulated failure"
+
+
+def test_watchdog_recovers_needs_fix_new_generation(infra_env, monkeypatch: pytest.MonkeyPatch):
+    """NEEDS_FIX prior task + fresh generation (issue #20 scenario) -> recovers."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    old_key = f"{settings.github_repo}#20#2026-09-10T12:00:00Z"
+    store.create_task(
+        issue_number=20,
+        delivery_id="prior-needs-fix",
+        execution_key=old_key,
+        status=TaskStatus.NEEDS_FIX,
+    )
+    issue = {
+        "number": 20,
+        "state": "open",
+        "body": "reactivated after review fail",
+        "labels": [{"name": "cursor-task"}, {"name": "current-task"}],
+        "updated_at": "2026-09-11T12:00:00Z",
+        "created_at": "2026-09-10T12:00:00Z",
+    }
+    _mock_github_issues(monkeypatch, [issue])
+    handle_calls: list[str] = []
+
+    def _track_handle(self, **kwargs):
+        handle_calls.append(kwargs["delivery_id"])
+        return {"status": "worker_started", "task_id": 4, "issue_number": 20}
+
+    monkeypatch.setattr(TaskRouter, "handle", _track_handle)
+    from autonomous_dev.watchdog import _scan_current_tasks
+
+    _scan_current_tasks(settings)
+    assert len(handle_calls) == 1

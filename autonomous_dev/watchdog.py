@@ -21,6 +21,35 @@ _thread: threading.Thread | None = None
 _stop = threading.Event()
 
 
+def is_current_task_recoverable(
+    store: StateStore,
+    *,
+    execution_key: str | None,
+    issue_number: int,
+) -> bool:
+    """True when a GitHub current-task should trigger worker via watchdog fallback.
+
+    Exactly-once is keyed by (repo, issue, generation). A prior FAILED/NEEDS_FIX
+    record for an older generation must not block reactivation with a fresh
+    updated_at, but the same generation must never spawn duplicate workers.
+    """
+    if execution_key:
+        if store.get_active_execution(execution_key) is not None:
+            return False
+        if store.get_task_by_execution_key(execution_key) is not None:
+            return False
+
+    in_flight = store.get_running_task_for_issue(issue_number)
+    if in_flight is not None:
+        return False
+
+    latest = store.get_task_by_issue(issue_number)
+    if latest is not None and latest.status == TaskStatus.READY_FOR_REVIEW:
+        return False
+
+    return True
+
+
 def start_watchdog() -> None:
     global _thread
     settings = get_autonomous_settings()
@@ -41,6 +70,8 @@ def _startup_tick() -> None:
         return
     try:
         _tick()
+        settings = get_autonomous_settings()
+        _scan_current_tasks(settings)
     except Exception:
         logger.exception("watchdog startup tick failed")
 
@@ -84,11 +115,6 @@ def _tick() -> None:
 
 def _tick_full_scan(settings) -> None:
     store = StateStore(settings.state_db_path)
-    token = resolve_github_token()
-    if not token:
-        logger.debug("watchdog skip: no GitHub token")
-        return
-
     stale_tasks = store.get_stale_ready_for_review_tasks(
         older_than_seconds=settings.review_watchdog_stale_seconds,
     )
@@ -105,7 +131,18 @@ def _tick_full_scan(settings) -> None:
         executor = ReviewExecutor(settings, store)
         executor.schedule_review(task, commit_sha=task.commit_sha)
 
+    _scan_current_tasks(settings)
+
+
+def _scan_current_tasks(settings) -> None:
+    store = StateStore(settings.state_db_path)
+    store.recover_stale_lease()
     if store.is_locked():
+        return
+
+    token = resolve_github_token()
+    if not token:
+        logger.debug("watchdog skip: no GitHub token")
         return
 
     url = f"https://api.github.com/repos/{settings.github_repo}/issues"
@@ -130,16 +167,11 @@ def _tick_full_scan(settings) -> None:
             continue
         num = issue["number"]
         execution_key = compute_execution_key(settings, payload)
-        if execution_key and store.get_active_execution(execution_key):
-            continue
-        existing = store.get_task_by_issue(num)
-        if existing and existing.status in {
-            TaskStatus.RUNNING,
-            TaskStatus.READY_FOR_REVIEW,
-            TaskStatus.COMPLETED,
-            TaskStatus.PRODUCT_DECISION,
-            TaskStatus.FAILED,
-        }:
+        if not is_current_task_recoverable(
+            store,
+            execution_key=execution_key,
+            issue_number=num,
+        ):
             continue
         logger.info("watchdog triggering issue #%s", num)
         router.handle(
