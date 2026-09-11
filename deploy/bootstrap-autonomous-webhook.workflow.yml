@@ -1,0 +1,69 @@
+name: Bootstrap Autonomous Webhook
+
+on:
+  workflow_dispatch:
+    inputs:
+      webhook_secret:
+        description: HMAC secret (must match production GITHUB_WEBHOOK_SECRET in .env)
+        required: true
+        type: string
+      public_url:
+        description: Public Sealos base URL (no trailing slash)
+        required: false
+        default: https://lawyer.bja.sealos.run
+        type: string
+
+permissions:
+  administration: write
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify public health endpoint
+        env:
+          PUBLIC_URL: ${{ inputs.public_url || 'https://lawyer.bja.sealos.run' }}
+        run: |
+          code="$(curl -sS -m 15 -o /tmp/health.json -w '%{http_code}' "${PUBLIC_URL}/healthz" || echo 000)"
+          echo "healthz HTTP ${code} url=${PUBLIC_URL}/healthz"
+          cat /tmp/health.json || true
+          if [[ "${code}" != "200" ]]; then
+            echo "::error::Public Sealos endpoint not healthy (HTTP ${code})"
+            exit 1
+          fi
+
+      - name: Upsert repository webhook
+        env:
+          WEBHOOK_URL: ${{ inputs.public_url || 'https://lawyer.bja.sealos.run' }}/webhooks/github
+          WEBHOOK_SECRET: ${{ inputs.webhook_secret }}
+        run: |
+          set -euo pipefail
+          payload="$(python3 - <<'PY'
+          import json, os
+          print(json.dumps({
+              "name": "web",
+              "active": True,
+              "events": ["issues", "push"],
+              "config": {
+                  "url": os.environ["WEBHOOK_URL"],
+                  "content_type": "json",
+                  "secret": os.environ["WEBHOOK_SECRET"],
+                  "insecure_ssl": "0",
+              },
+          }))
+          PY
+          )"
+          hooks="$(gh api repos/yangqianwei8-sudo/agent/hooks --jq '.[] | {id, url: .config.url}')"
+          echo "Existing hooks: ${hooks}"
+          hook_id="$(gh api repos/yangqianwei8-sudo/agent/hooks --jq '.[] | select(.config.url | test("webhooks/github")) | .id' | head -1)"
+          if [[ -n "${hook_id}" ]]; then
+            gh api "repos/yangqianwei8-sudo/agent/hooks/${hook_id}" -X PATCH --input - <<< "${payload}"
+          else
+            gh api repos/yangqianwei8-sudo/agent/hooks -X POST --input - <<< "${payload}"
+          fi
+          hook_id="$(gh api repos/yangqianwei8-sudo/agent/hooks --jq '.[] | select(.config.url | test("webhooks/github")) | .id' | head -1)"
+          gh api "repos/yangqianwei8-sudo/agent/hooks/${hook_id}/pings" -X POST
+          echo "Webhook bootstrap complete id=${hook_id}"
