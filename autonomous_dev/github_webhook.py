@@ -72,5 +72,21 @@ def push_commit_sha(payload: dict[str, Any]) -> str | None:
     return payload.get("after") or None
 
 
+def push_issue_numbers(payload: dict[str, Any]) -> list[int]:
+    """Extract issue numbers referenced in push commit messages."""
+    import re
+
+    numbers: list[int] = []
+    seen: set[int] = set()
+    for commit in payload.get("commits") or []:
+        message = commit.get("message") or ""
+        for match in re.finditer(r"issue #(\d+)", message, re.IGNORECASE):
+            issue_num = int(match.group(1))
+            if issue_num not in seen:
+                seen.add(issue_num)
+                numbers.append(issue_num)
+    return numbers
+
+
 def is_main_push(payload: dict[str, Any]) -> bool:
     return payload.get("ref") == "refs/heads/main"

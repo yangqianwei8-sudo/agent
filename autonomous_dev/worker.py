@@ -14,6 +14,8 @@ from autonomous_dev.config import AutonomousDevSettings
 from autonomous_dev.github_auth import git_env
 from autonomous_dev.github_client import GitHubClient, GitHubClientError
 from autonomous_dev.product_decision import ProductDecisionPacket
+from autonomous_dev.review_bridge import ReviewBridge
+from autonomous_dev.review_handoff import transition_ready_for_review
 from autonomous_dev.state import StateStore, TaskRecord, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -40,11 +42,13 @@ class Worker:
         store: StateStore,
         *,
         repo_root: Path | None = None,
+        review_bridge: ReviewBridge | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
         self.repo_root = repo_root or settings.repo_root
         self._github = GitHubClient(settings)
+        self._review_bridge = review_bridge or ReviewBridge(settings, store)
 
     def run_task(
         self,
@@ -97,6 +101,22 @@ class Worker:
                 commit_sha = self._commit_and_push(task.issue_number)
                 self._verify_push(commit_sha)
 
+            if self._should_handoff_after_push(commit_sha):
+                self._git_fetch()
+                self._verify_push(commit_sha)
+                updated = transition_ready_for_review(
+                    self.store,
+                    self._github,
+                    self._review_bridge,
+                    task,
+                    commit_sha,
+                )
+                return WorkerResult(
+                    task_id=updated.id,
+                    status=TaskStatus.READY_FOR_REVIEW,
+                    commit_sha=commit_sha,
+                )
+
             updated = self.store.update_task(
                 task.id,
                 status=TaskStatus.RUNNING,
@@ -127,6 +147,13 @@ class Worker:
             stop_heartbeat.set()
             heartbeat_thread.join(timeout=2)
             self.store.release_lease(owner)
+
+    def _should_handoff_after_push(self, commit_sha: str) -> bool:
+        if self.settings.autonomous_worker_mode == "deterministic":
+            return False
+        if not commit_sha or commit_sha == CURSOR_RUNTIME_OK_MARKER:
+            return False
+        return len(commit_sha) >= 12
 
     def _heartbeat_loop(self, owner: str, stop: threading.Event) -> None:
         interval = self.settings.worker_heartbeat_interval_seconds

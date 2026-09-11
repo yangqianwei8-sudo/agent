@@ -522,6 +522,53 @@ def test_push_correlation_no_fallback(infra_env):
     assert result["reason"] == "no correlated task"
 
 
+def test_push_correlation_via_commit_message_before_db_commit(infra_env):
+    """Push may arrive before worker records commit_sha — correlate via issue # in message."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    router = TaskRouter(settings, store)
+    task = store.create_task(issue_number=10, delivery_id="race-task")
+    store.update_task(task.id, status=TaskStatus.RUNNING)
+    result = router.handle(
+        event_type="push",
+        action=None,
+        delivery_id="push-race-001",
+        payload={
+            "ref": "refs/heads/main",
+            "after": "abc123def4567890",
+            "commits": [
+                {"message": "fix: production acceptance for issue #10"},
+            ],
+        },
+    )
+    assert result["status"] == "ready_for_review"
+    updated = store.get_task(task.id)
+    assert updated is not None
+    assert updated.status == TaskStatus.READY_FOR_REVIEW
+    assert updated.commit_sha == "abc123def4567890"
+
+
+def test_lease_acquire_failed_marks_task_failed(infra_env, monkeypatch: pytest.MonkeyPatch):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    router = TaskRouter(settings, store)
+    monkeypatch.setattr(store, "try_acquire_lease", lambda *args, **kwargs: False)
+    payload = _issue_payload(number=50)
+    result = router.handle(
+        event_type="issues",
+        action="labeled",
+        delivery_id="lease-fail-001",
+        payload=payload,
+    )
+    assert result["status"] == "ignored"
+    assert result["reason"] == "lease acquire failed"
+    task = store.get_task_by_issue(50)
+    assert task is not None
+    assert task.status == TaskStatus.FAILED
+
+
 def test_push_correlation_idempotent(infra_env):
     repo, db = infra_env
     settings = AutonomousDevSettings()

@@ -307,6 +307,21 @@ class StateStore:
             ).fetchone()
             return self._row_to_task(row) if row else None
 
+    def get_running_task_for_issue(self, issue_number: int) -> TaskRecord | None:
+        """Latest queued/running task for an issue without a recorded commit."""
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM task_executions
+                WHERE issue_number = ?
+                  AND status IN ('queued', 'running')
+                  AND (commit_sha IS NULL OR commit_sha = '')
+                ORDER BY id DESC LIMIT 1
+                """,
+                (issue_number,),
+            ).fetchone()
+            return self._row_to_task(row) if row else None
+
     def get_active_execution(self, execution_key: str) -> TaskRecord | None:
         with self._conn() as conn:
             row = conn.execute(

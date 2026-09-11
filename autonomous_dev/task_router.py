@@ -14,8 +14,10 @@ from autonomous_dev.github_webhook import (
     is_main_push,
     issue_number,
     push_commit_sha,
+    push_issue_numbers,
 )
 from autonomous_dev.review_bridge import ReviewBridge
+from autonomous_dev.review_handoff import transition_ready_for_review
 from autonomous_dev.state import DeliveryStatus, StateStore, TaskStatus
 from autonomous_dev.worker import Worker
 
@@ -33,8 +35,8 @@ class TaskRouter:
     ) -> None:
         self.settings = settings
         self.store = store
-        self.worker = worker or Worker(settings, store)
         self.review_bridge = review_bridge or ReviewBridge(settings, store)
+        self.worker = worker or Worker(settings, store, review_bridge=self.review_bridge)
         self._github = GitHubClient(settings)
         self._executor_lock = threading.Lock()
 
@@ -114,6 +116,11 @@ class TaskRouter:
             owner=lease_owner,
             ttl_seconds=self.settings.worker_lease_ttl_seconds,
         ):
+            self.store.update_task(
+                task.id,
+                status=TaskStatus.FAILED,
+                error="lease acquire failed",
+            )
             self.store.mark_delivery(
                 delivery_id,
                 status=DeliveryStatus.IGNORED,
@@ -183,7 +190,7 @@ class TaskRouter:
             self.store.mark_delivery(delivery_id, status=DeliveryStatus.FAILED, error="no commit")
             return {"status": "failed", "reason": "no commit"}
 
-        task = self.store.get_task_by_commit(commit_sha)
+        task = self._resolve_push_task(payload, commit_sha)
         if task is None:
             self.store.mark_delivery(delivery_id, status=DeliveryStatus.IGNORED)
             return {"status": "ignored", "reason": "no correlated task"}
@@ -205,13 +212,13 @@ class TaskRouter:
             return {"status": "ignored", "reason": f"task status={task.status}"}
 
         try:
-            task = self.store.update_task(
-                task.id,
-                status=TaskStatus.READY_FOR_REVIEW,
-                commit_sha=commit_sha,
+            task = transition_ready_for_review(
+                self.store,
+                self._github,
+                self.review_bridge,
+                task,
+                commit_sha,
             )
-            self._github.sync_ready_for_review(task.issue_number)
-            self.review_bridge.notify_ready_for_review(task, commit_sha=commit_sha)
         except GitHubClientError as exc:
             self.store.mark_delivery(delivery_id, status=DeliveryStatus.FAILED, error=str(exc))
             return {"status": "failed", "reason": str(exc)}
@@ -223,3 +230,13 @@ class TaskRouter:
             "issue_number": task.issue_number,
             "commit_sha": commit_sha,
         }
+
+    def _resolve_push_task(self, payload: dict[str, Any], commit_sha: str):
+        task = self.store.get_task_by_commit(commit_sha)
+        if task is not None:
+            return task
+        for issue_num in push_issue_numbers(payload):
+            candidate = self.store.get_running_task_for_issue(issue_num)
+            if candidate is not None:
+                return candidate
+        return None
