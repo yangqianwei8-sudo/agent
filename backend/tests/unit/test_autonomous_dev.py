@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,13 @@ from autonomous_dev.reviewer_service import (
     REVIEWER_PRODUCT_DECISION_MARKER,
     ReviewerService,
 )
-from autonomous_dev.state import ReviewInvocationStatus, ReviewVerdict, StateStore, TaskStatus
+from autonomous_dev.state import (
+    DeliveryStatus,
+    ReviewInvocationStatus,
+    ReviewVerdict,
+    StateStore,
+    TaskStatus,
+)
 from autonomous_dev.task_router import TaskRouter
 from autonomous_dev.worker import (
     CURSOR_RUNTIME_ACCEPTANCE_MARKER,
@@ -1523,3 +1530,255 @@ def test_watchdog_recovers_needs_fix_new_generation(infra_env, monkeypatch: pyte
 
     _scan_current_tasks(settings)
     assert len(handle_calls) == 1
+
+
+def test_derive_system_status_running(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot, derive_system_status
+
+    task = store.create_task(
+        issue_number=1,
+        delivery_id="run-1",
+        execution_key="repo#1#gen1",
+        status=TaskStatus.RUNNING,
+    )
+    now = datetime.now(UTC)
+    future = (now + timedelta(seconds=120)).isoformat()
+    lease = WorkerLeaseSnapshot(
+        locked=True,
+        owner=f"worker-{task.id}",
+        task_id=task.id,
+        issue_number=1,
+        acquired_at=now.isoformat(),
+        heartbeat_at=now.isoformat(),
+        lease_expires_at=future,
+    )
+    status = derive_system_status(
+        primary_task=task,
+        lease=lease,
+        reviewer_locked=False,
+        active_review=None,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+        now=now,
+    )
+    assert status.value == "RUNNING"
+
+
+def test_worker_running_label_stale_heartbeat_is_stale(infra_env, monkeypatch):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    from autonomous_dev.dashboard import build_dashboard_payload
+    from autonomous_dev.status_deriver import SystemStatus
+
+    task = store.create_task(
+        issue_number=2,
+        delivery_id="stale-label",
+        status=TaskStatus.RUNNING,
+    )
+    past = (datetime.now(UTC) - timedelta(seconds=600)).isoformat()
+    store.try_acquire_lease(2, task.id, owner=f"worker-{task.id}", ttl_seconds=1)
+    with store._conn() as conn:  # noqa: SLF001
+        conn.execute(
+            "UPDATE worker_lock SET heartbeat_at = ?, lease_expires_at = ? WHERE id = 1",
+            (past, past),
+        )
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard._fetch_issue_summary",
+        lambda *a, **k: (None, ["cursor-task", "worker-running"]),
+    )
+    payload = build_dashboard_payload(settings, store)
+    assert payload["system_status"] == SystemStatus.STALE.value
+
+
+def test_active_task_no_lease_not_running(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot, derive_system_status
+
+    task = store.create_task(
+        issue_number=3,
+        delivery_id="no-lease",
+        status=TaskStatus.RUNNING,
+    )
+    lease = WorkerLeaseSnapshot(False, None, None, None, None, None, None)
+    status = derive_system_status(
+        primary_task=task,
+        lease=lease,
+        reviewer_locked=False,
+        active_review=None,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+    )
+    assert status.value in {"STALE", "FAILED"}
+    assert status.value != "RUNNING"
+
+
+def test_derive_system_status_reviewing(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot, derive_system_status
+
+    task = store.update_task(
+        store.create_task(issue_number=4, delivery_id="rev").id,
+        status=TaskStatus.READY_FOR_REVIEW,
+        commit_sha="abc123def456",
+    )
+    lease = WorkerLeaseSnapshot(False, None, None, None, None, None, None)
+    status = derive_system_status(
+        primary_task=task,
+        lease=lease,
+        reviewer_locked=False,
+        active_review=None,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+    )
+    assert status.value == "REVIEWING"
+
+
+def test_derive_system_status_waiting_user(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot, derive_system_status
+
+    task = store.update_task(
+        store.create_task(issue_number=5, delivery_id="pd").id,
+        status=TaskStatus.PRODUCT_DECISION,
+        error="Need owner input",
+    )
+    lease = WorkerLeaseSnapshot(False, None, None, None, None, None, None)
+    status = derive_system_status(
+        primary_task=task,
+        lease=lease,
+        reviewer_locked=False,
+        active_review=None,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+    )
+    assert status.value == "WAITING_USER"
+
+
+def test_derive_system_status_idle(infra_env):
+    settings = AutonomousDevSettings()
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot, derive_system_status
+
+    lease = WorkerLeaseSnapshot(False, None, None, None, None, None, None)
+    status = derive_system_status(
+        primary_task=None,
+        lease=lease,
+        reviewer_locked=False,
+        active_review=None,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+        recent_failed_task=None,
+    )
+    assert status.value == "IDLE"
+
+
+def test_derive_system_status_failed(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    from autonomous_dev.status_deriver import WorkerLeaseSnapshot, derive_system_status
+
+    task = store.update_task(
+        store.create_task(issue_number=6, delivery_id="fail").id,
+        status=TaskStatus.FAILED,
+        error="unrecoverable",
+    )
+    lease = WorkerLeaseSnapshot(False, None, None, None, None, None, None)
+    status = derive_system_status(
+        primary_task=task,
+        lease=lease,
+        reviewer_locked=False,
+        active_review=None,
+        lease_ttl_seconds=settings.worker_lease_ttl_seconds,
+    )
+    assert status.value == "FAILED"
+
+
+def test_dashboard_secret_redaction(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    task = store.create_task(issue_number=7, delivery_id="sec")
+    store.update_task(
+        task.id,
+        status=TaskStatus.NEEDS_FIX,
+        error="auth failed ghp_abc123secret token invalid",
+    )
+    payload = build_dashboard_payload(settings, store)
+    dumped = json.dumps(payload)
+    assert "ghp_" not in dumped
+    assert "[REDACTED]" in dumped
+
+
+def test_dashboard_current_task_selection(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    store.create_task(issue_number=8, delivery_id="old", status=TaskStatus.COMPLETED)
+    running = store.create_task(issue_number=9, delivery_id="cur", status=TaskStatus.RUNNING)
+    store.try_acquire_lease(9, running.id, owner=f"worker-{running.id}", ttl_seconds=300)
+    payload = build_dashboard_payload(settings, store)
+    assert payload["current_task"]["task_id"] == running.id
+
+
+def test_dashboard_recent_activity_ordering(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    from autonomous_dev.dashboard import build_recent_activity
+
+    store.record_delivery(
+        delivery_id="d-old",
+        event_type="issues",
+        action="labeled",
+        payload={"issue": {"number": 1}},
+        status=DeliveryStatus.PROCESSED,
+    )
+    store.record_delivery(
+        delivery_id="d-new",
+        event_type="push",
+        action=None,
+        payload={"ref": "refs/heads/main"},
+        status=DeliveryStatus.RECEIVED,
+    )
+    activity = build_recent_activity(store, limit=10)
+    times = [a["at"] for a in activity if a["at"]]
+    assert times == sorted(times, reverse=True)
+
+
+def test_dashboard_completed_history(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    settings = AutonomousDevSettings()
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    store.update_task(
+        store.create_task(issue_number=10, delivery_id="done").id,
+        status=TaskStatus.COMPLETED,
+        commit_sha="deadbeef123456",
+    )
+    payload = build_dashboard_payload(settings, store)
+    assert payload["recent_completed"][0]["issue_number"] == 10
+
+
+def test_autonomous_status_json_endpoint(infra_env):
+    client = TestClient(app)
+    resp = client.get("/autonomous/status.json")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "system_status" in data
+    assert "runtime_evidence" in data
+
+
+def test_autonomous_status_html_smoke(infra_env):
+    client = TestClient(app)
+    resp = client.get("/autonomous/status")
+    assert resp.status_code == 200
+    assert "自主开发 Dashboard" in resp.text

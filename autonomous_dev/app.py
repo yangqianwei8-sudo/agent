@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from autonomous_dev.config import get_autonomous_settings
+from autonomous_dev.dashboard import DASHBOARD_HTML, build_dashboard_payload
 from autonomous_dev.github_client import GitHubClientError
 from autonomous_dev.github_webhook import (
     WebhookVerificationError,
@@ -62,6 +64,18 @@ def healthz() -> dict[str, str]:
         "reviewer_configured": str(reviewer_creds is not None).lower(),
         "reviewer_locked": str(store.is_reviewer_locked()).lower(),
     }
+
+
+@router.get("/autonomous/status.json")
+def autonomous_status_json() -> JSONResponse:
+    settings = get_autonomous_settings()
+    payload = build_dashboard_payload(settings, _get_store())
+    return JSONResponse(content=payload)
+
+
+@router.get("/autonomous/status", response_class=HTMLResponse)
+def autonomous_status_page() -> Response:
+    return HTMLResponse(content=DASHBOARD_HTML, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/webhooks/github")
