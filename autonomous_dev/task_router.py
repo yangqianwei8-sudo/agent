@@ -95,6 +95,28 @@ class TaskRouter:
                     "execution_key": execution_key,
                     "task_id": active.id,
                 }
+            prior = self.store.get_task_by_execution_key(execution_key)
+            if (
+                prior is not None
+                and prior.status in {TaskStatus.NEEDS_FIX, TaskStatus.FAILED}
+                and not prior.commit_sha
+            ):
+                from autonomous_dev.worker_failure import defer_same_generation_to_self_heal
+
+                result = defer_same_generation_to_self_heal(
+                    self.settings,
+                    self.store,
+                    self._github,
+                    num,
+                    prior_task=prior,
+                    reason="current-task re-added for failed generation",
+                )
+                self.store.mark_delivery(
+                    delivery_id,
+                    status=DeliveryStatus.IGNORED,
+                    error=result.get("reason"),
+                )
+                return result
 
         self.store.recover_stale_lease(
             heartbeat_ttl_seconds=self.settings.worker_lease_ttl_seconds,
@@ -120,10 +142,31 @@ class TaskRouter:
             owner=lease_owner,
             ttl_seconds=self.settings.worker_lease_ttl_seconds,
         ):
+            from autonomous_dev.worker_failure import (
+                handle_technical_worker_failure,
+                trigger_post_failure_recovery,
+            )
+
+            lease_exc = RuntimeError("lease acquire failed")
             self.store.update_task(
                 task.id,
-                status=TaskStatus.FAILED,
-                error="lease acquire failed",
+                status=TaskStatus.NEEDS_FIX,
+                error="[worker-startup] RuntimeError: lease acquire failed",
+            )
+            handle_technical_worker_failure(
+                self.settings,
+                self.store,
+                self._github,
+                task,
+                exc=lease_exc,
+                issue_body=issue.get("body") or "",
+                stage="worker-startup",
+            )
+            trigger_post_failure_recovery(
+                self.settings,
+                self.store,
+                self._github,
+                num,
             )
             self.store.mark_delivery(
                 delivery_id,

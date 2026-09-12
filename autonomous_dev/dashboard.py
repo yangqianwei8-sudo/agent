@@ -277,6 +277,13 @@ def build_dashboard_payload(
     if self_heal_state is not None:
         self_heal_state["max_attempts"] = settings.worker_retry_max_attempts
 
+    from autonomous_dev.worker_failure import derive_failure_dashboard_state
+
+    worker_failure_state = derive_failure_dashboard_state(
+        store,
+        task=primary_task or current_task,
+    )
+
     reviewer_self_heal_state = derive_reviewer_self_heal_dashboard_state(
         store,
         issue_number=self_heal_issue,
@@ -452,6 +459,7 @@ def build_dashboard_payload(
             else None
         ),
         "self_heal": self_heal_state,
+        "worker_failure": worker_failure_state,
         "reviewer_self_heal": reviewer_self_heal_state,
     }
     return sanitize_for_json(payload)

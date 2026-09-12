@@ -68,6 +68,7 @@ class Worker:
             daemon=True,
         )
         heartbeat_thread.start()
+        post_failure_issue: int | None = None
         try:
             events.task_started()
             self.store.update_task(task.id, status=TaskStatus.RUNNING)
@@ -153,7 +154,14 @@ class Worker:
             )
         except (GitHubClientError, Exception) as exc:  # noqa: BLE001 — worker boundary
             logger.exception("worker failed task=%s", task.id)
-            error_text = str(exc)
+            from autonomous_dev.worker_failure import (
+                classify_worker_failure,
+                handle_technical_worker_failure,
+                structured_error_text,
+            )
+
+            stage, error_class, message = classify_worker_failure(exc)
+            error_text = structured_error_text(stage, error_class, message)
             try:
                 self._github.sync_needs_fix(task.issue_number)
             except GitHubClientError as label_exc:
@@ -164,15 +172,16 @@ class Worker:
                 error=error_text[:2000],
             )
             if PRODUCT_DECISION_MARKER not in issue_body:
-                from autonomous_dev.worker_self_heal import record_technical_failure
-
-                record_technical_failure(
+                handle_technical_worker_failure(
+                    self.settings,
                     self.store,
+                    self._github,
                     self.store.get_task(task.id) or task,
-                    error=error_text,
-                    max_attempts=self.settings.worker_retry_max_attempts,
-                    backoff_seconds=self.settings.worker_retry_backoff_seconds,
+                    exc=exc,
+                    issue_body=issue_body,
+                    stage=stage,
                 )
+                post_failure_issue = task.issue_number
             events.task_failed(error=str(exc)[:500])
             return WorkerResult(
                 task_id=task.id,
@@ -183,6 +192,15 @@ class Worker:
             stop_heartbeat.set()
             heartbeat_thread.join(timeout=2)
             self.store.release_lease(owner)
+            if post_failure_issue is not None:
+                from autonomous_dev.worker_failure import trigger_post_failure_recovery
+
+                trigger_post_failure_recovery(
+                    self.settings,
+                    self.store,
+                    self._github,
+                    post_failure_issue,
+                )
 
     def _issue_title(self, issue_number: int) -> str:
         try:

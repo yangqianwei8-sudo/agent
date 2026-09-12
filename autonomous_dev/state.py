@@ -160,6 +160,21 @@ class WorkerReactivationRecord:
 
 
 @dataclass
+class ExecutionFailureRecord:
+    execution_key: str
+    task_id: int
+    issue_number: int
+    stage: str
+    error_class: str
+    error_message: str
+    retry_count: int
+    next_action: str
+    comment_posted_at: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass
 class ReviewerReactivationRecord:
     issue_number: int
     task_id: int | None
@@ -346,6 +361,21 @@ class StateStore:
                     last_kick_at TEXT,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS execution_failures (
+                    execution_key TEXT PRIMARY KEY,
+                    task_id INTEGER NOT NULL,
+                    issue_number INTEGER NOT NULL,
+                    stage TEXT NOT NULL,
+                    error_class TEXT NOT NULL,
+                    error_message TEXT NOT NULL,
+                    retry_count INTEGER NOT NULL DEFAULT 0,
+                    next_action TEXT NOT NULL,
+                    comment_posted_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_execution_failures_issue
+                    ON execution_failures(issue_number, updated_at DESC);
                 """
             )
             conn.execute(
@@ -680,6 +710,108 @@ class StateStore:
             ).fetchone()
             assert updated is not None
             return self._row_to_worker_reactivation(updated)
+
+    def get_execution_failure(self, execution_key: str) -> ExecutionFailureRecord | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM execution_failures WHERE execution_key = ?",
+                (execution_key,),
+            ).fetchone()
+            return self._row_to_execution_failure(row) if row else None
+
+    def get_latest_execution_failure_for_issue(
+        self,
+        issue_number: int,
+    ) -> ExecutionFailureRecord | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM execution_failures
+                WHERE issue_number = ?
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (issue_number,),
+            ).fetchone()
+            return self._row_to_execution_failure(row) if row else None
+
+    def upsert_execution_failure(
+        self,
+        *,
+        execution_key: str,
+        task_id: int,
+        issue_number: int,
+        stage: str,
+        error_class: str,
+        error_message: str,
+        retry_count: int,
+        next_action: str,
+    ) -> ExecutionFailureRecord:
+        now = datetime.now(UTC).isoformat()
+        with self._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM execution_failures WHERE execution_key = ?",
+                (execution_key,),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO execution_failures
+                    (execution_key, task_id, issue_number, stage, error_class,
+                     error_message, retry_count, next_action, comment_posted_at,
+                     created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                    """,
+                    (
+                        execution_key,
+                        task_id,
+                        issue_number,
+                        stage,
+                        error_class,
+                        error_message[:2000],
+                        retry_count,
+                        next_action[:500],
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE execution_failures
+                    SET task_id = ?, issue_number = ?, stage = ?, error_class = ?,
+                        error_message = ?, retry_count = ?, next_action = ?, updated_at = ?
+                    WHERE execution_key = ?
+                    """,
+                    (
+                        task_id,
+                        issue_number,
+                        stage,
+                        error_class,
+                        error_message[:2000],
+                        retry_count,
+                        next_action[:500],
+                        now,
+                        execution_key,
+                    ),
+                )
+            updated = conn.execute(
+                "SELECT * FROM execution_failures WHERE execution_key = ?",
+                (execution_key,),
+            ).fetchone()
+            assert updated is not None
+            return self._row_to_execution_failure(updated)
+
+    def mark_execution_failure_comment_posted(self, execution_key: str) -> None:
+        now = datetime.now(UTC).isoformat()
+        with self._lock, self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE execution_failures
+                SET comment_posted_at = ?, updated_at = ?
+                WHERE execution_key = ? AND comment_posted_at IS NULL
+                """,
+                (now, now, execution_key),
+            )
 
     def get_reviewer_reactivation(self, issue_number: int) -> ReviewerReactivationRecord | None:
         with self._conn() as conn:
@@ -1827,6 +1959,22 @@ class StateStore:
             last_error=row["last_error"],
             status=WorkerReactivationStatus(row["status"]),
             last_kick_at=row["last_kick_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _row_to_execution_failure(row: sqlite3.Row) -> ExecutionFailureRecord:
+        return ExecutionFailureRecord(
+            execution_key=row["execution_key"],
+            task_id=int(row["task_id"]),
+            issue_number=int(row["issue_number"]),
+            stage=row["stage"],
+            error_class=row["error_class"],
+            error_message=row["error_message"],
+            retry_count=int(row["retry_count"]),
+            next_action=row["next_action"],
+            comment_posted_at=row["comment_posted_at"],
+            created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
 

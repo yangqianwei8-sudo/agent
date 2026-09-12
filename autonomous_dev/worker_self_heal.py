@@ -141,6 +141,7 @@ def kick_worker_reactivation(
         lease = store.get_lease()
         if lease.issue_number != issue_number:
             return {"status": "deferred", "reason": "worker lease held"}
+        return {"status": "deferred", "reason": "worker lease held on same issue"}
 
     try:
         body = github.get_issue_body(issue_number)
@@ -358,14 +359,18 @@ def derive_self_heal_dashboard_state(
     record = store.get_worker_reactivation(issue_number)
     if record is None and primary_status != TaskStatus.NEEDS_FIX:
         return None
+    from autonomous_dev.status_deriver import summarize_error
+
+    latest = store.get_task_by_issue(issue_number) if issue_number else None
+    failure_reason = summarize_error(latest.error) if latest and latest.error else None
     if record is None:
         return {
             "status": WorkerReactivationStatus.PENDING.value,
             "attempt_count": 0,
             "max_attempts": None,
             "next_retry_at": None,
-            "last_error": None,
-            "reason": "technical needs-fix awaiting first self-heal tick",
+            "last_error": failure_reason,
+            "reason": failure_reason or "technical needs-fix awaiting first self-heal tick",
         }
     return {
         "status": record.status.value,
@@ -373,6 +378,6 @@ def derive_self_heal_dashboard_state(
         "max_attempts": None,
         "next_retry_at": record.next_retry_at,
         "last_kick_at": record.last_kick_at,
-        "last_error": record.last_error,
-        "reason": record.last_error,
+        "last_error": summarize_error(record.last_error),
+        "reason": summarize_error(record.last_error) or failure_reason,
     }

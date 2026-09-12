@@ -176,6 +176,7 @@ def _mock_github_client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("autonomous_dev.next_task_resolver.GitHubClient", _factory)
     monkeypatch.setattr("autonomous_dev.loop_recovery.GitHubClient", _factory)
     monkeypatch.setattr("autonomous_dev.worker_self_heal.GitHubClient", _factory)
+    monkeypatch.setattr("autonomous_dev.worker_failure.GitHubClient", _factory)
     return mock
 
 
@@ -703,12 +704,18 @@ def test_push_correlation_via_commit_message_before_db_commit(infra_env):
     assert updated.commit_sha == "abc123def4567890"
 
 
-def test_lease_acquire_failed_marks_task_failed(infra_env, monkeypatch: pytest.MonkeyPatch):
+def test_lease_acquire_failed_marks_task_failed(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
     repo, db = infra_env
     settings = AutonomousDevSettings()
     store = StateStore(db)
     router = TaskRouter(settings, store)
     monkeypatch.setattr(store, "try_acquire_lease", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        "autonomous_dev.worker_self_heal.reconcile_technical_needs_fix",
+        lambda *a, **k: 0,
+    )
     payload = _issue_payload(number=50)
     result = router.handle(
         event_type="issues",
@@ -720,7 +727,15 @@ def test_lease_acquire_failed_marks_task_failed(infra_env, monkeypatch: pytest.M
     assert result["reason"] == "lease acquire failed"
     task = store.get_task_by_issue(50)
     assert task is not None
-    assert task.status == TaskStatus.FAILED
+    assert task.status == TaskStatus.NEEDS_FIX
+    react = store.get_worker_reactivation(50)
+    assert react is not None
+    comments = [
+        c
+        for n, c in _mock_github_client.comments
+        if n == 50 and "Worker Technical Failure" in c
+    ]
+    assert len(comments) == 1
 
 
 def test_push_correlation_idempotent(infra_env):
@@ -3229,4 +3244,109 @@ def test_reviewer_self_heal_dashboard_exposes_recovery_state(infra_env, monkeypa
     assert payload["reviewer_self_heal"]["status"] == "stale-recovered"
     assert payload["reviewer_self_heal"]["attempt_count"] == 2
     assert payload["runtime_evidence"]["reviewer_status"] == "stale-recovered"
+
+
+def test_issue62_startup_failure_observable_and_self_heals(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression #62: current-task consumed → early failure → needs-fix → auto retry."""
+    from autonomous_dev.loop_recovery import run_loop_recovery_tick
+    from autonomous_dev.state import WorkerReactivationStatus
+    from autonomous_dev.worker_failure import FAILURE_COMMENT_MARKER
+    from autonomous_dev.worker_self_heal import SELF_HEAL_ACCEPTANCE_MARKER
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    issue_num = 62
+    generation = "2026-09-12T07:05:00Z"
+    execution_key = f"{settings.github_repo}#{issue_num}#{generation}"
+
+    _mock_github_client.labels[issue_num] = {"cursor-task", "current-task"}
+    _mock_github_client.bodies[issue_num] = f"Repair task\n{SELF_HEAL_ACCEPTANCE_MARKER}"
+    payload = _issue_payload(
+        number=issue_num,
+        body=_mock_github_client.bodies[issue_num],
+    )
+    payload["issue"]["updated_at"] = generation
+
+    router = TaskRouter(settings, store)
+    failed_task = store.create_task(
+        issue_number=issue_num,
+        delivery_id="issue62-first",
+        execution_key=execution_key,
+    )
+    store.try_acquire_lease(issue_num, failed_task.id, owner=f"worker-{failed_task.id}")
+    result = router.run_worker_sync(
+        failed_task,
+        issue_body=_mock_github_client.bodies[issue_num],
+        lease_owner=f"worker-{failed_task.id}",
+    )
+    assert result.status == TaskStatus.NEEDS_FIX
+    assert result.commit_sha is None
+    failed_task = store.get_task(failed_task.id) or failed_task
+
+    failure = store.get_execution_failure(execution_key)
+    assert failure is not None
+    assert failure.stage == "worker-startup"
+    assert failure.comment_posted_at is not None
+
+    comments = [
+        c
+        for n, c in _mock_github_client.comments
+        if n == issue_num
+        and FAILURE_COMMENT_MARKER in c
+        and execution_key in c
+    ]
+    assert len(comments) == 1
+    assert "retry_count" in comments[0]
+
+    react = store.get_worker_reactivation(issue_num)
+    assert react is not None
+    assert react.status in {
+        WorkerReactivationStatus.PENDING,
+        WorkerReactivationStatus.SCHEDULED,
+    }
+
+    readd = router.handle(
+        event_type="issues",
+        action="labeled",
+        delivery_id="issue62-readd-current-task",
+        payload=payload,
+    )
+    assert readd["status"] == "deferred"
+    same_gen_comments = [
+        c
+        for n, c in _mock_github_client.comments
+        if n == issue_num and execution_key in c
+    ]
+    assert len(same_gen_comments) == 1
+
+    run_loop_recovery_tick(settings, store)
+    deadline = time.time() + 20
+    recovered = False
+    while time.time() < deadline:
+        latest = store.get_task_by_issue(issue_num)
+        if (
+            latest
+            and latest.id != failed_task.id
+            and latest.execution_key != execution_key
+            and latest.status
+            in {TaskStatus.RUNNING, TaskStatus.READY_FOR_REVIEW, TaskStatus.QUEUED}
+        ):
+            recovered = True
+            break
+        run_loop_recovery_tick(settings, store)
+        time.sleep(0.2)
+    assert recovered
+
+    from autonomous_dev.dashboard import build_dashboard_payload
+
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard._fetch_issue_labels_bounded",
+        lambda *a, **k: (["cursor-task", "needs-fix"], None),
+    )
+    dash = build_dashboard_payload(settings, store)
+    assert dash.get("worker_failure") is not None
+    assert dash["worker_failure"]["stage"] == "worker-startup"
 
