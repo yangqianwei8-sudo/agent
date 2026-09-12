@@ -54,6 +54,7 @@ def run_loop_recovery_tick(settings: AutonomousDevSettings, store: StateStore) -
         "orphan_pushes": 0,
         "stale_labels": 0,
         "stale_db_running": 0,
+        "technical_needs_fix": 0,
     }
     github = GitHubClient(settings)
     review_bridge = ReviewBridge(settings, store)
@@ -74,6 +75,15 @@ def run_loop_recovery_tick(settings: AutonomousDevSettings, store: StateStore) -
         counts["stale_db_running"] = reconcile_stale_running_db_records(store)
     except Exception:
         logger.exception("stale running DB reconcile failed")
+
+    try:
+        from autonomous_dev.worker_self_heal import reconcile_technical_needs_fix
+
+        counts["technical_needs_fix"] = reconcile_technical_needs_fix(
+            settings, store, github
+        )
+    except Exception:
+        logger.exception("technical needs-fix self-heal failed")
     return counts
 
 

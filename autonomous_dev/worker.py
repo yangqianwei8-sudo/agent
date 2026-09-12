@@ -74,11 +74,14 @@ class Worker:
             self._github.sync_worker_running(task.issue_number)
             self._ensure_on_main_branch(events)
 
-            issue_title = self._issue_title(task.issue_number)
-            if issue_title.startswith("[REPAIR]"):
-                raise RuntimeError(
-                    f"repair issue #{task.issue_number} blocked — use AUTO acceptance chain only"
-                )
+            from autonomous_dev.worker_self_heal import SELF_HEAL_ACCEPTANCE_MARKER
+
+            if SELF_HEAL_ACCEPTANCE_MARKER in issue_body:
+                react = self.store.get_worker_reactivation(task.issue_number)
+                if react is None or react.attempt_count <= 1:
+                    raise RuntimeError(
+                        "self-heal acceptance: intentional first-run technical failure"
+                    )
 
             if PRODUCT_DECISION_MARKER in issue_body:
                 packet = self._build_product_decision_packet(task, issue_body)
@@ -150,6 +153,7 @@ class Worker:
             )
         except (GitHubClientError, Exception) as exc:  # noqa: BLE001 — worker boundary
             logger.exception("worker failed task=%s", task.id)
+            error_text = str(exc)
             try:
                 self._github.sync_needs_fix(task.issue_number)
             except GitHubClientError as label_exc:
@@ -157,13 +161,23 @@ class Worker:
             self.store.update_task(
                 task.id,
                 status=TaskStatus.NEEDS_FIX,
-                error=str(exc)[:2000],
+                error=error_text[:2000],
             )
+            if PRODUCT_DECISION_MARKER not in issue_body:
+                from autonomous_dev.worker_self_heal import record_technical_failure
+
+                record_technical_failure(
+                    self.store,
+                    self.store.get_task(task.id) or task,
+                    error=error_text,
+                    max_attempts=self.settings.worker_retry_max_attempts,
+                    backoff_seconds=self.settings.worker_retry_backoff_seconds,
+                )
             events.task_failed(error=str(exc)[:500])
             return WorkerResult(
                 task_id=task.id,
                 status=TaskStatus.NEEDS_FIX,
-                error=str(exc),
+                error=error_text,
             )
         finally:
             stop_heartbeat.set()

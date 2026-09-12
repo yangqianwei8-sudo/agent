@@ -174,6 +174,8 @@ def _mock_github_client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("autonomous_dev.review_executor.GitHubClient", _factory)
     monkeypatch.setattr("autonomous_dev.task_handoff.GitHubClient", _factory)
     monkeypatch.setattr("autonomous_dev.next_task_resolver.GitHubClient", _factory)
+    monkeypatch.setattr("autonomous_dev.loop_recovery.GitHubClient", _factory)
+    monkeypatch.setattr("autonomous_dev.worker_self_heal.GitHubClient", _factory)
     return mock
 
 
@@ -3052,4 +3054,85 @@ def test_loop_recovery_tick_survives_github_errors(infra_env, monkeypatch):
     )
     counts = run_loop_recovery_tick(settings, store)
     assert counts["stale_labels"] == 0
+
+
+def test_repair_issue_no_longer_blocked_on_startup(infra_env, _mock_github_client):
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    _mock_github_client.titles[57] = "[REPAIR] Issue #56: truncated migration"
+    _mock_github_client.bodies[57] = "Fix reviewer FAIL items for #56"
+    task = store.create_task(issue_number=57, delivery_id="repair-57")
+    router = TaskRouter(settings, store)
+    result = router.run_worker_sync(task, issue_body=_mock_github_client.bodies[57])
+    assert "repair issue #57 blocked" not in (result.error or "").lower()
+
+
+def test_technical_needs_fix_self_heal_without_manual_current_task(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    from autonomous_dev.loop_recovery import run_loop_recovery_tick
+    from autonomous_dev.state import WorkerReactivationStatus
+    from autonomous_dev.worker_self_heal import SELF_HEAL_ACCEPTANCE_MARKER
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    issue_num = 57
+    _mock_github_client.labels[issue_num] = {"cursor-task", "needs-fix"}
+    _mock_github_client.bodies[issue_num] = f"body\n{SELF_HEAL_ACCEPTANCE_MARKER}"
+    old_key = f"{settings.github_repo}#{issue_num}#2026-09-10T12:00:00Z"
+    failed = store.create_task(
+        issue_number=issue_num,
+        delivery_id="repair-failed",
+        execution_key=old_key,
+        status=TaskStatus.NEEDS_FIX,
+    )
+    store.upsert_worker_reactivation(
+        issue_number=issue_num,
+        task_id=failed.id,
+        attempt_count=1,
+        next_retry_at=datetime.now(UTC).isoformat(),
+        last_error="blocked",
+        status=WorkerReactivationStatus.PENDING,
+    )
+    counts = run_loop_recovery_tick(settings, store)
+    assert counts["technical_needs_fix"] == 1
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        latest = store.get_task_by_issue(issue_num)
+        if latest and latest.id != failed.id:
+            active = {TaskStatus.RUNNING, TaskStatus.READY_FOR_REVIEW, TaskStatus.QUEUED}
+            if latest.status in active:
+                break
+        time.sleep(0.2)
+    latest = store.get_task_by_issue(issue_num)
+    assert latest is not None and latest.id != failed.id
+
+
+def test_self_heal_dashboard_exposes_retry_state(infra_env, monkeypatch):
+    from autonomous_dev.dashboard import build_dashboard_payload
+    from autonomous_dev.state import WorkerReactivationStatus
+    from autonomous_dev.status_deriver import SystemStatus
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    task = store.create_task(issue_number=57, delivery_id="dash", status=TaskStatus.NEEDS_FIX)
+    future = (datetime.now(UTC) + timedelta(seconds=120)).isoformat()
+    store.upsert_worker_reactivation(
+        issue_number=57,
+        task_id=task.id,
+        attempt_count=2,
+        next_retry_at=future,
+        last_error="startup failure",
+        status=WorkerReactivationStatus.PENDING,
+    )
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard._fetch_issue_labels_bounded",
+        lambda *a, **k: (["cursor-task", "needs-fix"], None),
+    )
+    payload = build_dashboard_payload(settings, store)
+    assert payload["system_status"] == SystemStatus.SELF_HEAL_PENDING.value
+    assert payload["self_heal"]["attempt_count"] == 2
 

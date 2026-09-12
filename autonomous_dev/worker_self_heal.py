@@ -148,19 +148,22 @@ def kick_worker_reactivation(
     except GitHubClientError as exc:
         return {"status": "failed", "reason": str(exc)[:200]}
 
-    if not is_technical_needs_fix(issue_body=body, labels=labels):
+    record = store.get_worker_reactivation(issue_number)
+    has_pending_reactivation = record is not None and record.status in {
+        WorkerReactivationStatus.PENDING,
+        WorkerReactivationStatus.SCHEDULED,
+    }
+    if not has_pending_reactivation and not is_technical_needs_fix(
+        issue_body=body, labels=labels
+    ):
         return {"status": "skipped", "reason": "not technical needs-fix"}
 
     if issue_has_active_worker_execution(store, issue_number):
         return {"status": "skipped", "reason": "active execution exists"}
-
-    record = store.get_worker_reactivation(issue_number)
     if record and record.status == WorkerReactivationStatus.EXHAUSTED:
         return {"status": "skipped", "reason": "retry budget exhausted"}
-
     if not _reactivation_is_due(store, issue_number, now_iso=now_iso):
         return {"status": "skipped", "reason": "backoff pending"}
-
     if _cooldown_blocks_kick(record, cooldown_seconds=settings.worker_retry_backoff_seconds, now=now):
         return {"status": "skipped", "reason": "kick cooldown"}
 
@@ -237,66 +240,109 @@ def kick_worker_reactivation(
     return {k: str(v) for k, v in result.items()}
 
 
+def _reactivate_issue_if_needed(
+    settings: AutonomousDevSettings,
+    store: StateStore,
+    github: GitHubClient,
+    num: int,
+    *,
+    body: str,
+    labels: set[str],
+    now_iso: str,
+) -> bool:
+    record = store.get_worker_reactivation(num)
+    has_pending = record is not None and record.status in {
+        WorkerReactivationStatus.PENDING,
+        WorkerReactivationStatus.SCHEDULED,
+    }
+    if not has_pending and not is_technical_needs_fix(issue_body=body, labels=labels):
+        return False
+    if issue_has_active_worker_execution(store, num):
+        return False
+    if store.is_locked():
+        lease = store.get_lease()
+        if lease.issue_number == num and store._lease_is_valid(store.get_lease(), now_iso=now_iso):
+            return False
+
+    latest = store.get_task_by_issue(num)
+    if latest is not None and latest.status == TaskStatus.PRODUCT_DECISION:
+        return False
+
+    if record is None and latest is not None and latest.status in {
+        TaskStatus.NEEDS_FIX,
+        TaskStatus.FAILED,
+    }:
+        store.upsert_worker_reactivation(
+            issue_number=num,
+            task_id=latest.id,
+            attempt_count=0,
+            next_retry_at=now_iso,
+            last_error=latest.error,
+            status=WorkerReactivationStatus.PENDING,
+        )
+
+    if not _reactivation_is_due(store, num, now_iso=now_iso):
+        return False
+
+    result = kick_worker_reactivation(
+        settings,
+        store,
+        github,
+        num,
+        reason="loop_recovery technical needs-fix",
+    )
+    if result.get("status") == "worker_started":
+        return True
+    if result.get("status") not in {"skipped", "deferred"}:
+        logger.info("self-heal reconcile issue=#%s result=%s", num, result)
+    return False
+
+
 def reconcile_technical_needs_fix(
     settings: AutonomousDevSettings,
     store: StateStore,
     github: GitHubClient,
 ) -> int:
     """Detect orphan technical needs-fix repairs and reactivate with fresh execution identity."""
-    if not getattr(github, "configured", True):
-        return 0
     reactivated = 0
     now_iso = datetime.now(UTC).isoformat()
+    seen: set[int] = set()
+
+    for record in store.list_due_worker_reactivations(limit=20):
+        num = record.issue_number
+        seen.add(num)
+        try:
+            body = github.get_issue_body(num) if getattr(github, "configured", True) else ""
+            labels = (
+                github.get_issue_labels(num)
+                if getattr(github, "configured", True)
+                else {LABEL_NEEDS_FIX, LABEL_CURSOR_TASK}
+            )
+        except GitHubClientError:
+            body = ""
+            labels = {LABEL_NEEDS_FIX, LABEL_CURSOR_TASK}
+        if _reactivate_issue_if_needed(
+            settings, store, github, num, body=body, labels=labels, now_iso=now_iso
+        ):
+            reactivated += 1
+
+    if not getattr(github, "configured", True):
+        return reactivated
     try:
         issues = github.list_open_issues_with_label(LABEL_NEEDS_FIX, limit=30)
     except GitHubClientError:
-        return 0
+        return reactivated
 
     for issue in issues:
         num = int(issue["number"])
+        if num in seen:
+            continue
         labels = {lbl["name"] for lbl in (issue.get("labels") or []) if isinstance(lbl, dict)}
         body = str(issue.get("body") or "")
-        if not is_technical_needs_fix(issue_body=body, labels=labels):
-            continue
-        if issue_has_active_worker_execution(store, num):
-            continue
-        if store.is_locked():
-            lease = store.get_lease()
-            if lease.issue_number == num and store._lease_is_valid(store.get_lease(), now_iso=now_iso):
-                continue
-
-        latest = store.get_task_by_issue(num)
-        if latest is not None and latest.status == TaskStatus.PRODUCT_DECISION:
-            continue
-
-        record = store.get_worker_reactivation(num)
-        if record is None and latest is not None and latest.status in {
-            TaskStatus.NEEDS_FIX,
-            TaskStatus.FAILED,
-        }:
-            store.upsert_worker_reactivation(
-                issue_number=num,
-                task_id=latest.id,
-                attempt_count=0,
-                next_retry_at=now_iso,
-                last_error=latest.error,
-                status=WorkerReactivationStatus.PENDING,
-            )
-
-        if not _reactivation_is_due(store, num, now_iso=now_iso):
-            continue
-
-        result = kick_worker_reactivation(
-            settings,
-            store,
-            github,
-            num,
-            reason="loop_recovery technical needs-fix",
-        )
-        if result.get("status") == "worker_started":
+        if _reactivate_issue_if_needed(
+            settings, store, github, num, body=body, labels=labels, now_iso=now_iso
+        ):
             reactivated += 1
-        elif result.get("status") not in {"skipped", "deferred"}:
-            logger.info("self-heal reconcile issue=#%s result=%s", num, result)
 
     return reactivated
 

@@ -255,6 +255,24 @@ def build_dashboard_payload(
         now=generated_at,
     )
 
+    self_heal_issue = (
+        current_task.issue_number
+        if current_task
+        else (primary_task.issue_number if primary_task else None)
+    )
+    worker_reactivation = (
+        store.get_worker_reactivation(self_heal_issue) if self_heal_issue else None
+    )
+    from autonomous_dev.worker_self_heal import derive_self_heal_dashboard_state
+
+    self_heal_state = derive_self_heal_dashboard_state(
+        store,
+        issue_number=self_heal_issue,
+        primary_status=primary_task.status if primary_task else None,
+    )
+    if self_heal_state is not None:
+        self_heal_state["max_attempts"] = settings.worker_retry_max_attempts
+
     system_status = derive_system_status(
         primary_task=primary_task,
         lease=lease,
@@ -264,6 +282,7 @@ def build_dashboard_payload(
         now=generated_at,
         recent_failed_task=snapshot["recent_failed"],
         handoff_state=handoff_state,
+        worker_reactivation=worker_reactivation,
     )
 
     labels: list[str] = []
@@ -414,6 +433,7 @@ def build_dashboard_payload(
             if handoff_record
             else None
         ),
+        "self_heal": self_heal_state,
     }
     return sanitize_for_json(payload)
 

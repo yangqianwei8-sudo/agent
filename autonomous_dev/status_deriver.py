@@ -13,6 +13,8 @@ from autonomous_dev.state import (
     ReviewInvocationStatus,
     TaskRecord,
     TaskStatus,
+    WorkerReactivationRecord,
+    WorkerReactivationStatus,
 )
 
 _SECRET_PATTERNS = (
@@ -34,6 +36,9 @@ class SystemStatus(StrEnum):
     WAITING_PRODUCT_DIRECTION = "WAITING_PRODUCT_DIRECTION"
     HANDOFF_PENDING = "HANDOFF_PENDING"
     HANDOFF_STALLED = "HANDOFF_STALLED"
+    SELF_HEAL_PENDING = "SELF_HEAL_PENDING"
+    SELF_HEAL_RUNNING = "SELF_HEAL_RUNNING"
+    SELF_HEAL_EXHAUSTED = "SELF_HEAL_EXHAUSTED"
     FAILED = "FAILED"
     STALE = "STALE"
     IDLE = "IDLE"
@@ -117,6 +122,7 @@ def derive_system_status(
     now: datetime | None = None,
     recent_failed_task: TaskRecord | None = None,
     handoff_state: str | None = None,
+    worker_reactivation: WorkerReactivationRecord | None = None,
 ) -> SystemStatus:
     now = now or datetime.now(UTC)
 
@@ -141,7 +147,17 @@ def derive_system_status(
         return SystemStatus.FAILED
 
     if task_status == TaskStatus.NEEDS_FIX:
-        return SystemStatus.FAILED
+        if worker_reactivation is not None:
+            if worker_reactivation.status == WorkerReactivationStatus.EXHAUSTED:
+                return SystemStatus.SELF_HEAL_EXHAUSTED
+            if worker_reactivation.status == WorkerReactivationStatus.SCHEDULED:
+                return SystemStatus.SELF_HEAL_RUNNING
+            if worker_reactivation.next_retry_at:
+                retry_at = _parse_ts(worker_reactivation.next_retry_at)
+                if retry_at is not None and retry_at > now:
+                    return SystemStatus.SELF_HEAL_PENDING
+            return SystemStatus.SELF_HEAL_PENDING
+        return SystemStatus.SELF_HEAL_PENDING
 
     if (
         task_status == TaskStatus.READY_FOR_REVIEW
@@ -200,6 +216,12 @@ def derive_current_phase(
         return "Worker 运行时过期"
     if system_status == SystemStatus.FAILED:
         return "任务失败"
+    if system_status == SystemStatus.SELF_HEAL_PENDING:
+        return "技术失败 — 等待自动重试"
+    if system_status == SystemStatus.SELF_HEAL_RUNNING:
+        return "技术失败 — 自动重试执行中"
+    if system_status == SystemStatus.SELF_HEAL_EXHAUSTED:
+        return "自动重试已耗尽"
     if system_status == SystemStatus.RUNNING:
         return "Worker / Cursor 执行中"
     mapping = {
