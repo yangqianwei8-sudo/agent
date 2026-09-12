@@ -1318,4 +1318,28 @@ a:hover { color: var(--accent-hover); }
 .issue-card.confirmed { border-left: 3px solid var(--accent-border); }
 .issue-meta { display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.85rem; margin: 0.35rem 0; }
 .issue-workbench-grid { display: grid; gap: 1rem; margin-top: 1rem; }
+.issue-workbench-meta { margin: 0.35rem 0 0.75rem; font-size: 0.9rem; }
+.issue-workbench-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; }
+.issue-workbench-tabs button {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.issue-workbench-tabs button.active {
+  background: var(--accent-bg, #eef4ff);
+  border-color: var(--accent-border, #4a7fd4);
+}
+.issue-workbench-panel { display: none; }
+.issue-workbench-panel.active { display: block; }
 .proof-task-block { margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; background: var(--bg); border-radius: 6px; }
+.fact-role-group { margin: 0.35rem 0; }
+.fact-role-group .label { font-size: 0.8rem; color: var(--muted); display: block; margin-bottom: 0.2rem; }
+ul.nested-evidence { margin: 0.25rem 0 0.25rem 1rem; font-size: 0.85rem; }
+.proof-gap-item, .conflict-item { margin-bottom: 0.65rem; }
+.structural-warn { color: var(--warn); font-size: 0.85rem; }
+.evolution-list time { font-size: 0.8rem; color: var(--muted); margin-right: 0.35rem; }
+.legal-analysis-block h4 { margin: 0.75rem 0 0.35rem; font-size: 0.9rem; }
+.lawyer-assessment-block { padding: 0.75rem; background: var(--bg-subtle); border-radius: 6px; }

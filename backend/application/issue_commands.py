@@ -62,6 +62,35 @@ class IssueCommandService:
         self.session.commit()
         return {"position_key": str(pos.position_key), "status": pos.status}
 
+    def reject_position(self, position_key: UUID) -> dict[str, Any]:
+        pos = self.domain.reject_position(position_key, actor_id=self.actor_id)
+        self.session.commit()
+        return {"position_key": str(pos.position_key), "status": pos.status}
+
+    def create_lawyer_position(
+        self,
+        *,
+        case_id: UUID,
+        issue_key: UUID,
+        issue_version: int,
+        side: str,
+        position_type: str,
+        statement: str,
+        opponent_material_ref: str | None = None,
+    ) -> dict[str, Any]:
+        pos = self.domain.create_lawyer_position(
+            case_id=case_id,
+            issue_key=issue_key,
+            issue_version=issue_version,
+            side=side,
+            position_type=position_type,
+            statement=statement,
+            actor_id=self.actor_id,
+            opponent_material_ref=opponent_material_ref,
+        )
+        self.session.commit()
+        return {"position_key": str(pos.position_key), "status": pos.status}
+
     def adopt_proof_task(self, proof_task_key: UUID) -> dict[str, Any]:
         task = self.domain.adopt_proof_task(proof_task_key, actor_id=self.actor_id)
         self.session.commit()
@@ -69,6 +98,24 @@ class IssueCommandService:
 
     def waive_proof_task(self, proof_task_key: UUID) -> dict[str, Any]:
         task = self.domain.waive_proof_task(proof_task_key, actor_id=self.actor_id)
+        self.session.commit()
+        return {"proof_task_key": str(task.proof_task_key), "status": task.status}
+
+    def create_lawyer_proof_task(
+        self,
+        *,
+        case_id: UUID,
+        issue_key: UUID,
+        issue_version: int,
+        description: str,
+    ) -> dict[str, Any]:
+        task = self.domain.create_lawyer_proof_task(
+            case_id=case_id,
+            issue_key=issue_key,
+            issue_version=issue_version,
+            description=description,
+            actor_id=self.actor_id,
+        )
         self.session.commit()
         return {"proof_task_key": str(task.proof_task_key), "status": task.status}
 
@@ -122,6 +169,39 @@ class IssueCommandService:
         self.session.commit()
         return {"gap_id": str(g.id), "status": g.status}
 
+    def create_proof_gap(
+        self,
+        *,
+        case_id: UUID,
+        issue_key: UUID,
+        issue_version: int,
+        gap_type: str,
+        description: str,
+        proof_task_key: UUID | None = None,
+        proof_task_version: int | None = None,
+        what_exists: str | None = None,
+        what_is_missing: str | None = None,
+        why_it_matters: str | None = None,
+        suggested_material_types: list[str] | None = None,
+    ) -> dict[str, Any]:
+        g = self.domain.create_proof_gap(
+            case_id=case_id,
+            issue_key=issue_key,
+            issue_version=issue_version,
+            gap_type=gap_type,
+            description=description,
+            proof_task_key=proof_task_key,
+            proof_task_version=proof_task_version,
+            what_exists=what_exists,
+            what_is_missing=what_is_missing,
+            why_it_matters=why_it_matters,
+            suggested_material_types=suggested_material_types,
+            actor_id=self.actor_id,
+            source_type="LAWYER_CREATED",
+        )
+        self.session.commit()
+        return {"gap_id": str(g.id), "status": g.status}
+
     def create_lawyer_assessment(
         self,
         *,
@@ -148,3 +228,10 @@ class IssueCommandService:
         )
         self.session.commit()
         return {"assessment_key": str(a.assessment_key), "version": a.version}
+
+    def withdraw_lawyer_assessment(self, assessment_key: UUID) -> dict[str, Any]:
+        a = self.domain.withdraw_lawyer_assessment(
+            assessment_key, actor_id=self.actor_id
+        )
+        self.session.commit()
+        return {"assessment_key": str(a.assessment_key), "status": a.status}

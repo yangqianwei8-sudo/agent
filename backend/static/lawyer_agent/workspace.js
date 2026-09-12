@@ -629,6 +629,69 @@
     root.dataset.currentObjectType = focusContext.current_object_type || "";
   }
 
+  async function postIssueCommand(command, payload) {
+    const res = await fetch(`/api/cases/${caseId}/issue-commands`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command, payload }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const detail = data.detail || res.statusText;
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    return data;
+  }
+
+  function renderFactWithEvidence(fact) {
+    const evLines = (fact.evidence || [])
+      .map(
+        (e) =>
+          `<li class="evidence-derived">${escapeHtml(e.title || e.label || "证据")} <span class="muted">(${escapeHtml(e.acceptance || "—")})</span></li>`
+      )
+      .join("");
+    return `<li>
+      <span>${escapeHtml(fact.statement)}</span>
+      <span class="tag">${escapeHtml(fact.role)}</span>
+      ${evLines ? `<ul class="nested-evidence">${evLines}</ul>` : ""}
+    </li>`;
+  }
+
+  function renderProofTaskFacts(task) {
+    const sections = [
+      ["支持事实", task.support_facts],
+      ["不利事实", task.adverse_facts],
+      ["背景事实", task.context_facts],
+    ];
+    return sections
+      .filter(([, facts]) => facts && facts.length)
+      .map(
+        ([label, facts]) =>
+          `<div class="fact-role-group"><span class="label">${label}</span><ul>${facts.map(renderFactWithEvidence).join("")}</ul></div>`
+      )
+      .join("");
+  }
+
+  function renderProofGapItem(g) {
+    const open = g.status === "OPEN";
+    const details = [
+      g.what_exists ? `<p><span class="label">已有</span>${escapeHtml(g.what_exists)}</p>` : "",
+      g.what_is_missing ? `<p><span class="label">缺失</span>${escapeHtml(g.what_is_missing)}</p>` : "",
+      g.why_it_matters ? `<p><span class="label">意义</span>${escapeHtml(g.why_it_matters)}</p>` : "",
+    ].join("");
+    const actions = open
+      ? `<div class="row-actions">
+          <button type="button" class="btn small ghost btn-waive-gap" data-gap-id="${escapeHtml(g.gap_id)}">标记不再需补</button>
+        </div>`
+      : "";
+    return `<li class="proof-gap-item">
+      <strong>${escapeHtml(g.description || g.gap_type)}</strong>
+      <span class="tag">${escapeHtml(g.display_status || g.status)}</span>
+      ${details}
+      ${actions}
+    </li>`;
+  }
+
   function renderIssueWorkbench(issue) {
     if (!els.issueWorkbench || !issue) return;
     setFocusContext({
@@ -639,31 +702,179 @@
     });
     els.issueWorkbench.hidden = false;
     const positions = issue.positions || {};
-    const ourPos = (positions.our_current || []).map((p) => `<li>${escapeHtml(p.statement)}</li>`).join("") || "<li class='muted'>暂无</li>";
-    const antDef = (positions.anticipated_defenses || []).map((p) => `<li>${escapeHtml(p.statement)} <span class='muted'>(可能抗辩)</span></li>`).join("") || "<li class='muted'>暂无</li>";
-    const tasks = (issue.proof_tasks || []).map((t) => {
-      const facts = [...(t.support_facts || []), ...(t.adverse_facts || []), ...(t.context_facts || [])];
-      const factLines = facts.map((f) => `<li>${escapeHtml(f.statement)} <span class="tag">${escapeHtml(f.role)}</span></li>`).join("") || "<li class='muted'>暂无关联事实</li>";
-      return `<div class="proof-task-block"><h4>${escapeHtml(t.description)} <span class="tag">${escapeHtml(t.display_status)}</span></h4><ul>${factLines}</ul></div>`;
-    }).join("") || "<p class='muted'>暂无证明任务</p>";
-    const conflicts = (issue.conflicts || []).map((c) => `<li>${escapeHtml(c.description)} <span class="tag">${escapeHtml(c.display_status)}</span></li>`).join("") || "<li class='muted'>暂无</li>";
-    const gaps = (issue.proof_gaps || []).length
-      ? issue.proof_tasks.flatMap((t) => t.proof_gaps || []).map((g) => `<li>${escapeHtml(g.description || g.gap_type)}</li>`).join("")
-      : "";
-    const gapHtml = gaps || "<li class='muted'>暂无持久化证明缺口</li>";
+    const ourPos =
+      (positions.our_current || [])
+        .map((p) => `<li>${escapeHtml(p.statement)}</li>`)
+        .join("") || "<li class='muted'>暂无</li>";
+    const antDef =
+      (positions.anticipated_defenses || [])
+        .map(
+          (p) =>
+            `<li>${escapeHtml(p.statement)} <span class='muted'>(可能抗辩，非对方正式主张)</span></li>`
+        )
+        .join("") || "<li class='muted'>暂无</li>";
+    const formalOpp =
+      (positions.formal_opponent || [])
+        .map(
+          (p) =>
+            `<li>${escapeHtml(p.statement)} <span class='tag'>对方正式主张</span></li>`
+        )
+        .join("") || "<li class='muted'>暂无对方正式主张</li>";
+    const tasks =
+      (issue.proof_tasks || [])
+        .map((t) => {
+          const factHtml = renderProofTaskFacts(t) || "<p class='muted'>暂无关联事实</p>";
+          const warnings = (t.structural_warnings || [])
+            .map((w) => `<li class="structural-warn">${escapeHtml(w.description)}</li>`)
+            .join("");
+          const taskGaps = (t.proof_gaps || []).map(renderProofGapItem).join("");
+          return `<div class="proof-task-block">
+            <h4>${escapeHtml(t.description)} <span class="tag">${escapeHtml(t.display_status)}</span></h4>
+            ${factHtml}
+            ${warnings ? `<ul class="structural-warnings">${warnings}</ul>` : ""}
+            ${taskGaps ? `<ul class="proof-gap-list">${taskGaps}</ul>` : ""}
+          </div>`;
+        })
+        .join("") || "<p class='muted'>暂无证明任务</p>";
+    const conflicts =
+      (issue.conflicts || [])
+        .map((c) => {
+          const factLines = (c.facts || [])
+            .map((f) => `<li>${escapeHtml(f.statement || f.role)} <span class="tag">${escapeHtml(f.role || "")}</span></li>`)
+            .join("");
+          return `<li class="conflict-item">
+            <p>${escapeHtml(c.description)} <span class="tag">${escapeHtml(c.display_status)}</span></p>
+            <p class="muted">AI 检测到材料间可能存在张力，不判断真伪。</p>
+            ${factLines ? `<ul>${factLines}</ul>` : ""}
+          </li>`;
+        })
+        .join("") || "<li class='muted'>暂无</li>";
+    const allGaps = [
+      ...(issue.proof_gaps || []),
+      ...(issue.proof_tasks || []).flatMap((t) => t.proof_gaps || []),
+    ];
+    const seenGap = new Set();
+    const gapHtml =
+      allGaps
+        .filter((g) => {
+          if (seenGap.has(g.gap_id)) return false;
+          seenGap.add(g.gap_id);
+          return true;
+        })
+        .map(renderProofGapItem)
+        .join("") || "<li class='muted'>暂无持久化证明缺口</li>";
+    const la = issue.legal_analysis || {};
+    const legalHtml = `
+      <div class="legal-analysis-block">
+        <h4>法律问题与路径</h4>
+        <ul>${(la.legal_theories || []).map((t) => `<li>${escapeHtml(t.title || t.statement || t.description || "—")}</li>`).join("") || "<li class='muted'>暂无</li>"}</ul>
+        <h4>有利因素</h4><ul>${(la.favorable_factors || []).map((f) => `<li>${escapeHtml(f)}</li>`).join("") || "<li class='muted'>暂无</li>"}</ul>
+        <h4>不利因素</h4><ul>${(la.adverse_factors || []).map((f) => `<li>${escapeHtml(f)}</li>`).join("") || "<li class='muted'>暂无</li>"}</ul>
+        <h4>待查因素</h4><ul>${(la.unknown_factors || []).map((f) => `<li>${escapeHtml(f)}</li>`).join("") || "<li class='muted'>暂无</li>"}</ul>
+      </div>`;
     const assessment = issue.lawyer_assessment
-      ? `<div class="block"><h4>律师判断</h4><p>${escapeHtml(issue.lawyer_assessment.content)}</p></div>`
-      : "<p class='muted'>尚未形成正式律师判断</p>";
+      ? `<div class="lawyer-assessment-block">
+          <p>${escapeHtml(issue.lawyer_assessment.content)}</p>
+          <p class="muted">版本 ${issue.lawyer_assessment.version} · ${escapeHtml(issue.lawyer_assessment.display_status || "")}</p>
+          <div class="row-actions">
+            <button type="button" class="btn small ghost btn-amend-assessment" data-assessment-key="${escapeHtml(issue.lawyer_assessment.assessment_key)}">修订（新版本）</button>
+            <button type="button" class="btn small ghost danger btn-withdraw-assessment" data-assessment-key="${escapeHtml(issue.lawyer_assessment.assessment_key)}">撤回</button>
+          </div>
+        </div>`
+      : `<p class='muted'>尚未形成正式律师判断。AI 可建议框架，但须由律师本人创建。</p>
+         <button type="button" class="btn small btn-create-assessment">创建律师判断</button>`;
+    const evolution =
+      (issue.evolution || [])
+        .map(
+          (e) =>
+            `<li><time>${escapeHtml(e.timestamp || "—")}</time> ${escapeHtml(e.summary)} <span class="muted">${escapeHtml(e.actor_hint || "")}</span></li>`
+        )
+        .join("") || "<li class='muted'>暂无版本演变记录</li>";
+    const overviewHtml = `
+      <section><h4>我方当前主张</h4><ul>${ourPos}</ul></section>
+      <section><h4>对方可能抗辩</h4><ul>${antDef}</ul></section>
+      <section><h4>对方正式主张</h4><ul>${formalOpp}</ul></section>
+      <section><h4>冲突（不判断真伪）</h4><ul>${conflicts}</ul></section>
+      <section><h4>版本演变</h4><ul class="evolution-list">${evolution}</ul></section>`;
+    const factsEvidenceHtml = `<section><h4>证明任务</h4>${tasks}</section>
+      <section><h4>证明缺口</h4><ul class="proof-gap-list">${gapHtml}</ul></section>`;
     els.issueWorkbench.innerHTML = `
       <h3>焦点工作台：${escapeHtml(issue.statement)}</h3>
-      <div class="issue-workbench-grid">
-        <section><h4>我方当前主张</h4><ul>${ourPos}</ul></section>
-        <section><h4>对方可能抗辩</h4><ul>${antDef}</ul></section>
-        <section><h4>证明任务</h4>${tasks}</section>
-        <section><h4>冲突（AI 检测可能张力，不判断真伪）</h4><ul>${conflicts}</ul></section>
-        <section><h4>证明缺口</h4><ul>${gapHtml}</ul></section>
-        <section>${assessment}</section>
+      <p class="issue-workbench-meta muted">
+        证明状态：${escapeHtml(issue.proof_state_label || issue.proof_state || "—")} ·
+        律师判断：${escapeHtml(issue.lawyer_judgment_state_label || "—")} ·
+        ${escapeHtml(issue.next_action || "")}
+      </p>
+      <nav class="issue-workbench-tabs" role="tablist">
+        <button type="button" class="active" data-wb-tab="overview">焦点全貌</button>
+        <button type="button" data-wb-tab="facts">事实证据</button>
+        <button type="button" data-wb-tab="legal">法律分析</button>
+        <button type="button" data-wb-tab="judgment">律师判断</button>
+      </nav>
+      <div class="issue-workbench-panels">
+        <div class="issue-workbench-panel active" data-wb-panel="overview"><div class="issue-workbench-grid">${overviewHtml}</div></div>
+        <div class="issue-workbench-panel" data-wb-panel="facts"><div class="issue-workbench-grid">${factsEvidenceHtml}</div></div>
+        <div class="issue-workbench-panel" data-wb-panel="legal">${legalHtml}</div>
+        <div class="issue-workbench-panel" data-wb-panel="judgment">${assessment}</div>
       </div>`;
+    els.issueWorkbench.querySelectorAll(".issue-workbench-tabs button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.getAttribute("data-wb-tab");
+        els.issueWorkbench.querySelectorAll(".issue-workbench-tabs button").forEach((b) => b.classList.remove("active"));
+        els.issueWorkbench.querySelectorAll(".issue-workbench-panel").forEach((p) => p.classList.remove("active"));
+        btn.classList.add("active");
+        const panel = els.issueWorkbench.querySelector(`[data-wb-panel="${tab}"]`);
+        if (panel) panel.classList.add("active");
+      });
+    });
+    els.issueWorkbench.querySelectorAll(".btn-waive-gap").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const gapId = btn.getAttribute("data-gap-id");
+        const note = window.prompt("请说明为何不再需补此缺口：");
+        if (!note) return;
+        try {
+          await postIssueCommand("waive_proof_gap", { gap_id: gapId, resolution_note: note });
+          await refreshWorkspace();
+        } catch (err) {
+          alert(err.message || String(err));
+        }
+      });
+    });
+    els.issueWorkbench.querySelector(".btn-create-assessment")?.addEventListener("click", async () => {
+      const content = window.prompt("请输入律师判断内容：");
+      if (!content) return;
+      try {
+        await postIssueCommand("create_lawyer_assessment", {
+          issue_key: issue.issue_key,
+          issue_version: issue.issue_version,
+          content,
+        });
+        await refreshWorkspace();
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+    els.issueWorkbench.querySelector(".btn-amend-assessment")?.addEventListener("click", async () => {
+      const key = els.issueWorkbench.querySelector(".btn-amend-assessment")?.getAttribute("data-assessment-key");
+      const content = window.prompt("请输入修订后的律师判断：");
+      if (!content || !key) return;
+      try {
+        await postIssueCommand("amend_lawyer_assessment", { assessment_key: key, new_content: content });
+        await refreshWorkspace();
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
+    els.issueWorkbench.querySelector(".btn-withdraw-assessment")?.addEventListener("click", async () => {
+      const key = els.issueWorkbench.querySelector(".btn-withdraw-assessment")?.getAttribute("data-assessment-key");
+      if (!key || !window.confirm("确定撤回当前律师判断？")) return;
+      try {
+        await postIssueCommand("withdraw_lawyer_assessment", { assessment_key: key });
+        await refreshWorkspace();
+      } catch (err) {
+        alert(err.message || String(err));
+      }
+    });
     navigateToSection("issues");
   }
 

@@ -226,10 +226,29 @@ def api_issue_command(
             )
         elif cmd == "confirm_position":
             result = svc.confirm_position(UUID(str(p["position_key"])))
+        elif cmd == "reject_position":
+            result = svc.reject_position(UUID(str(p["position_key"])))
+        elif cmd == "create_lawyer_position":
+            result = svc.create_lawyer_position(
+                case_id=case_id,
+                issue_key=UUID(str(p["issue_key"])),
+                issue_version=int(p["issue_version"]),
+                side=str(p["side"]),
+                position_type=str(p["position_type"]),
+                statement=str(p["statement"]),
+                opponent_material_ref=p.get("opponent_material_ref"),
+            )
         elif cmd == "adopt_proof_task":
             result = svc.adopt_proof_task(UUID(str(p["proof_task_key"])))
         elif cmd == "waive_proof_task":
             result = svc.waive_proof_task(UUID(str(p["proof_task_key"])))
+        elif cmd == "create_lawyer_proof_task":
+            result = svc.create_lawyer_proof_task(
+                case_id=case_id,
+                issue_key=UUID(str(p["issue_key"])),
+                issue_version=int(p["issue_version"]),
+                description=str(p["description"]),
+            )
         elif cmd == "link_fact_to_proof_task":
             result = svc.link_fact_to_proof_task(
                 case_id=case_id,
@@ -255,6 +274,22 @@ def api_issue_command(
             result = svc.waive_proof_gap(
                 UUID(str(p["gap_id"])), resolution_note=str(p["resolution_note"])
             )
+        elif cmd == "create_proof_gap":
+            result = svc.create_proof_gap(
+                case_id=case_id,
+                issue_key=UUID(str(p["issue_key"])),
+                issue_version=int(p["issue_version"]),
+                gap_type=str(p["gap_type"]),
+                description=str(p["description"]),
+                proof_task_key=UUID(str(p["proof_task_key"])) if p.get("proof_task_key") else None,
+                proof_task_version=int(p["proof_task_version"])
+                if p.get("proof_task_version") is not None
+                else None,
+                what_exists=p.get("what_exists"),
+                what_is_missing=p.get("what_is_missing"),
+                why_it_matters=p.get("why_it_matters"),
+                suggested_material_types=p.get("suggested_material_types"),
+            )
         elif cmd == "create_lawyer_assessment":
             result = svc.create_lawyer_assessment(
                 case_id=case_id,
@@ -266,6 +301,8 @@ def api_issue_command(
             result = svc.amend_lawyer_assessment(
                 UUID(str(p["assessment_key"])), new_content=str(p["new_content"])
             )
+        elif cmd == "withdraw_lawyer_assessment":
+            result = svc.withdraw_lawyer_assessment(UUID(str(p["assessment_key"])))
         else:
             raise HTTPException(status_code=400, detail=f"unknown command: {cmd}")
     except (ValidationError, ConflictError) as exc:
