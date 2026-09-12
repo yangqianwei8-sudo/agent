@@ -1,14 +1,14 @@
 # Issue #57 Repair Evidence — Issue-Centered V2 (#56)
 
-Generated: 2026-09-12T06:30:00Z  
-Implementation commit: `c19379be1bef5ebcf84c9684765598888559b57b`  
+Generated: 2026-09-12T08:45:00Z  
+Base commit: `72f179d`  
 Repair commit: (this commit)
 
 ## (1) Full migration — proof_gaps + lawyer_assessments with check constraints
 
-Untruncated patch for `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` (394 lines) included in:
+Untruncated file: `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` (394 lines).
 
-`data/acceptance_reports/issue56_c19379b_key_files.patch`
+Full patch included in `docs/issue57_repair_evidence/issue56_c19379b_key_files.patch`.
 
 **proof_gaps check constraints (verified in migration):**
 - `ck_proof_gaps_type`: `gap_type IN ('FACT','EVIDENCE','SOURCE','LEGAL_RESEARCH')`
@@ -22,7 +22,7 @@ Also includes FK to `(issue_key, issue_version)` and optional `(proof_task_key, 
 
 ## (2) Full domain + application files
 
-Untruncated patches included in `issue56_c19379b_key_files.patch`:
+Untruncated files (included in patch):
 - `backend/domain/issue_centered.py` (1062 lines)
 - `backend/application/issue_work_product.py` (501 lines)
 
@@ -30,10 +30,12 @@ Untruncated patches included in `issue56_c19379b_key_files.patch`:
 
 ### pytest backend/tests/integration/test_issue_centered_v2.py
 
+Run: `TEST_DATABASE_URL=postgresql+psycopg://postgres:***@lawyer-postgresql.ns-dqyh88ke.svc:5432/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py -v`
+
 ```
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0
-collected 13 items
+collected 14 items
 
 backend/tests/integration/test_issue_centered_v2.py::test_position_ai_candidate_lawyer_confirm PASSED
 backend/tests/integration/test_issue_centered_v2.py::test_position_formal_defense_requires_material PASSED
@@ -47,31 +49,49 @@ backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_pro
 backend/tests/integration/test_issue_centered_v2.py::test_green_issue_not_auto_ready PASSED
 backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_api PASSED
 backend/tests/integration/test_issue_centered_v2.py::test_workspace_includes_issue_work_product PASSED
+backend/tests/integration/test_issue_centered_v2.py::test_agent_issue_object_context PASSED
 backend/tests/integration/test_issue_centered_v2.py::test_structural_gap_renamed PASSED
 
-======================== 13 passed, 2 warnings in 1.16s ========================
+======================== 14 passed, 2 warnings in 2.13s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py
 
+Run: `.venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py` (forces `LLM_MODE=deterministic`)
+
 ```
 ISSUE-CENTERED CASE WORKSPACE V2: PASS
-Steps completed: 15
+Steps completed: 30
   1 Case
-  2 Material + Evidence accepted
+  2 Material
+  3 Evidence accepted
   4 Fact confirmed
-  5-6 Issue confirmed
-  7-8 Positions
-  9-11 ProofTask + SUPPORT fact
-  12 ADVERSE fact link
+  5 AI candidate Issue
+  6 Issue confirmed
+  7 OUR Position
+  8 anticipated opponent defense
+  9 AI ProofTask
+  10 ProofTask adopted
+  11 SUPPORT Fact link
+  12 ADVERSE Fact link
   13 Conflict detected
   14 ProofGap created
-  17-18 LawyerAssessment V1/V2
+  15 supplemental material/evidence/fact
+  17 LawyerAssessment V1
+  18 LawyerAssessment V2 history
   16 gap waived
-  19-21 Claim + links
+  19 confirmed Claim
+  20 Claim→Issue link
+  21 Claim→Fact link
   22 Readiness NOT_READY
+  23 supplement critical facts
+  24 Readiness READY
+  25 PleadingStructuredInput
+  26 closed relation graph PASS
+  27 generate pleading
+  28 reverse trace Draft→Fact→Evidence→SourceSpan→Material
   29 Issue Work Product
-  30 Workspace + Agent context data
+  30 Workspace + Agent Issue/Object context
 ```
 
 ## (4) Explicit constraint verification
@@ -100,4 +120,4 @@ Production path `backend/application/claim_direction.py` calls `self.domain.crea
 
 `split_issue()` creates HumanDecision with `decision_type="SPLIT_ISSUE"` before mutation, then `_audit(..., "split_issue", ...)`.
 
-Test: `test_issue_merge_and_split` (merge + split succeed with decision/audit paths wired).
+Test: `test_issue_merge_and_split` asserts `HumanDecision` rows for `MERGE_ISSUES` and `SPLIT_ISSUE`, plus `AuditLog` rows for `merge_issues` and `split_issue`.

@@ -37,6 +37,10 @@ class CaseContext:
     latest_draft: DocumentDraft | None = None
     available_actions: list[dict[str, str]] = field(default_factory=list)
     context_json: dict[str, Any] = field(default_factory=dict)
+    focus_issue_key: UUID | None = None
+    focus_issue_version: int | None = None
+    focus_object_type: str | None = None
+    focus_object_ref: str | None = None
 
 
 class CaseContextService:

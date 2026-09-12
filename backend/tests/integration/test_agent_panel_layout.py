@@ -9,9 +9,12 @@ CSS = BACKEND_ROOT / "static" / "lawyer_agent" / "workspace.css"
 HTML = BACKEND_ROOT / "templates" / "cases" / "workspace.html"
 
 
-def test_agent_panel_grid_uses_minmax_for_dual_column():
+def test_agent_panel_grid_uses_three_column_dossier_layout():
     css = CSS.read_text(encoding="utf-8")
-    assert "grid-template-columns: minmax(0, 1fr) minmax(320px, 400px)" in css
+    assert (
+        "grid-template-columns: minmax(200px, 240px) minmax(0, 1fr) minmax(320px, 400px)"
+        in css
+    )
 
 
 def test_agent_panel_sticky_with_fixed_internal_height():
@@ -39,3 +42,5 @@ def test_chat_composer_non_shrinking():
 def test_workspace_html_agent_panel_class():
     html = HTML.read_text(encoding="utf-8")
     assert 'class="ws-right card chat agent-panel"' in html
+    assert 'class="ws-dossier card"' in html
+    assert "案件卷宗" in html

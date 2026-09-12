@@ -75,6 +75,11 @@ class CaseAgent:
         case_id: UUID,
         message: str,
         conversation_id: UUID | None = None,
+        *,
+        current_issue_key: UUID | None = None,
+        current_issue_version: int | None = None,
+        current_object_type: str | None = None,
+        current_object_ref: str | None = None,
     ) -> AgentResponse:
         conversation_id = conversation_id or self._resolve_conversation_id(case_id)
         pending = self._load_pending_action(case_id, conversation_id)
@@ -100,6 +105,10 @@ class CaseAgent:
 
         # 2) Context from DB
         ctx = self.context_svc.load(case_id, conversation_id=conversation_id)
+        ctx.focus_issue_key = current_issue_key
+        ctx.focus_issue_version = current_issue_version
+        ctx.focus_object_type = current_object_type
+        ctx.focus_object_ref = current_object_ref
         if ctx.instance is not None:
             user_msg.instance_id = ctx.instance.id
             self.session.flush()

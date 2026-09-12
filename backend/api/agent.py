@@ -22,6 +22,10 @@ class AgentMessageRequest(BaseModel):
     conversation_id: UUID | None = None
     message: str = Field(min_length=1, max_length=8000)
     actor_id: UUID | None = None
+    current_issue_key: UUID | None = None
+    current_issue_version: int | None = None
+    current_object_type: str | None = Field(default=None, max_length=64)
+    current_object_ref: str | None = Field(default=None, max_length=128)
 
 
 @router.post("/{case_id}/agent/messages", response_model=AgentResponse)
@@ -37,7 +41,13 @@ def post_agent_message(
     agent = CaseAgent(session, actor_id=actor_id)
     try:
         resp = agent.handle_message(
-            case_id, body.message, conversation_id=body.conversation_id
+            case_id,
+            body.message,
+            conversation_id=body.conversation_id,
+            current_issue_key=body.current_issue_key,
+            current_issue_version=body.current_issue_version,
+            current_object_type=body.current_object_type,
+            current_object_ref=body.current_object_ref,
         )
         return resp
     except Exception as exc:  # noqa: BLE001

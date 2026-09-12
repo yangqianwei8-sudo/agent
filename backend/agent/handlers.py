@@ -441,6 +441,10 @@ class CommandHandler:
                 case_id=ctx.case.id,
                 conversation_id=ctx.conversation_id,
                 user_message=user_message,
+                current_issue_key=ctx.focus_issue_key,
+                current_issue_version=ctx.focus_issue_version,
+                current_object_type=ctx.focus_object_type,
+                current_object_ref=ctx.focus_object_ref,
             )
             result = self.conversation_engine.reply(
                 user_message=user_message, context=pack

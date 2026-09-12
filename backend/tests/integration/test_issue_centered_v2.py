@@ -6,6 +6,7 @@ from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.application.issue_work_product import IssueWorkProductService
@@ -14,6 +15,7 @@ from backend.domain.errors import ConflictError, ValidationError
 from backend.domain.services import DomainService
 from backend.infrastructure.db import get_db_session
 from backend.main import app
+from backend.models import AuditLog, HumanDecision
 from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 
 
@@ -230,6 +232,24 @@ def test_issue_merge_and_split(db_session: Session, owner_id, actor_id):
         actor_id=actor_id,
     )
     assert merged.status == "CONFIRMED"
+    merge_decisions = list(
+        db_session.scalars(
+            select(HumanDecision).where(
+                HumanDecision.case_id == case.id,
+                HumanDecision.decision_type == "MERGE_ISSUES",
+            )
+        )
+    )
+    assert len(merge_decisions) == 1
+    merge_audits = list(
+        db_session.scalars(
+            select(AuditLog).where(
+                AuditLog.case_id == case.id,
+                AuditLog.action == "merge_issues",
+            )
+        )
+    )
+    assert merge_audits
     i1_after = svc.repo.get_issue_version(i1.issue_key, i1.version)
     assert i1_after is not None and i1_after.status == "SUPERSEDED"
     split = svc.split_issue(
@@ -242,6 +262,24 @@ def test_issue_merge_and_split(db_session: Session, owner_id, actor_id):
         actor_id=actor_id,
     )
     assert len(split) == 2
+    split_decisions = list(
+        db_session.scalars(
+            select(HumanDecision).where(
+                HumanDecision.case_id == case.id,
+                HumanDecision.decision_type == "SPLIT_ISSUE",
+            )
+        )
+    )
+    assert len(split_decisions) == 1
+    split_audits = list(
+        db_session.scalars(
+            select(AuditLog).where(
+                AuditLog.case_id == case.id,
+                AuditLog.action == "split_issue",
+            )
+        )
+    )
+    assert split_audits
 
 
 def test_claim_direction_production_disabled(db_session: Session, owner_id, actor_id):
@@ -315,6 +353,44 @@ def test_workspace_includes_issue_work_product(
     res = client.get(f"/api/cases/{case.id}/workspace")
     assert res.status_code == 200
     assert "issue_work_product" in res.json()
+
+
+def test_agent_issue_object_context(
+    db_session: Session, owner_id, actor_id, client: TestClient
+):
+    from backend.agent.case_agent import CaseAgent
+    from backend.agent.intent_router import DeterministicIntentRouter
+
+    svc = DomainService(db_session)
+    case = svc.create_case(title="AgentCtx", owner_user_id=owner_id)
+    issue = svc.confirm_issue(
+        svc.propose_issue(case_id=case.id, statement="Agent 上下文焦点").issue_key,
+        actor_id=actor_id,
+    )
+    agent = CaseAgent(db_session, actor_id=actor_id, intent_engine=DeterministicIntentRouter())
+    resp = agent.handle_message(
+        case.id,
+        "当前焦点证明情况如何？",
+        current_issue_key=issue.issue_key,
+        current_issue_version=issue.version,
+        current_object_type="Issue",
+        current_object_ref=str(issue.issue_key),
+    )
+    assert "当前争议焦点" in resp.message
+    assert "Agent 上下文焦点" in resp.message
+
+    api = client.post(
+        f"/cases/{case.id}/agent/messages",
+        json={
+            "message": "当前焦点证明情况如何？",
+            "current_issue_key": str(issue.issue_key),
+            "current_issue_version": issue.version,
+            "current_object_type": "Issue",
+            "current_object_ref": str(issue.issue_key),
+        },
+    )
+    assert api.status_code == 200
+    assert "当前争议焦点" in api.json()["message"]
 
 
 def test_structural_gap_renamed(db_session: Session, owner_id, actor_id):

@@ -184,6 +184,11 @@ class DeterministicCaseConversationEngine:
         if re.search(r"履约|交付|完成服务", q):
             parts.append(self._performance(context, missing, citations))
 
+        if context.current_issue_key and re.search(
+            r"当前焦点|这个焦点|证明情况|焦点证明", q
+        ):
+            parts.append(self._current_issue_focus(context))
+
         if not parts:
             parts.append(self._generic(context, missing, suggestions))
 
@@ -551,6 +556,35 @@ class DeterministicCaseConversationEngine:
                 ConversationCitation(type="fact", display_number=f["display_number"])
             )
         return "\n".join(lines)
+
+    def _current_issue_focus(self, ctx: CaseConversationContext) -> str:
+        iwp = ctx.issue_work_product or {}
+        issues = list(iwp.get("confirmed_issues") or []) + list(
+            iwp.get("candidate_issues") or []
+        )
+        target = None
+        for issue in issues:
+            if str(issue.get("issue_key")) == str(ctx.current_issue_key):
+                target = issue
+                break
+        if target is None:
+            return "当前选中的争议焦点未在案件上下文中找到，请刷新工作台后重试。"
+        state = target.get("proof_state_label") or target.get("proof_state") or "—"
+        judgment = target.get("lawyer_judgment_state_label") or "—"
+        obj = ctx.current_object_type or ""
+        obj_ref = ctx.current_object_ref or ""
+        obj_line = f"\n当前对象：{obj} {obj_ref}".strip() if obj else ""
+        return (
+            f"## 当前争议焦点\n"
+            f"{target.get('statement', '—')}\n\n"
+            f"- 证明状态：{state}\n"
+            f"- 律师判断：{judgment}\n"
+            f"- 证明任务：{target.get('proof_task_count', 0)} 项\n"
+            f"- 持久化缺口：{target.get('open_proof_gap_count', 0)} 项\n"
+            f"- 冲突：{target.get('conflict_count', 0)} 项"
+            f"{obj_line}\n\n"
+            "以上为只读投影；如需正式确认/采纳，请使用明确指令。"
+        )
 
     def _generic(
         self,

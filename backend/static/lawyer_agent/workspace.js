@@ -5,6 +5,12 @@
   const storageKey = `lca_conversation_${caseId}`;
   let conversationId = localStorage.getItem(storageKey) || null;
   let workspace = window.__WORKSPACE_BOOT__ || null;
+  let focusContext = {
+    current_issue_key: null,
+    current_issue_version: null,
+    current_object_type: null,
+    current_object_ref: null,
+  };
 
   const NODE_ORDER = [
     "N1_PARSE",
@@ -617,8 +623,20 @@
     });
   }
 
+  function setFocusContext(partial) {
+    focusContext = { ...focusContext, ...partial };
+    root.dataset.currentIssueKey = focusContext.current_issue_key || "";
+    root.dataset.currentObjectType = focusContext.current_object_type || "";
+  }
+
   function renderIssueWorkbench(issue) {
     if (!els.issueWorkbench || !issue) return;
+    setFocusContext({
+      current_issue_key: issue.issue_key,
+      current_issue_version: issue.issue_version,
+      current_object_type: null,
+      current_object_ref: null,
+    });
     els.issueWorkbench.hidden = false;
     const positions = issue.positions || {};
     const ourPos = (positions.our_current || []).map((p) => `<li>${escapeHtml(p.statement)}</li>`).join("") || "<li class='muted'>暂无</li>";
@@ -1103,7 +1121,14 @@
       if (b instanceof HTMLButtonElement) b.disabled = true;
     });
     try {
-      const body = { message, conversation_id: conversationId };
+      const body = {
+        message,
+        conversation_id: conversationId,
+        current_issue_key: focusContext.current_issue_key || undefined,
+        current_issue_version: focusContext.current_issue_version ?? undefined,
+        current_object_type: focusContext.current_object_type || undefined,
+        current_object_ref: focusContext.current_object_ref || undefined,
+      };
       const res = await fetch(`/cases/${caseId}/agent/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
