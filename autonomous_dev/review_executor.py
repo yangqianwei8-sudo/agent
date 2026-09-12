@@ -315,12 +315,30 @@ class ReviewExecutor:
             error=result.reason[:2000],
         )
         self._github.sync_needs_fix(task.issue_number)
+        if self._is_acceptance_chain_task(task):
+            logger.info(
+                "acceptance chain FAIL — skip repair spawn issue=#%s",
+                task.issue_number,
+            )
+            return
         repair_num = self._find_or_create_repair_issue(task, result)
         self._github.remove_label(task.issue_number, LABEL_CURRENT_TASK)
         self._github.set_issue_labels(
             repair_num,
             {LABEL_CURSOR_TASK, LABEL_CURRENT_TASK},
         )
+
+    def _is_acceptance_chain_task(self, task: TaskRecord) -> bool:
+        try:
+            body = self._github.get_issue_body(task.issue_number)
+        except GitHubClientError:
+            return False
+        if "[P0-LIVE-ACCEPTANCE]" in body:
+            return True
+        for issue in self._github.list_open_issues_with_label(LABEL_CURSOR_TASK, limit=100):
+            if int(issue["number"]) == task.issue_number:
+                return str(issue.get("title") or "").startswith("[AUTO-")
+        return False
 
     def _apply_product_decision(self, task: TaskRecord, result) -> None:
         pd = result.product_decision or {}

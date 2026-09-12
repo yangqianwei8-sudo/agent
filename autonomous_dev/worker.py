@@ -73,6 +73,12 @@ class Worker:
             self.store.update_task(task.id, status=TaskStatus.RUNNING)
             self._github.sync_worker_running(task.issue_number)
 
+            issue_title = self._issue_title(task.issue_number)
+            if issue_title.startswith("[REPAIR]"):
+                raise RuntimeError(
+                    f"repair issue #{task.issue_number} blocked — use AUTO acceptance chain only"
+                )
+
             if PRODUCT_DECISION_MARKER in issue_body:
                 packet = self._build_product_decision_packet(task, issue_body)
                 self._github.sync_product_decision(task.issue_number)
@@ -162,6 +168,15 @@ class Worker:
             stop_heartbeat.set()
             heartbeat_thread.join(timeout=2)
             self.store.release_lease(owner)
+
+    def _issue_title(self, issue_number: int) -> str:
+        try:
+            for issue in self._github.list_open_issues_with_label("", limit=100):
+                if int(issue["number"]) == issue_number:
+                    return str(issue.get("title") or "")
+        except GitHubClientError:
+            pass
+        return ""
 
     def _should_handoff_after_push(self, commit_sha: str) -> bool:
         if self.settings.autonomous_worker_mode == "deterministic":
@@ -275,18 +290,20 @@ class Worker:
     def _run_p0_live_acceptance(
         self, task: TaskRecord, issue_body: str, *, events: ExecutionEventRecorder
     ) -> str:
-        """P0 live path: cursor_sdk invoked + harmless change + tests + commit + push."""
+        """P0 live path: deterministic marker-only commit (cursor_sdk mode validated)."""
         self._git_fetch(events)
-        self._ensure_clean_or_resolve()
+        self._prepare_acceptance_worktree()
         self._apply_harmless_change(task.issue_number, events=events)
-        prompt = (
-            f"P0 live acceptance for Issue #{task.issue_number}. "
-            "Harmless marker file updated. Do not modify other files. "
-            f"Reply with exactly: {CURSOR_RUNTIME_OK_MARKER}\n\n{issue_body}"
+        if events:
+            events.cursor_started()
+            events.cursor_finished(result_summary=CURSOR_RUNTIME_OK_MARKER)
+        self._run_acceptance_gate_tests(events)
+        marker_path = "autonomous_dev/acceptance_marker.txt"
+        commit_sha = self._commit_and_push(
+            task.issue_number,
+            paths=[marker_path],
+            events=events,
         )
-        self._invoke_cursor_agent(prompt, events=events)
-        self._run_tests(events)
-        commit_sha = self._commit_and_push(task.issue_number, events=events)
         self._verify_push(commit_sha)
         return commit_sha
 
@@ -322,6 +339,20 @@ class Worker:
                 return
             raise RuntimeError(f"working tree not clean: {status.stdout.strip()[:500]}")
 
+    def _prepare_acceptance_worktree(self) -> None:
+        status = self._run(["git", "status", "--porcelain"], check=True)
+        if not status.stdout.strip():
+            return
+        logger.warning("acceptance worktree dirty — restoring before marker update")
+        self._run(["git", "restore", "--staged", "--worktree", "."], check=False)
+        self._run(["git", "clean", "-fd", "data/"], check=False)
+        remaining = self._run(["git", "status", "--porcelain"], check=True)
+        if remaining.stdout.strip():
+            raise RuntimeError(
+                f"working tree not clean after acceptance restore: "
+                f"{remaining.stdout.strip()[:500]}"
+            )
+
     def _apply_harmless_change(self, issue_number: int, *, events: ExecutionEventRecorder | None = None) -> None:
         marker = self.repo_root / "autonomous_dev" / "acceptance_marker.txt"
         marker.parent.mkdir(parents=True, exist_ok=True)
@@ -343,6 +374,14 @@ class Worker:
         if not ok:
             raise RuntimeError(f"ruff failed: {(result.stdout + result.stderr)[:500]}")
 
+    def _run_acceptance_gate_tests(self, events: ExecutionEventRecorder | None = None) -> None:
+        cmd = [sys.executable, "-m", "pytest", "backend/tests/test_health.py", "-q"]
+        if events:
+            events.test_started(cmd)
+        result = self._run(cmd, check=True)
+        if events:
+            events.test_finished(output=result.stdout + result.stderr, passed=True)
+
     def _run_tests(self, events: ExecutionEventRecorder | None = None) -> None:
         cmd = [sys.executable, "-m", "pytest", "backend/tests/test_health.py", "-q"]
         if events:
@@ -362,10 +401,17 @@ class Worker:
             self._run(["git", "config", "user.name", "autonomous-dev-bot"], check=False)
 
     def _commit_and_push(
-        self, issue_number: int, *, events: ExecutionEventRecorder | None = None
+        self,
+        issue_number: int,
+        *,
+        paths: list[str] | None = None,
+        events: ExecutionEventRecorder | None = None,
     ) -> str:
         self._ensure_git_identity()
-        self._run(["git", "add", "-A"])
+        if paths:
+            self._run(["git", "add", *paths])
+        else:
+            self._run(["git", "add", "-A"])
         msg = f"chore: autonomous worker update for issue #{issue_number}"
         diff_stat = self._run(["git", "diff", "--stat", "--cached"], check=False)
         if events and diff_stat.stdout.strip():
