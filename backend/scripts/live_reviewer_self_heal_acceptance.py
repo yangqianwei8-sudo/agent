@@ -31,9 +31,6 @@ _VALID_REVIEWER_STATES = {
     "stale-recovered",
     "exhausted",
     "completed",
-    "failed",
-    "locked",
-    "idle",
 }
 
 
@@ -65,15 +62,16 @@ def _lineage_evidence(store: StateStore, issue_num: int, commit_prefix: str) -> 
     elif inv is not None or react is not None:
         results["commit_match"] = "SKIP"
         results["lineage_commit_evolved"] = "PASS"
+    elif commit_sha:
+        results["commit_match"] = "FAIL"
     else:
-        results["commit_match"] = "SKIP"
+        results["commit_match"] = "FAIL"
 
     saw_recovery = react is not None and react.attempt_count >= 1
     saw_verdict_path = inv is not None and inv.status in {
         ReviewInvocationStatus.COMPLETED,
         ReviewInvocationStatus.RUNNING,
         ReviewInvocationStatus.PENDING,
-        ReviewInvocationStatus.FAILED,
     }
     results["reviewer_recovery"] = "PASS" if saw_recovery or saw_verdict_path else "FAIL"
     results["verdict_path"] = "PASS" if saw_verdict_path else "FAIL"
@@ -82,11 +80,46 @@ def _lineage_evidence(store: StateStore, issue_num: int, commit_prefix: str) -> 
     return results
 
 
-def _dashboard_reviewer_state(client: httpx.Client, base: str, store: StateStore) -> str:
+def _lineage_reviewer_state(store: StateStore, issue_num: int) -> str | None:
+    """Return PASS when the lineage issue shows valid reviewer recovery state."""
+    task = store.get_task_by_issue(issue_num)
+    if task is None:
+        return None
+    react = store.get_reviewer_reactivation(issue_num)
+    if react and react.status in {
+        ReviewerReactivationStatus.PENDING,
+        ReviewerReactivationStatus.RUNNING,
+        ReviewerReactivationStatus.RETRYING,
+        ReviewerReactivationStatus.STALE_RECOVERED,
+        ReviewerReactivationStatus.EXHAUSTED,
+    }:
+        return "PASS"
+    if task.commit_sha:
+        inv = store.get_review_invocation(task.id, task.commit_sha)
+        if inv and inv.status in {
+            ReviewInvocationStatus.PENDING,
+            ReviewInvocationStatus.RUNNING,
+            ReviewInvocationStatus.COMPLETED,
+        }:
+            return "PASS"
+    return None
+
+
+def _dashboard_reviewer_state(
+    client: httpx.Client, base: str, store: StateStore, issue_num: int
+) -> str:
+    lineage = _lineage_reviewer_state(store, issue_num)
+    if lineage == "PASS":
+        return "PASS"
+
     dash = client.get(f"{base}/autonomous/status.json", timeout=15.0)
     if dash.status_code != 200:
         return "FAIL"
     body = dash.json()
+    current_issue = (body.get("current_task") or {}).get("issue_number")
+    if current_issue != issue_num:
+        return lineage or "FAIL"
+
     reviewer_self_heal = body.get("reviewer_self_heal") or {}
     status = reviewer_self_heal.get("status") or body.get("runtime_evidence", {}).get(
         "reviewer_status"
@@ -109,7 +142,6 @@ def _dashboard_reviewer_state(client: httpx.Client, base: str, store: StateStore
             if inv and inv.status in {
                 ReviewInvocationStatus.PENDING,
                 ReviewInvocationStatus.RUNNING,
-                ReviewInvocationStatus.FAILED,
                 ReviewInvocationStatus.COMPLETED,
             }:
                 return "PASS"
@@ -160,7 +192,9 @@ def main() -> int:
                 run_loop_recovery_tick(settings, store)
                 time.sleep(2)
 
-        results["dashboard_reviewer_state"] = _dashboard_reviewer_state(client, base, store)
+        results["dashboard_reviewer_state"] = _dashboard_reviewer_state(
+            client, base, store, issue_num
+        )
 
     print(json.dumps(results, indent=2))
     required = [k for k, v in results.items() if v != "SKIP"]
