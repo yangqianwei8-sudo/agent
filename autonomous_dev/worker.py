@@ -72,6 +72,7 @@ class Worker:
             events.task_started()
             self.store.update_task(task.id, status=TaskStatus.RUNNING)
             self._github.sync_worker_running(task.issue_number)
+            self._ensure_on_main_branch(events)
 
             issue_title = self._issue_title(task.issue_number)
             if issue_title.startswith("[REPAIR]"):
@@ -313,7 +314,8 @@ class Worker:
         prompt = (
             f"Execute GitHub Issue #{task.issue_number} as sole SSOT.\n\n"
             f"{issue_body}\n\n"
-            "Rules: run tests, git add -A, commit, push origin main, "
+            "Rules: stay on branch main (never checkout other branches), run tests, "
+            "git add -A, commit, push origin main, "
             "verify HEAD==origin/main, stop. No next product phase."
         )
         self._invoke_cursor_agent(prompt, events=events)
@@ -323,6 +325,7 @@ class Worker:
     def _git_fetch(self, events: ExecutionEventRecorder | None = None) -> None:
         if self.settings.autonomous_worker_mode == "deterministic":
             return
+        self._ensure_on_main_branch(events)
         cmd = ["git", "fetch", "origin", "main"]
         if events:
             events.command_started(cmd, phase="git")
@@ -352,6 +355,24 @@ class Worker:
                 f"working tree not clean after acceptance restore: "
                 f"{remaining.stdout.strip()[:500]}"
             )
+
+    def _ensure_on_main_branch(self, events: ExecutionEventRecorder | None = None) -> None:
+        branch = self._run(["git", "branch", "--show-current"], check=True).stdout.strip()
+        if branch == "main":
+            return
+        logger.warning("worker repo on branch %s — resetting to origin/main", branch or "(detached)")
+        cmd = ["git", "checkout", "main"]
+        if events:
+            events.command_started(cmd, phase="git")
+        self._run(cmd, check=False)
+        fetch = ["git", "fetch", "origin", "main"]
+        self._run(fetch, check=False)
+        reset = ["git", "reset", "--hard", "origin/main"]
+        if events:
+            events.command_started(reset, phase="git")
+        self._run(reset, check=False)
+        if events:
+            events.command_finished(reset, output="reset to origin/main", ok=True, phase="git")
 
     def _apply_harmless_change(self, issue_number: int, *, events: ExecutionEventRecorder | None = None) -> None:
         marker = self.repo_root / "autonomous_dev" / "acceptance_marker.txt"
