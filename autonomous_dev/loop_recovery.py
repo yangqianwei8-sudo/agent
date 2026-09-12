@@ -127,6 +127,7 @@ def cleanup_stale_worker_running_labels(
         return 0
     cleaned = 0
     lease = store.get_lease()
+    now_iso = datetime.now(UTC).isoformat()
     try:
         issues = github.list_open_issues_with_label(LABEL_WORKER_RUNNING, limit=30)
     except GitHubClientError:
@@ -136,11 +137,13 @@ def cleanup_stale_worker_running_labels(
         labels = {lbl["name"] for lbl in (issue.get("labels") or []) if isinstance(lbl, dict)}
         if LABEL_WORKER_RUNNING not in labels:
             continue
-        if lease.locked and lease.issue_number == num and store._lease_is_valid(lease):
+        if lease.locked and lease.issue_number == num and store._lease_is_valid(lease, now_iso=now_iso):
             continue
         running = store.get_running_task_for_issue(num)
         if running is not None and running.status in {TaskStatus.QUEUED, TaskStatus.RUNNING}:
-            if lease.locked and lease.task_id == running.id and store._lease_is_valid(lease):
+            if lease.locked and lease.task_id == running.id and store._lease_is_valid(
+                lease, now_iso=now_iso
+            ):
                 continue
         try:
             github.remove_label(num, LABEL_WORKER_RUNNING)
@@ -155,10 +158,13 @@ def reconcile_stale_running_db_records(store: StateStore) -> int:
     """Mark orphan running/queued DB rows failed when lease is not held."""
     fixed = 0
     lease = store.get_lease()
+    now_iso = datetime.now(UTC).isoformat()
     for task in store.list_tasks_by_status(
         TaskStatus.RUNNING, TaskStatus.QUEUED, limit=50
     ):
-        if lease.locked and lease.task_id == task.id and store._lease_is_valid(lease):
+        if lease.locked and lease.task_id == task.id and store._lease_is_valid(
+            lease, now_iso=now_iso
+        ):
             continue
         last_progress = store.get_task_last_progress_at(task.id)
         if last_progress is not None:
