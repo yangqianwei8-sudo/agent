@@ -3547,3 +3547,57 @@ def test_worker_failure_module_integrated():
     from autonomous_dev.task_router import TaskRouter  # noqa: F401
     from autonomous_dev.worker import Worker  # noqa: F401
 
+
+def test_dashboard_html_exposes_self_heal_panels():
+    """Regression #63: dashboard HTML must render worker_failure and self_heal panels."""
+    from autonomous_dev.dashboard import DASHBOARD_HTML
+
+    assert "self-heal-section" in DASHBOARD_HTML
+    assert "worker-failure-panel" in DASHBOARD_HTML
+    assert "renderSelfHeal" in DASHBOARD_HTML
+    assert "data.worker_failure" in DASHBOARD_HTML
+    assert "data.self_heal" in DASHBOARD_HTML
+
+
+def test_dashboard_primary_task_visible_in_needs_fix(infra_env, monkeypatch):
+    """Regression #63: needs-fix primary task must appear in dashboard current_task."""
+    from autonomous_dev.dashboard import build_dashboard_payload
+    from autonomous_dev.worker_failure import structured_error_text
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    issue_num = 62
+    generation = "2026-09-12T07:05:00Z"
+    execution_key = f"{settings.github_repo}#{issue_num}#{generation}"
+    task = store.create_task(
+        issue_number=issue_num,
+        delivery_id="dash-needs-fix",
+        execution_key=execution_key,
+    )
+    store.update_task(
+        task.id,
+        status=TaskStatus.NEEDS_FIX,
+        error=structured_error_text("worker-startup", "RuntimeError", "startup failed"),
+    )
+    store.upsert_execution_failure(
+        execution_key=execution_key,
+        task_id=task.id,
+        issue_number=issue_num,
+        stage="worker-startup",
+        error_class="RuntimeError",
+        error_message="startup failed",
+        retry_count=1,
+        next_action="Automatic self-heal retry scheduled",
+    )
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard._fetch_issue_labels_bounded",
+        lambda *a, **k: (["cursor-task", "needs-fix"], None),
+    )
+    payload = build_dashboard_payload(settings, store)
+    assert payload["current_task"] is not None
+    assert payload["current_task"]["issue_number"] == issue_num
+    assert payload["current_task"]["task_status"] == "needs-fix"
+    assert payload["worker_failure"]["stage"] == "worker-startup"
+    assert payload["worker_failure"]["message"] == "startup failed"
+
