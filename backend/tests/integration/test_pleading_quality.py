@@ -359,7 +359,7 @@ def test_i_same_material_multiple_spans_one_directory_item(
         assert confirmed is not None
         facts.append(confirmed)
 
-    claim = svc.create_claim_direction(
+    claim = svc.create_claim_direction(_legacy_compat=True,
         case_id=case.id,
         payload={
             "overall_strategy": "请求支付剩余服务费",
@@ -618,7 +618,7 @@ def _seed_fumao_zhongliang_ready(
         ).all()
     )
 
-    claim = svc.create_claim_direction(
+    claim = svc.create_claim_direction(_legacy_compat=True,
         case_id=case.id,
         payload={
             "overall_strategy": "请求中梁地产支付剩余服务费",

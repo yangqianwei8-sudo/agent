@@ -156,7 +156,7 @@ def _seed_writer_world(
                 }
             ],
         }
-    claim = svc.create_claim_direction(
+    claim = svc.create_claim_direction(_legacy_compat=True,
         case_id=case.id, payload=claim_payload, actor_id=actor_id
     )
     claim = svc.confirm_claim_direction(claim.claim_direction_key, actor_id=actor_id)

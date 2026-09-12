@@ -16,6 +16,7 @@ from backend.models import (
     ClaimDirection,
     ClaimFactLink,
     ClaimIssueLink,
+    ConflictFactLink,
     DocumentDraft,
     EvidenceItem,
     EvidenceItemSpan,
@@ -24,8 +25,15 @@ from backend.models import (
     FactEvidenceLink,
     HumanDecision,
     Issue,
+    IssueConflict,
     IssueEvidenceLink,
     IssueFactLink,
+    IssueLegalTheoryLink,
+    IssuePosition,
+    LawyerAssessment,
+    ProofGap,
+    ProofTask,
+    ProofTaskFactLink,
     SourceSpan,
     WorkflowInstance,
 )
@@ -196,3 +204,130 @@ class Repository:
 
     def add_decision(self, decision: HumanDecision) -> None:
         self.session.add(decision)
+
+    def get_current_position(self, position_key: UUID) -> IssuePosition | None:
+        return self.session.scalars(
+            select(IssuePosition).where(
+                IssuePosition.position_key == position_key,
+                IssuePosition.is_current.is_(True),
+            )
+        ).first()
+
+    def list_issue_positions(
+        self, issue_key: UUID, issue_version: int
+    ) -> list[IssuePosition]:
+        return list(
+            self.session.scalars(
+                select(IssuePosition).where(
+                    IssuePosition.issue_key == issue_key,
+                    IssuePosition.issue_version == issue_version,
+                    IssuePosition.is_current.is_(True),
+                )
+            )
+        )
+
+    def get_current_proof_task(self, proof_task_key: UUID) -> ProofTask | None:
+        return self.session.scalars(
+            select(ProofTask).where(
+                ProofTask.proof_task_key == proof_task_key,
+                ProofTask.is_current.is_(True),
+            )
+        ).first()
+
+    def get_proof_task_version(
+        self, proof_task_key: UUID, version: int
+    ) -> ProofTask | None:
+        return self.session.scalars(
+            select(ProofTask).where(
+                ProofTask.proof_task_key == proof_task_key,
+                ProofTask.version == version,
+            )
+        ).first()
+
+    def list_proof_tasks(self, issue_key: UUID, issue_version: int) -> list[ProofTask]:
+        return list(
+            self.session.scalars(
+                select(ProofTask).where(
+                    ProofTask.issue_key == issue_key,
+                    ProofTask.issue_version == issue_version,
+                    ProofTask.is_current.is_(True),
+                )
+            )
+        )
+
+    def list_proof_task_fact_links(
+        self, proof_task_key: UUID, proof_task_version: int
+    ) -> list[ProofTaskFactLink]:
+        return list(
+            self.session.scalars(
+                select(ProofTaskFactLink).where(
+                    ProofTaskFactLink.proof_task_key == proof_task_key,
+                    ProofTaskFactLink.proof_task_version == proof_task_version,
+                    ProofTaskFactLink.status == "ACTIVE",
+                )
+            )
+        )
+
+    def list_issue_conflicts(
+        self, issue_key: UUID, issue_version: int
+    ) -> list[IssueConflict]:
+        return list(
+            self.session.scalars(
+                select(IssueConflict).where(
+                    IssueConflict.issue_key == issue_key,
+                    IssueConflict.issue_version == issue_version,
+                )
+            )
+        )
+
+    def list_conflict_fact_links(self, conflict_id: UUID) -> list[ConflictFactLink]:
+        return list(
+            self.session.scalars(
+                select(ConflictFactLink).where(ConflictFactLink.conflict_id == conflict_id)
+            )
+        )
+
+    def list_proof_gaps(self, issue_key: UUID, issue_version: int) -> list[ProofGap]:
+        return list(
+            self.session.scalars(
+                select(ProofGap).where(
+                    ProofGap.issue_key == issue_key,
+                    ProofGap.issue_version == issue_version,
+                )
+            )
+        )
+
+    def get_current_lawyer_assessment(
+        self, assessment_key: UUID
+    ) -> LawyerAssessment | None:
+        return self.session.scalars(
+            select(LawyerAssessment).where(
+                LawyerAssessment.assessment_key == assessment_key,
+                LawyerAssessment.is_current.is_(True),
+            )
+        ).first()
+
+    def list_lawyer_assessments(
+        self, issue_key: UUID, issue_version: int
+    ) -> list[LawyerAssessment]:
+        return list(
+            self.session.scalars(
+                select(LawyerAssessment).where(
+                    LawyerAssessment.issue_key == issue_key,
+                    LawyerAssessment.issue_version == issue_version,
+                ).order_by(LawyerAssessment.version.asc())
+            )
+        )
+
+    def list_issue_legal_theory_links(
+        self, issue_key: UUID, issue_version: int
+    ) -> list[IssueLegalTheoryLink]:
+        return list(
+            self.session.scalars(
+                select(IssueLegalTheoryLink).where(
+                    IssueLegalTheoryLink.issue_key == issue_key,
+                    IssueLegalTheoryLink.issue_version == issue_version,
+                    IssueLegalTheoryLink.status == "ACTIVE",
+                )
+            )
+        )

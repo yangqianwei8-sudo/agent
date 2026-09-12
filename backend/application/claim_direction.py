@@ -409,6 +409,7 @@ class ClaimDirectionService:
             case_id=case_id,
             payload=validated,
             actor_id=actor_id,
+            _legacy_compat=True,
         )
         if created.status != "CANDIDATE":
             raise ValidationError("claim direction proposal must be CANDIDATE")

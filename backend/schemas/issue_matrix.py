@@ -31,7 +31,9 @@ class MatrixEvidenceRef(BaseModel):
     explanation: str | None = None
 
 
-class GapItem(BaseModel):
+class StructuralGap(BaseModel):
+    """Computed structural completeness warning — NOT persisted ProofGap SSOT."""
+
     model_config = ConfigDict(extra="forbid")
 
     type: str  # FACT_GAP | EVIDENCE_GAP
@@ -40,6 +42,10 @@ class GapItem(BaseModel):
     related_fact_key: str | None = None
     related_fact_version: int | None = None
     description: str
+
+
+# Legacy alias for compatibility projections
+GapItem = StructuralGap
 
 
 class IssueMatrixItem(BaseModel):
@@ -58,8 +64,9 @@ class IssueMatrixItem(BaseModel):
     supporting_evidence: list[MatrixEvidenceRef] = Field(default_factory=list)
     adverse_evidence: list[MatrixEvidenceRef] = Field(default_factory=list)
     context_evidence: list[MatrixEvidenceRef] = Field(default_factory=list)
-    fact_gaps: list[GapItem] = Field(default_factory=list)
-    evidence_gaps: list[GapItem] = Field(default_factory=list)
+    structural_warnings: list[StructuralGap] = Field(default_factory=list)
+    fact_gaps: list[StructuralGap] = Field(default_factory=list)
+    evidence_gaps: list[StructuralGap] = Field(default_factory=list)
     lawyer_confirmation_state: str
     stale_state: dict[str, Any] = Field(default_factory=dict)
 
@@ -69,7 +76,8 @@ class IssueMatrixView(BaseModel):
 
     case_id: str
     items: list[IssueMatrixItem] = Field(default_factory=list)
-    aggregate_gaps: list[GapItem] = Field(default_factory=list)
+    aggregate_structural_warnings: list[StructuralGap] = Field(default_factory=list)
+    aggregate_gaps: list[StructuralGap] = Field(default_factory=list)
     confirmed_issue_count: int = 0
     candidate_issue_count: int = 0
     legal_theories: list[dict[str, Any]] = Field(default_factory=list)

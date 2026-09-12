@@ -123,7 +123,7 @@ def _seed_case_b(session, *, owner_id: uuid.UUID, actor_id: uuid.UUID):
         facts.append(fact)
         evidences.append(evidence)
 
-    claim = svc.create_claim_direction(
+    claim = svc.create_claim_direction(_legacy_compat=True,
         case_id=case.id,
         payload={
             "overall_strategy": "请求中梁支付剩余设计费",

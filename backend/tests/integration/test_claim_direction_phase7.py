@@ -467,7 +467,7 @@ def test_q_empty_supporting_facts_cannot_confirm(
     domain, case, _, _ = _seed_confirmed_world(
         db_session, owner_id=owner_id, actor_id=actor_id
     )
-    claim = domain.create_claim_direction(
+    claim = domain.create_claim_direction(_legacy_compat=True,
         case_id=case.id,
         payload={
             "overall_strategy": "解除",

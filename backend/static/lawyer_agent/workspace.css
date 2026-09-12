@@ -1275,3 +1275,15 @@ a:hover { color: var(--accent-hover); }
 }
 .evidence-modal-body { max-height: 60vh; overflow: auto; }
 .list-table .small { font-size: 0.78rem; }
+.issue-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  background: var(--bg-subtle);
+}
+.issue-card.candidate { border-left: 3px solid var(--warn); }
+.issue-card.confirmed { border-left: 3px solid var(--accent-border); }
+.issue-meta { display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.85rem; margin: 0.35rem 0; }
+.issue-workbench-grid { display: grid; gap: 1rem; margin-top: 1rem; }
+.proof-task-block { margin-bottom: 0.75rem; padding: 0.5rem 0.75rem; background: var(--bg); border-radius: 6px; }

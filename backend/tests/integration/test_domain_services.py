@@ -379,7 +379,9 @@ def test_claim_direction_supporting_facts(
             }
         ],
     }
-    claim = svc.create_claim_direction(case_id=case.id, payload=missing, actor_id=actor_id)
+    claim = svc.create_claim_direction(
+        _legacy_compat=True, case_id=case.id, payload=missing, actor_id=actor_id
+    )
     with pytest.raises(ValidationError):
         svc.confirm_claim_direction(claim.claim_direction_key, actor_id=actor_id)
 
@@ -395,7 +397,7 @@ def test_claim_direction_supporting_facts(
             }
         ],
     }
-    claim2 = svc.create_claim_direction(
+    claim2 = svc.create_claim_direction(_legacy_compat=True,
         case_id=case.id, payload=candidate_payload, actor_id=actor_id
     )
     with pytest.raises(ValidationError):
@@ -569,7 +571,9 @@ def test_claim_direction_changed_stales_theory_and_draft(
             }
         ],
     }
-    claim = svc.create_claim_direction(case_id=case.id, payload=payload, actor_id=actor_id)
+    claim = svc.create_claim_direction(
+        _legacy_compat=True, case_id=case.id, payload=payload, actor_id=actor_id
+    )
     svc.confirm_claim_direction(claim.claim_direction_key, actor_id=actor_id)
     theory = LegalTheory(
         case_id=case.id,

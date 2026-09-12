@@ -220,3 +220,109 @@ class StaleEvent(StrEnum):
     ISSUE_CHANGED = "IssueChanged"
     EVIDENCE_EXCLUDED = "EvidenceExcluded"
     EXTRACTED_CONTENT_REBUILT = "ExtractedContentRebuilt"
+
+
+class PositionSide(StrEnum):
+    OUR = "OUR"
+    OPPONENT = "OPPONENT"
+
+
+class PositionType(StrEnum):
+    ASSERTION = "ASSERTION"
+    ANTICIPATED_DEFENSE = "ANTICIPATED_DEFENSE"
+    FORMAL_DEFENSE = "FORMAL_DEFENSE"
+
+
+class PositionSourceType(StrEnum):
+    AI_PROPOSED = "AI_PROPOSED"
+    LAWYER_CREATED = "LAWYER_CREATED"
+    LAWYER_REFINED = "LAWYER_REFINED"
+    OPPONENT_MATERIAL = "OPPONENT_MATERIAL"
+
+
+class PositionStatus(StrEnum):
+    CANDIDATE = "CANDIDATE"
+    CONFIRMED = "CONFIRMED"
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"
+
+
+class ProofTaskStatus(StrEnum):
+    CANDIDATE = "CANDIDATE"
+    ADOPTED = "ADOPTED"
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"
+    WAIVED = "WAIVED"
+
+
+class ProofTaskSourceType(StrEnum):
+    AI_PROPOSED = "AI_PROPOSED"
+    LAWYER_CREATED = "LAWYER_CREATED"
+    LAWYER_REFINED = "LAWYER_REFINED"
+
+
+class ProofTaskFactLinkRole(StrEnum):
+    SUPPORT = "SUPPORT"
+    ADVERSE = "ADVERSE"
+    CONTEXT = "CONTEXT"
+
+
+class ConflictStatus(StrEnum):
+    CANDIDATE = "CANDIDATE"
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
+    DISMISSED = "DISMISSED"
+
+
+class ConflictSourceType(StrEnum):
+    AI_DETECTED = "AI_DETECTED"
+    LAWYER_CREATED = "LAWYER_CREATED"
+
+
+class ConflictFactRole(StrEnum):
+    SIDE_A = "SIDE_A"
+    SIDE_B = "SIDE_B"
+    CONTEXT = "CONTEXT"
+
+
+class ProofGapType(StrEnum):
+    FACT = "FACT"
+    EVIDENCE = "EVIDENCE"
+    SOURCE = "SOURCE"
+    LEGAL_RESEARCH = "LEGAL_RESEARCH"
+
+
+class ProofGapStatus(StrEnum):
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
+    WAIVED = "WAIVED"
+    SUPERSEDED = "SUPERSEDED"
+
+
+class ProofGapSourceType(StrEnum):
+    AI_DETECTED = "AI_DETECTED"
+    LAWYER_CREATED = "LAWYER_CREATED"
+
+
+class LawyerAssessmentStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    SUPERSEDED = "SUPERSEDED"
+    WITHDRAWN = "WITHDRAWN"
+
+
+class IssueLegalTheoryRole(StrEnum):
+    OUR_THEORY = "OUR_THEORY"
+    COUNTER_THEORY = "COUNTER_THEORY"
+    CONTEXT = "CONTEXT"
+
+
+class ProofState(StrEnum):
+    RED = "RED"
+    YELLOW = "YELLOW"
+    GREEN = "GREEN"
+
+
+class LawyerJudgmentState(StrEnum):
+    NOT_ANALYZED = "NOT_ANALYZED"
+    RESEARCHING = "RESEARCHING"
+    LAWYER_ASSESSMENT_FORMED = "LAWYER_ASSESSMENT_FORMED"

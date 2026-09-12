@@ -55,6 +55,7 @@
     <a href="#section-materials" class="section-nav-link" data-nav="materials">材料 <span class="nav-badge" data-nav-badge="materials"></span></a>
     <a href="#section-evidence" class="section-nav-link" data-nav="evidence">证据 <span class="nav-badge" data-nav-badge="evidence"></span></a>
     <a href="#section-facts" class="section-nav-link" data-nav="facts">事实 <span class="nav-badge" data-nav-badge="facts"></span></a>
+    <a href="#section-issues" class="section-nav-link" data-nav="issues">争议焦点 <span class="nav-badge" data-nav-badge="issues"></span></a>
     <a href="#section-parties" class="section-nav-link" data-nav="parties">当事人 <span class="nav-badge" data-nav-badge="parties"></span></a>
     <a href="#section-claim" class="section-nav-link" data-nav="claim">诉请 <span class="nav-badge" data-nav-badge="claim"></span></a>
     <a href="#section-readiness" class="section-nav-link" data-nav="readiness">起诉准备 <span class="nav-badge" data-nav-badge="readiness"></span></a>
@@ -184,6 +185,18 @@
           <button type="button" class="btn-icon collapse-toggle" data-collapse="section-facts" aria-label="折叠/展开">▾</button>
         </div>
         <div class="card-body"><div id="facts-panel"></div></div>
+      </div>
+
+      <div class="card section-card" id="section-issues">
+        <div class="card-head">
+          <h2><span class="section-icon" aria-hidden="true">★</span> 争议焦点</h2>
+          <button type="button" class="btn-icon collapse-toggle" data-collapse="section-issues" aria-label="折叠/展开">▾</button>
+        </div>
+        <div class="card-body">
+          <p class="muted subsection-hint">本案现在主要争什么？以下为律师确认焦点与待确认候选。</p>
+          <div id="issues-overview-panel"></div>
+          <div id="issue-workbench-panel" class="issue-workbench" hidden></div>
+        </div>
       </div>
 
       <div class="card section-card" id="section-claim">

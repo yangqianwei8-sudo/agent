@@ -993,7 +993,10 @@ def test_reviewer_live_acceptance_uses_marker_only_in_real_mode(
     monkeypatch.setattr(
         svc,
         "_git_diff",
-        lambda _sha: "diff --git a/autonomous_dev/acceptance_marker.txt b/autonomous_dev/acceptance_marker.txt",
+        lambda _sha: (
+            "diff --git a/autonomous_dev/acceptance_marker.txt "
+            "b/autonomous_dev/acceptance_marker.txt"
+        ),
     )
     ctx = svc.gather_context(
         issue_number=1,

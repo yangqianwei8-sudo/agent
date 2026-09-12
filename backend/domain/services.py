@@ -32,6 +32,7 @@ from backend.domain.enums import (
     StaleEvent,
 )
 from backend.domain.errors import ConflictError, ImmutableError, NotFoundError, ValidationError
+from backend.domain.issue_centered import IssueCenteredDomainMixin
 from backend.domain.stale import invalidate_dependencies
 from backend.models import (
     AuditLog,
@@ -73,7 +74,7 @@ def _confirmation_set_hash(parts: list[str]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-class DomainService:
+class DomainService(IssueCenteredDomainMixin):
     def __init__(self, session: Session) -> None:
         self.session = session
         self.repo = Repository(session)
@@ -913,7 +914,12 @@ class DomainService:
         case_id: UUID,
         payload: dict[str, Any],
         actor_id: UUID | None = None,
+        _legacy_compat: bool = False,
     ) -> ClaimDirection:
+        if not _legacy_compat:
+            raise ValidationError(
+                "ClaimDirection production mutation disabled; use Claim Domain instead"
+            )
         self._require_case(case_id)
         validated = validate_claim_direction_payload(payload)
         claim = ClaimDirection(

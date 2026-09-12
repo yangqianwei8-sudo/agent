@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 from backend.agent.dto import AgentResponse
 from backend.application.case_actions import CaseActionService
 from backend.application.claim_view import ClaimViewService
+from backend.application.issue_commands import IssueCommandService
 from backend.application.issue_matrix import IssueMatrixService
+from backend.application.issue_work_product import IssueWorkProductService
 from backend.application.material_management import MaterialManagementService
 from backend.application.material_upload import MaterialUploadService
 from backend.application.party_management import PartyManagementService
@@ -130,6 +132,147 @@ def api_workspace(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+class IssueCommandBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command: str = Field(min_length=1, max_length=64)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    actor_id: UUID | None = None
+
+
+@router.get("/{case_id}/issue-work-product")
+def api_case_issue_work_product(
+    case_id: UUID,
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> dict[str, Any]:
+    case = session.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    try:
+        view = IssueWorkProductService(session).build_case(case_id)
+        return view.model_dump(mode="json")
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+
+
+@router.get("/{case_id}/issues/{issue_key}/work-product")
+def api_issue_work_product(
+    case_id: UUID,
+    issue_key: UUID,
+    issue_version: int | None = None,
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> dict[str, Any]:
+    case = session.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    try:
+        view = IssueWorkProductService(session).build_issue(issue_key, issue_version)
+        return view.model_dump(mode="json")
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+
+
+@router.get("/{case_id}/litigation-plan")
+def api_litigation_plan(
+    case_id: UUID,
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> dict[str, Any]:
+    case = session.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    try:
+        view = IssueWorkProductService(session).build_litigation_plan(case_id)
+        return view.model_dump(mode="json")
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+
+
+@router.post("/{case_id}/issue-commands")
+def api_issue_command(
+    case_id: UUID,
+    body: IssueCommandBody,
+    session: Session = Depends(get_db_session),  # noqa: B008
+) -> dict[str, Any]:
+    case = session.get(Case, case_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="case not found")
+    actor = body.actor_id or case.owner_user_id
+    svc = IssueCommandService(session, actor_id=actor)
+    cmd = body.command
+    p = body.payload
+    try:
+        if cmd == "confirm_issue":
+            result = svc.confirm_issue(UUID(str(p["issue_key"])))
+        elif cmd == "reject_issue":
+            result = svc.reject_issue(UUID(str(p["issue_key"])))
+        elif cmd == "amend_issue":
+            result = svc.amend_issue(
+                UUID(str(p["issue_key"])),
+                new_statement=str(p["new_statement"]),
+            )
+        elif cmd == "merge_issues":
+            result = svc.merge_issues(
+                case_id,
+                source_issue_keys=[UUID(str(k)) for k in p["source_issue_keys"]],
+                merged_statement=str(p["merged_statement"]),
+            )
+        elif cmd == "split_issue":
+            result = svc.split_issue(
+                case_id,
+                source_issue_key=UUID(str(p["source_issue_key"])),
+                targets=p["targets"],
+            )
+        elif cmd == "confirm_position":
+            result = svc.confirm_position(UUID(str(p["position_key"])))
+        elif cmd == "adopt_proof_task":
+            result = svc.adopt_proof_task(UUID(str(p["proof_task_key"])))
+        elif cmd == "waive_proof_task":
+            result = svc.waive_proof_task(UUID(str(p["proof_task_key"])))
+        elif cmd == "link_fact_to_proof_task":
+            result = svc.link_fact_to_proof_task(
+                case_id=case_id,
+                proof_task_key=UUID(str(p["proof_task_key"])),
+                proof_task_version=int(p["proof_task_version"]),
+                fact_key=UUID(str(p["fact_key"])),
+                fact_version=int(p["fact_version"]),
+                role=str(p["role"]),
+            )
+        elif cmd == "resolve_conflict":
+            result = svc.resolve_conflict(
+                UUID(str(p["conflict_id"])), resolution_note=str(p["resolution_note"])
+            )
+        elif cmd == "dismiss_conflict":
+            result = svc.dismiss_conflict(
+                UUID(str(p["conflict_id"])), resolution_note=str(p["resolution_note"])
+            )
+        elif cmd == "resolve_proof_gap":
+            result = svc.resolve_proof_gap(
+                UUID(str(p["gap_id"])), resolution_note=str(p["resolution_note"])
+            )
+        elif cmd == "waive_proof_gap":
+            result = svc.waive_proof_gap(
+                UUID(str(p["gap_id"])), resolution_note=str(p["resolution_note"])
+            )
+        elif cmd == "create_lawyer_assessment":
+            result = svc.create_lawyer_assessment(
+                case_id=case_id,
+                issue_key=UUID(str(p["issue_key"])),
+                issue_version=int(p["issue_version"]),
+                content=str(p["content"]),
+            )
+        elif cmd == "amend_lawyer_assessment":
+            result = svc.amend_lawyer_assessment(
+                UUID(str(p["assessment_key"])), new_content=str(p["new_content"])
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"unknown command: {cmd}")
+    except (ValidationError, ConflictError) as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    return {"command": cmd, "result": result}
 
 
 @router.get("/{case_id}/issue-matrix")

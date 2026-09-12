@@ -17,11 +17,11 @@ from backend.models import (
 )
 from backend.repositories.base import Repository
 from backend.schemas.issue_matrix import (
-    GapItem,
     IssueMatrixItem,
     IssueMatrixView,
     MatrixEvidenceRef,
     MatrixFactRef,
+    StructuralGap,
 )
 
 
@@ -53,7 +53,7 @@ class IssueMatrixService:
         )
 
         items: list[IssueMatrixItem] = []
-        aggregate_gaps: list[GapItem] = []
+        aggregate_gaps: list[StructuralGap] = []
         confirmed_count = 0
         candidate_count = 0
 
@@ -67,8 +67,7 @@ class IssueMatrixService:
 
             item = self._build_item(issue)
             items.append(item)
-            aggregate_gaps.extend(item.fact_gaps)
-            aggregate_gaps.extend(item.evidence_gaps)
+            aggregate_gaps.extend(item.structural_warnings)
             if issue.status == "CONFIRMED":
                 confirmed_count += 1
             elif issue.status == "CANDIDATE":
@@ -78,6 +77,7 @@ class IssueMatrixService:
         return IssueMatrixView(
             case_id=str(case_id),
             items=items,
+            aggregate_structural_warnings=aggregate_gaps,
             aggregate_gaps=aggregate_gaps,
             confirmed_issue_count=confirmed_count,
             candidate_issue_count=candidate_count,
@@ -138,6 +138,7 @@ class IssueMatrixService:
             supporting_evidence=supporting_evidence,
             adverse_evidence=adverse_evidence,
             context_evidence=context_evidence,
+            structural_warnings=fact_gaps + evidence_gaps,
             fact_gaps=fact_gaps,
             evidence_gaps=evidence_gaps,
             lawyer_confirmation_state=self._confirmation_state(issue),
@@ -182,16 +183,16 @@ class IssueMatrixService:
         *,
         supporting_facts: list[MatrixFactRef],
         context_facts: list[MatrixFactRef],
-    ) -> tuple[list[GapItem], list[GapItem]]:
-        fact_gaps: list[GapItem] = []
-        evidence_gaps: list[GapItem] = []
+    ) -> tuple[list[StructuralGap], list[StructuralGap]]:
+        fact_gaps: list[StructuralGap] = []
+        evidence_gaps: list[StructuralGap] = []
 
         confirmed_support = [
             f for f in supporting_facts if f.status == "CONFIRMED" and f.role == "SUPPORT"
         ]
         if issue.status in {"CANDIDATE", "CONFIRMED"} and not confirmed_support:
             fact_gaps.append(
-                GapItem(
+                StructuralGap(
                     type="FACT_GAP",
                     issue_key=str(issue.issue_key),
                     issue_version=issue.version,
@@ -204,7 +205,7 @@ class IssueMatrixService:
         ]:
             if not self._fact_has_evidence(fact_ref.fact_key, fact_ref.fact_version):
                 evidence_gaps.append(
-                    GapItem(
+                    StructuralGap(
                         type="EVIDENCE_GAP",
                         issue_key=str(issue.issue_key),
                         issue_version=issue.version,

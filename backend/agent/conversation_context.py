@@ -63,6 +63,11 @@ class CaseConversationContext:
     draft: dict[str, Any] | None = None
     material_pool: dict[str, Any] = field(default_factory=dict)
     pleading_readiness: dict[str, Any] | None = None
+    issue_work_product: dict[str, Any] | None = None
+    current_issue_key: str | None = None
+    current_issue_version: int | None = None
+    current_object_type: str | None = None
+    current_object_ref: str | None = None
     history: list[ConversationTurn] = field(default_factory=list)
     source_excerpts: list[SourceExcerpt] = field(default_factory=list)
 
@@ -92,6 +97,24 @@ class CaseConversationContext:
             "draft": self.draft,
             "material_pool": self.material_pool,
             "pleading_readiness": self.pleading_readiness,
+            "issue_work_product": self.issue_work_product,
+            "current_issue": {
+                "issue_key": self.current_issue_key,
+                "issue_version": self.current_issue_version,
+            }
+            if self.current_issue_key
+            else None,
+            "current_object": {
+                "type": self.current_object_type,
+                "ref": self.current_object_ref,
+            }
+            if self.current_object_type
+            else None,
+            "language_discipline": {
+                "before_confirmation": "根据目前材料，我建议重点审查以下候选争议焦点。",
+                "after_confirmation": "当前律师确认的办案焦点包括……",
+                "anticipated_defense": "必须标注为可能抗辩，不得表述为对方正式主张",
+            },
             "recent_conversation": [
                 {"role": t.role, "content": t.content} for t in self.history
             ],
@@ -125,6 +148,10 @@ class CaseConversationContextBuilder:
         case_id: UUID,
         conversation_id: UUID | None,
         user_message: str,
+        current_issue_key: UUID | None = None,
+        current_issue_version: int | None = None,
+        current_object_type: str | None = None,
+        current_object_ref: str | None = None,
     ) -> CaseConversationContext:
         case = self.session.get(Case, case_id)
         if case is None:
@@ -145,6 +172,11 @@ class CaseConversationContextBuilder:
         from backend.application.pleading_readiness import PleadingReadinessService
 
         readiness = PleadingReadinessService(self.session).evaluate(case_id)
+        from backend.application.issue_work_product import IssueWorkProductService
+
+        iwp = IssueWorkProductService(self.session).build_case(case_id).model_dump(
+            mode="json"
+        )
 
         return CaseConversationContext(
             case_title=case.title,
@@ -166,6 +198,11 @@ class CaseConversationContextBuilder:
                 "note": "usable materials only participate in analysis",
             },
             pleading_readiness=readiness.model_dump(mode="json"),
+            issue_work_product=iwp,
+            current_issue_key=str(current_issue_key) if current_issue_key else None,
+            current_issue_version=current_issue_version,
+            current_object_type=current_object_type,
+            current_object_ref=current_object_ref,
             history=history,
             source_excerpts=excerpts,
         )

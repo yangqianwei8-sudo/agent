@@ -60,6 +60,8 @@
     parties: document.getElementById("parties-panel"),
     evidence: document.getElementById("evidence-panel"),
     facts: document.getElementById("facts-panel"),
+    issuesOverview: document.getElementById("issues-overview-panel"),
+    issueWorkbench: document.getElementById("issue-workbench-panel"),
     claim: document.getElementById("claim-panel"),
     draft: document.getElementById("draft-panel"),
     chatLog: document.getElementById("chat-log"),
@@ -569,6 +571,84 @@
       </tbody></table></div></div>`;
   }
 
+  const PROOF_STATE_ICON = { RED: "🔴", YELLOW: "🟡", GREEN: "🟢" };
+
+  function renderIssues(iwp) {
+    if (!els.issuesOverview) return;
+    const data = iwp || {};
+    const confirmed = data.confirmed_issues || [];
+    const candidates = data.candidate_issues || [];
+    if (!confirmed.length && !candidates.length) {
+      els.issuesOverview.innerHTML = '<p class="muted">暂无争议焦点。可通过案情分析或 Agent 提出候选焦点。</p>';
+      if (els.issueWorkbench) els.issueWorkbench.hidden = true;
+      return;
+    }
+    const cards = [];
+    confirmed.forEach((issue) => {
+      const icon = PROOF_STATE_ICON[issue.proof_state] || "⚪";
+      cards.push(
+        `<article class="issue-card confirmed" data-issue-key="${issue.issue_key}">
+          <header><strong>${icon} ${escapeHtml(issue.statement)}</strong></header>
+          <div class="issue-meta muted">
+            <span>证明状态：${escapeHtml(issue.proof_state_label || issue.proof_state)}</span>
+            <span>律师判断：${escapeHtml(issue.lawyer_judgment_state_label || "—")}</span>
+            <span>证明任务 ${issue.proof_task_count || 0} · 缺口 ${issue.open_proof_gap_count || 0} · 冲突 ${issue.conflict_count || 0}</span>
+          </div>
+          <p class="issue-next">${escapeHtml(issue.next_action || "")}</p>
+          <button type="button" class="btn small ghost btn-open-issue" data-issue-key="${issue.issue_key}">打开焦点工作台</button>
+        </article>`
+      );
+    });
+    candidates.forEach((issue) => {
+      cards.push(
+        `<article class="issue-card candidate" data-issue-key="${issue.issue_key}">
+          <header><strong>待确认 · ${escapeHtml(issue.statement)}</strong></header>
+          <p class="muted">根据目前材料，建议重点审查以下候选争议焦点。</p>
+        </article>`
+      );
+    });
+    els.issuesOverview.innerHTML = cards.join("");
+    els.issuesOverview.querySelectorAll(".btn-open-issue").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.getAttribute("data-issue-key");
+        const issue = confirmed.find((i) => i.issue_key === key);
+        if (issue) renderIssueWorkbench(issue);
+      });
+    });
+  }
+
+  function renderIssueWorkbench(issue) {
+    if (!els.issueWorkbench || !issue) return;
+    els.issueWorkbench.hidden = false;
+    const positions = issue.positions || {};
+    const ourPos = (positions.our_current || []).map((p) => `<li>${escapeHtml(p.statement)}</li>`).join("") || "<li class='muted'>暂无</li>";
+    const antDef = (positions.anticipated_defenses || []).map((p) => `<li>${escapeHtml(p.statement)} <span class='muted'>(可能抗辩)</span></li>`).join("") || "<li class='muted'>暂无</li>";
+    const tasks = (issue.proof_tasks || []).map((t) => {
+      const facts = [...(t.support_facts || []), ...(t.adverse_facts || []), ...(t.context_facts || [])];
+      const factLines = facts.map((f) => `<li>${escapeHtml(f.statement)} <span class="tag">${escapeHtml(f.role)}</span></li>`).join("") || "<li class='muted'>暂无关联事实</li>";
+      return `<div class="proof-task-block"><h4>${escapeHtml(t.description)} <span class="tag">${escapeHtml(t.display_status)}</span></h4><ul>${factLines}</ul></div>`;
+    }).join("") || "<p class='muted'>暂无证明任务</p>";
+    const conflicts = (issue.conflicts || []).map((c) => `<li>${escapeHtml(c.description)} <span class="tag">${escapeHtml(c.display_status)}</span></li>`).join("") || "<li class='muted'>暂无</li>";
+    const gaps = (issue.proof_gaps || []).length
+      ? issue.proof_tasks.flatMap((t) => t.proof_gaps || []).map((g) => `<li>${escapeHtml(g.description || g.gap_type)}</li>`).join("")
+      : "";
+    const gapHtml = gaps || "<li class='muted'>暂无持久化证明缺口</li>";
+    const assessment = issue.lawyer_assessment
+      ? `<div class="block"><h4>律师判断</h4><p>${escapeHtml(issue.lawyer_assessment.content)}</p></div>`
+      : "<p class='muted'>尚未形成正式律师判断</p>";
+    els.issueWorkbench.innerHTML = `
+      <h3>焦点工作台：${escapeHtml(issue.statement)}</h3>
+      <div class="issue-workbench-grid">
+        <section><h4>我方当前主张</h4><ul>${ourPos}</ul></section>
+        <section><h4>对方可能抗辩</h4><ul>${antDef}</ul></section>
+        <section><h4>证明任务</h4>${tasks}</section>
+        <section><h4>冲突（AI 检测可能张力，不判断真伪）</h4><ul>${conflicts}</ul></section>
+        <section><h4>证明缺口</h4><ul>${gapHtml}</ul></section>
+        <section>${assessment}</section>
+      </div>`;
+    navigateToSection("issues");
+  }
+
   function renderFacts(list) {
     if (!list || !list.length) {
       els.facts.innerHTML = emptyState("暂未形成待确认案件事实。", "📌");
@@ -815,6 +895,7 @@
       "section-parties": pendingParties > 0,
       "section-evidence": pendingEvidence > 0,
       "section-facts": pendingFacts > 0,
+      "section-issues": ((data.issue_work_product && data.issue_work_product.candidate_issues) || []).length > 0,
       "section-claim": pendingMap.claim > 0,
       "section-readiness": readinessPending > 0,
       "section-draft": pendingMap.draft > 0,
@@ -910,6 +991,7 @@
     renderParties(data.parties || []);
     renderEvidence(data.evidence || []);
     renderFacts(data.facts || []);
+    renderIssues(data.issue_work_product);
     renderClaim(data.claim_direction);
     renderDraft(data.draft);
     renderChat(data.conversation || []);

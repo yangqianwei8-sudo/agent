@@ -31,6 +31,16 @@ from backend.models.interaction import (
     HumanDecision,
     SystemCommand,
 )
+from backend.models.issue_centered import (
+    ConflictFactLink,
+    IssueConflict,
+    IssueLegalTheoryLink,
+    IssuePosition,
+    LawyerAssessment,
+    ProofGap,
+    ProofTask,
+    ProofTaskFactLink,
+)
 from backend.models.snapshot import WorkflowSnapshot
 from backend.models.workflow import (
     NodeRun,
@@ -60,6 +70,14 @@ __all__ = [
     "ClaimDirection",
     "ClaimIssueLink",
     "ClaimFactLink",
+    "IssuePosition",
+    "ProofTask",
+    "ProofTaskFactLink",
+    "IssueConflict",
+    "ConflictFactLink",
+    "ProofGap",
+    "LawyerAssessment",
+    "IssueLegalTheoryLink",
     "WorkflowTemplate",
     "WorkflowNode",
     "WorkflowInstance",

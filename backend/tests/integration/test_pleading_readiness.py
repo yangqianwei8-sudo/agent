@@ -122,7 +122,7 @@ def _seed_incident_case(
             )
         )
 
-    claim = svc.create_claim_direction(
+    claim = svc.create_claim_direction(_legacy_compat=True,
         case_id=case.id,
         payload={
             "overall_strategy": "确认合同关系并要求被告支付服务费",

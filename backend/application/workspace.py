@@ -15,6 +15,7 @@ from backend.application.case_work_product import (
 )
 from backend.application.claim_view import ClaimViewService
 from backend.application.issue_matrix import IssueMatrixService
+from backend.application.issue_work_product import IssueWorkProductService
 from backend.application.material_usability import (
     MaterialUsabilityPolicy,
     MaterialUsabilityView,
@@ -88,6 +89,9 @@ class WorkspaceQueryService:
         issue_matrix = IssueMatrixService(self.session).build(case_id).model_dump(
             mode="json"
         )
+        issue_work_product = IssueWorkProductService(self.session).build_case(
+            case_id
+        ).model_dump(mode="json")
         claims_view = ClaimViewService(self.session).build(case_id).model_dump(mode="json")
         pleading_input_summary = PleadingStructuredInputProductionBuilder(
             self.session
@@ -105,6 +109,7 @@ class WorkspaceQueryService:
             "draft": draft,
             "pleading_readiness": readiness,
             "issue_matrix": issue_matrix,
+            "issue_work_product": issue_work_product,
             "claims": claims_view,
             "pleading_input_summary": pleading_input_summary,
             "conversation": self._conversation(case_id),
