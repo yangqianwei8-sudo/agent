@@ -50,13 +50,6 @@ def is_current_task_recoverable(
         and latest.execution_key == execution_key
     ):
         return False
-    if (
-        latest is not None
-        and latest.status == TaskStatus.FAILED
-        and latest.error
-        and "stale worker lease recovered" in latest.error
-    ):
-        return True
 
     return True
 

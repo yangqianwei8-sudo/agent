@@ -285,7 +285,7 @@ class Worker:
             f"Reply with exactly: {CURSOR_RUNTIME_OK_MARKER}\n\n{issue_body}"
         )
         self._invoke_cursor_agent(prompt, events=events)
-        self._run_acceptance_gate_tests(events)
+        self._run_tests(events)
         commit_sha = self._commit_and_push(task.issue_number, events=events)
         self._verify_push(commit_sha)
         return commit_sha
@@ -342,15 +342,6 @@ class Worker:
             events.ruff_finished(output=result.stdout + result.stderr, passed=ok)
         if not ok:
             raise RuntimeError(f"ruff failed: {(result.stdout + result.stderr)[:500]}")
-
-    def _run_acceptance_gate_tests(self, events: ExecutionEventRecorder | None = None) -> None:
-        """Minimal gate for P0 acceptance — avoid full-repo ruff blocking unrelated drift."""
-        cmd = [sys.executable, "-m", "pytest", "backend/tests/test_health.py", "-q"]
-        if events:
-            events.test_started(cmd)
-        result = self._run(cmd, check=True)
-        if events:
-            events.test_finished(output=result.stdout + result.stderr, passed=True)
 
     def _run_tests(self, events: ExecutionEventRecorder | None = None) -> None:
         cmd = [sys.executable, "-m", "pytest", "backend/tests/test_health.py", "-q"]

@@ -18,7 +18,6 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _PROGRESS_EVENT_TYPES = (
-    "TASK_STARTED",
     "CURSOR_STARTED",
     "CURSOR_PROGRESS",
     "CURSOR_FINISHED",
