@@ -7,6 +7,7 @@ import hmac
 import json
 import subprocess
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -1168,9 +1169,13 @@ def test_review_worker_no_deadlock_on_transient_kick(
         lambda _s, _st: executor,
     )
     executor.schedule_review(task, commit_sha="deadlock123456")
+    deadline = time.monotonic() + 30
     inv = store.get_review_invocation(task.id, "deadlock123456")
+    while inv is None or inv.status != ReviewInvocationStatus.COMPLETED:
+        assert time.monotonic() < deadline, "review did not complete after async kick"
+        time.sleep(0.05)
+        inv = store.get_review_invocation(task.id, "deadlock123456")
     assert inv is not None
-    assert inv.status == ReviewInvocationStatus.COMPLETED
     assert inv.verdict == ReviewVerdict.PASS
 
 

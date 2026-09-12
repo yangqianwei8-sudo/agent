@@ -1324,6 +1324,37 @@ class StateStore:
             )
             return conn.total_changes > 0
 
+    def recover_orphaned_reviewer_lock(self, *, stall_seconds: int = 45) -> bool:
+        """Release reviewer lock held without an active RUNNING invocation."""
+        cutoff = (datetime.now(UTC) - timedelta(seconds=stall_seconds)).isoformat()
+        with self._lock, self._conn() as conn:
+            row = conn.execute("SELECT * FROM reviewer_lock WHERE id = 1").fetchone()
+            if not row or not row["locked"]:
+                return False
+            acquired = row["acquired_at"]
+            if not acquired or acquired > cutoff:
+                return False
+            task_id = row["task_id"]
+            if task_id is not None:
+                running = conn.execute(
+                    """
+                    SELECT 1 FROM review_invocations
+                    WHERE task_id = ? AND status = ?
+                    """,
+                    (task_id, ReviewInvocationStatus.RUNNING.value),
+                ).fetchone()
+                if running:
+                    return False
+            conn.execute(
+                """
+                UPDATE reviewer_lock
+                SET locked = 0, task_id = NULL, owner = NULL,
+                    acquired_at = NULL, lease_expires_at = NULL
+                WHERE id = 1
+                """
+            )
+            return conn.total_changes > 0
+
     def try_acquire_reviewer_lock(
         self,
         task_id: int,
@@ -1332,6 +1363,7 @@ class StateStore:
         ttl_seconds: int = 300,
     ) -> bool:
         self.recover_stale_reviewer_lock()
+        self.recover_orphaned_reviewer_lock()
         now = datetime.now(UTC)
         now_iso = now.isoformat()
         expires = (now + timedelta(seconds=ttl_seconds)).isoformat()
