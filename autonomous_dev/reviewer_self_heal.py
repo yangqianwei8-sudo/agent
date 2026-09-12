@@ -40,6 +40,35 @@ def _task_reference_time(store: StateStore, task: TaskRecord) -> datetime | None
     return ref
 
 
+def _has_valid_reviewer_lease(
+    settings: AutonomousDevSettings,
+    store: StateStore,
+    task: TaskRecord,
+    inv,
+    *,
+    now: datetime,
+) -> bool:
+    """True only when an in-flight review is actively backed by a non-stale lease."""
+    if inv.status == ReviewInvocationStatus.RUNNING:
+        started = _parse_ts(inv.started_at)
+        if started is not None:
+            return (now - started).total_seconds() < settings.reviewer_lease_ttl_seconds
+        return False
+    if inv.status != ReviewInvocationStatus.PENDING:
+        return False
+    lock = store.get_reviewer_lock()
+    if not lock.locked or lock.task_id != task.id:
+        return False
+    expires = _parse_ts(lock.lease_expires_at)
+    if expires is not None and expires <= now:
+        return False
+    acquired = _parse_ts(lock.acquired_at)
+    if acquired is None:
+        return False
+    # Brief grace while PENDING transitions to RUNNING after lock acquire.
+    return (now - acquired).total_seconds() < min(30, settings.reviewer_lease_ttl_seconds)
+
+
 def _invocation_blocks_stall(
     settings: AutonomousDevSettings,
     store: StateStore,
@@ -54,20 +83,15 @@ def _invocation_blocks_stall(
         return False
     if inv.status == ReviewInvocationStatus.COMPLETED:
         return True
-    if inv.status == ReviewInvocationStatus.RUNNING:
-        started = _parse_ts(inv.started_at)
-        if started is not None:
-            age = (now - started).total_seconds()
-            if age < settings.reviewer_lease_ttl_seconds:
-                return True
+    if inv.status in {ReviewInvocationStatus.RUNNING, ReviewInvocationStatus.PENDING}:
+        if _has_valid_reviewer_lease(settings, store, task, inv, now=now):
+            return True
     if inv.status == ReviewInvocationStatus.FAILED:
         if not store.is_review_retryable(inv, max_attempts=settings.review_max_attempts):
             return True
         retry_at = _parse_ts(inv.next_retry_at)
         if retry_at is not None and retry_at > now:
             return True
-    if inv.status == ReviewInvocationStatus.PENDING and store.peek_reviewer_locked():
-        return True
     return False
 
 

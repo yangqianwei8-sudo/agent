@@ -132,6 +132,15 @@ class LeaseRecord:
 
 
 @dataclass
+class ReviewerLockRecord:
+    locked: bool
+    task_id: int | None
+    owner: str | None
+    acquired_at: str | None
+    lease_expires_at: str | None
+
+
+@dataclass
 class HandoffRecord:
     handoff_id: str
     idempotency_key: str
@@ -1012,12 +1021,25 @@ class StateStore:
     def peek_reviewer_locked(self) -> bool:
         """Read-only reviewer lock check — no stale recovery side effects."""
         now_iso = datetime.now(UTC).isoformat()
+        lock = self.get_reviewer_lock()
+        if not lock.locked:
+            return False
+        expires = lock.lease_expires_at
+        return not (expires and expires < now_iso)
+
+    def get_reviewer_lock(self) -> ReviewerLockRecord:
+        """Read-only reviewer lock snapshot — no stale recovery side effects."""
         with self._read_conn() as conn:
             row = conn.execute("SELECT * FROM reviewer_lock WHERE id = 1").fetchone()
-            if not row or not row["locked"]:
-                return False
-            expires = row["lease_expires_at"]
-            return not (expires and expires < now_iso)
+            if not row:
+                return ReviewerLockRecord(False, None, None, None, None)
+            return ReviewerLockRecord(
+                locked=bool(row["locked"]),
+                task_id=row["task_id"],
+                owner=row["owner"],
+                acquired_at=row["acquired_at"],
+                lease_expires_at=row["lease_expires_at"],
+            )
 
     def load_dashboard_snapshot(
         self,

@@ -154,21 +154,11 @@ def _tick() -> None:
 
 def _tick_full_scan(settings: AutonomousDevSettings) -> None:
     store = StateStore(settings.state_db_path)
-    stale_tasks = store.get_stale_ready_for_review_tasks(
-        older_than_seconds=settings.review_watchdog_stale_seconds,
-    )
-    for task in stale_tasks:
-        _, count = store.get_review_trigger(task.id)
-        if count >= 3:
-            logger.info("watchdog skip review re-trigger task=%s count=%s", task.id, count)
-            continue
-        if not task.commit_sha:
-            continue
-        logger.info("watchdog review fallback task=%s issue=#%s", task.id, task.issue_number)
-        from autonomous_dev.review_executor import ReviewExecutor
+    from autonomous_dev.reviewer_self_heal import reconcile_stalled_ready_for_review
 
-        executor = ReviewExecutor(settings, store)
-        executor.schedule_review(task, commit_sha=task.commit_sha)
+    recovered = reconcile_stalled_ready_for_review(settings, store)
+    if recovered:
+        logger.info("watchdog full scan recovered %s stalled reviewer task(s)", recovered)
 
 
 def _github_timeout(settings: AutonomousDevSettings) -> httpx.Timeout:

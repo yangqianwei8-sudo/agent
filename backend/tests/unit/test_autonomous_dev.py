@@ -3328,6 +3328,58 @@ def test_orphaned_reviewer_lock_reclaimed_missing_invocation(
     assert react.attempt_count >= 1
 
 
+def test_pending_invocation_orphan_lock_triggers_stall_recovery(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression #62: PENDING invocation + orphaned lock must not block stall detection."""
+    import sqlite3
+
+    from autonomous_dev.loop_recovery import run_loop_recovery_tick
+    from autonomous_dev.review_worker import process_due_reviews
+
+    repo, db = infra_env
+    monkeypatch.setenv("REVIEWER_STALL_SECONDS", "0")
+    monkeypatch.setenv("REVIEWER_ORPHAN_LOCK_STALL_SECONDS", "0")
+    monkeypatch.setenv("REVIEW_RETRY_BACKOFF_SECONDS", "0")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok\n", encoding="utf-8")
+    task = store.create_task(issue_number=67, delivery_id="pending-orphan-lock")
+    commit_sha = "pending123456789"
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
+    store.create_review_invocation(
+        invocation_id="inv-pending-orphan",
+        task_id=task.id,
+        issue_number=67,
+        commit_sha=commit_sha,
+    )
+    _mock_github_client.bodies[67] = f"{REVIEWER_ACCEPTANCE_MARKER}\nPending orphan lock recovery."
+    assert store.try_acquire_reviewer_lock(task.id, owner="stale-owner", ttl_seconds=3600)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE reviewer_lock SET acquired_at = ? WHERE id = 1",
+            ("2000-01-01T00:00:00+00:00",),
+        )
+
+    counts = run_loop_recovery_tick(settings, store)
+    assert counts["stalled_ready_for_review"] >= 1
+
+    deadline = time.time() + 15
+    inv = store.get_review_invocation(task.id, commit_sha)
+    while time.time() < deadline:
+        inv = store.get_review_invocation(task.id, commit_sha)
+        if inv and inv.status == ReviewInvocationStatus.COMPLETED:
+            break
+        process_due_reviews(settings, store)
+        time.sleep(0.1)
+    assert inv is not None
+    assert inv.status == ReviewInvocationStatus.COMPLETED
+    assert inv.verdict == ReviewVerdict.PASS
+
+
 def test_reviewer_infra_failure_never_becomes_product_decision(
     infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
 ):
