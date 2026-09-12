@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from autonomous_dev.config import get_autonomous_settings  # noqa: E402
-from autonomous_dev.github_client import GitHubClient  # noqa: E402
+from autonomous_dev.github_client import GitHubClient, LABEL_CURRENT_TASK  # noqa: E402
 from autonomous_dev.reviewer_service import REVIEWER_ACCEPTANCE_MARKER  # noqa: E402
 from autonomous_dev.state import StateStore, TaskStatus  # noqa: E402
 
