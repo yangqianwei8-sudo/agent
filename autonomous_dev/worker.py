@@ -108,6 +108,14 @@ class Worker:
             if self._should_handoff_after_push(commit_sha):
                 self._git_fetch(events)
                 self._verify_push(commit_sha)
+                fresh = self.store.get_task(task.id)
+                if fresh is not None and fresh.status == TaskStatus.FAILED:
+                    self.store.update_task(
+                        task.id,
+                        status=TaskStatus.RUNNING,
+                        error=None,
+                        commit_sha=commit_sha,
+                    )
                 updated = transition_ready_for_review(
                     self.store,
                     self._github,

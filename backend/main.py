@@ -19,6 +19,11 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     if get_autonomous_settings().autonomous_dev_enabled:
+        from autonomous_dev.loop_recovery import run_startup_recovery
+        from autonomous_dev.state import StateStore
+
+        settings = get_autonomous_settings()
+        run_startup_recovery(settings, StateStore(settings.state_db_path))
         start_watchdog()
     yield
     stop_watchdog()

@@ -2927,3 +2927,84 @@ def test_reviewer_pass_triggers_handoff_via_executor(infra_env, _mock_github_cli
     assert "cursor-task" in _mock_github_client.labels[107]
     assert _mock_github_client.labels[107] & {"current-task", "worker-running"}
 
+
+def test_stale_lease_extended_when_progress_recent(infra_env):
+    repo, db = infra_env
+    store = StateStore(db)
+    running = store.create_task(
+        issue_number=24,
+        delivery_id="progress-lease",
+        execution_key="repo#24#gen1",
+        status=TaskStatus.RUNNING,
+    )
+    assert store.try_acquire_lease(24, running.id, owner="worker-24", ttl_seconds=1)
+    store.append_execution_event(
+        task_id=running.id,
+        issue_number=24,
+        generation="gen1",
+        event_type="CURSOR_PROGRESS",
+        phase="cursor",
+    )
+    import time
+
+    time.sleep(1.1)
+    assert not store.recover_stale_lease(
+        heartbeat_ttl_seconds=1,
+        progress_grace_seconds=900,
+    )
+    assert store.is_locked()
+    updated = store.get_task(running.id)
+    assert updated.status == TaskStatus.RUNNING
+
+
+def test_orphan_push_reconcile_to_ready_for_review(infra_env, monkeypatch, _mock_github_client):
+    from autonomous_dev.loop_recovery import reconcile_orphan_pushes
+    from autonomous_dev.review_bridge import ReviewBridge
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    task = store.create_task(
+        issue_number=24,
+        delivery_id="orphan-push",
+        execution_key="repo#24#orphan",
+        status=TaskStatus.FAILED,
+    )
+    store.update_task(task.id, error="stale worker lease recovered")
+    monkeypatch.setattr(
+        "autonomous_dev.loop_recovery._find_orphan_commit_for_task",
+        lambda _root, _task: "abc123456789deadbeef0123456789abcd",
+    )
+    github = GitHubClient(settings)
+    review_bridge = ReviewBridge(settings, store)
+    count = reconcile_orphan_pushes(settings, store, github, review_bridge)
+    assert count == 1
+    updated = store.get_task(task.id)
+    assert updated.status == TaskStatus.READY_FOR_REVIEW
+    assert updated.commit_sha == "abc123456789deadbeef0123456789abcd"
+
+
+def test_cleanup_stale_worker_running_without_lease(infra_env, _mock_github_client):
+    from autonomous_dev.loop_recovery import cleanup_stale_worker_running_labels
+
+    repo, db = infra_env
+    store = StateStore(db)
+    _mock_github_client.labels[24] = {"cursor-task", "worker-running"}
+    cleaned = cleanup_stale_worker_running_labels(store, _mock_github_client)
+    assert cleaned == 1
+    assert "worker-running" not in _mock_github_client.labels[24]
+
+
+def test_loop_recovery_tick_survives_github_errors(infra_env, monkeypatch):
+    from autonomous_dev.loop_recovery import run_loop_recovery_tick
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    monkeypatch.setattr(
+        "autonomous_dev.loop_recovery.cleanup_stale_worker_running_labels",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("github down")),
+    )
+    counts = run_loop_recovery_tick(settings, store)
+    assert counts["stale_labels"] == 0
+

@@ -119,11 +119,20 @@ def _loop() -> None:
 def _tick() -> None:
     settings = get_autonomous_settings()
     store = StateStore(settings.state_db_path)
-    if store.recover_stale_lease():
+    if store.recover_stale_lease(
+        heartbeat_ttl_seconds=settings.worker_lease_ttl_seconds,
+        progress_grace_seconds=settings.cursor_long_op_suspect_seconds,
+    ):
         logger.warning("watchdog recovered stale worker lease")
 
+    from autonomous_dev.loop_recovery import run_loop_recovery_tick
     from autonomous_dev.review_worker import process_due_reviews
     from autonomous_dev.task_handoff import TaskHandoffEngine
+
+    try:
+        run_loop_recovery_tick(settings, store)
+    except Exception:
+        logger.exception("watchdog loop recovery failed")
 
     try:
         process_due_reviews(settings, store)
@@ -164,7 +173,10 @@ def _github_timeout(settings: AutonomousDevSettings) -> httpx.Timeout:
 
 def _scan_current_tasks(settings: AutonomousDevSettings) -> None:
     store = StateStore(settings.state_db_path)
-    store.recover_stale_lease()
+    store.recover_stale_lease(
+        heartbeat_ttl_seconds=settings.worker_lease_ttl_seconds,
+        progress_grace_seconds=settings.cursor_long_op_suspect_seconds,
+    )
     if store.is_locked():
         return
 

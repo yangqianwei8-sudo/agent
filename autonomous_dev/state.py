@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import uuid
@@ -13,6 +14,24 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+_PROGRESS_EVENT_TYPES = (
+    "CURSOR_STARTED",
+    "CURSOR_PROGRESS",
+    "CURSOR_FINISHED",
+    "FILE_READ",
+    "FILE_EDIT",
+    "FILE_CREATE",
+    "FILE_DELETE",
+    "COMMAND_STARTED",
+    "COMMAND_FINISHED",
+    "COMMIT_CREATED",
+    "PUSH_FINISHED",
+    "TEST_STARTED",
+    "TEST_FINISHED",
+)
 
 
 class TaskStatus(StrEnum):
@@ -748,6 +767,21 @@ class StateStore:
                 "SELECT * FROM execution_events WHERE id = last_insert_rowid()"
             ).fetchone()
             assert row is not None
+            if task_id:
+                lock_row = conn.execute(
+                    "SELECT owner FROM worker_lock WHERE id = 1 AND locked = 1 AND task_id = ?",
+                    (task_id,),
+                ).fetchone()
+                if lock_row and lock_row["owner"]:
+                    expires = (datetime.now(UTC) + timedelta(seconds=300)).isoformat()
+                    conn.execute(
+                        """
+                        UPDATE worker_lock
+                        SET heartbeat_at = ?, lease_expires_at = ?
+                        WHERE id = 1 AND owner = ?
+                        """,
+                        (now, expires, lock_row["owner"]),
+                    )
             return self._row_to_execution_event(row)
 
     def list_execution_events(
@@ -801,7 +835,12 @@ class StateStore:
             created_at=row["created_at"],
         )
 
-    def recover_stale_lease(self, *, heartbeat_ttl_seconds: int = 300) -> bool:
+    def recover_stale_lease(
+        self,
+        *,
+        heartbeat_ttl_seconds: int = 300,
+        progress_grace_seconds: int = 900,
+    ) -> bool:
         now_dt = datetime.now(UTC)
         now = now_dt.isoformat()
         with self._lock, self._conn() as conn:
@@ -810,6 +849,8 @@ class StateStore:
                 return False
             expires = row["lease_expires_at"]
             heartbeat = row["heartbeat_at"]
+            task_id = row["task_id"]
+            owner = row["owner"]
             lease_expired = bool(expires and expires < now)
             heartbeat_stale = False
             if heartbeat:
@@ -820,9 +861,34 @@ class StateStore:
                     heartbeat_stale = (now_dt - hb_dt).total_seconds() > heartbeat_ttl_seconds
                 except ValueError:
                     heartbeat_stale = True
+            else:
+                heartbeat_stale = True
             if not lease_expired and not heartbeat_stale:
                 return False
-            task_id = row["task_id"]
+
+            if task_id:
+                last_progress = self.get_task_last_progress_at(task_id, conn=conn)
+                if last_progress is not None:
+                    progress_age = (now_dt - last_progress).total_seconds()
+                    if progress_age <= progress_grace_seconds:
+                        new_expires = (
+                            now_dt + timedelta(seconds=heartbeat_ttl_seconds)
+                        ).isoformat()
+                        conn.execute(
+                            """
+                            UPDATE worker_lock
+                            SET heartbeat_at = ?, lease_expires_at = ?
+                            WHERE id = 1 AND locked = 1
+                            """,
+                            (now, new_expires),
+                        )
+                        logger.info(
+                            "extended lease for active task=%s progress_age=%.0fs",
+                            task_id,
+                            progress_age,
+                        )
+                        return False
+
             if task_id:
                 conn.execute(
                     """
@@ -845,7 +911,68 @@ class StateStore:
                 WHERE id = 1
                 """
             )
+            if owner:
+                logger.warning("recovered stale lease owner=%s task=%s", owner, task_id)
             return True
+
+    def get_task_last_progress_at(
+        self,
+        task_id: int,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> datetime | None:
+        query = """
+            SELECT created_at FROM execution_events
+            WHERE task_id = ? AND event_type IN ({})
+            ORDER BY id DESC LIMIT 1
+        """.format(",".join("?" * len(_PROGRESS_EVENT_TYPES)))
+        params: tuple[int | str, ...] = (task_id, *_PROGRESS_EVENT_TYPES)
+        if conn is not None:
+            row = conn.execute(query, params).fetchone()
+        else:
+            with self._read_conn() as read_conn:
+                row = read_conn.execute(query, params).fetchone()
+        if not row or not row["created_at"]:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return dt
+        except ValueError:
+            return None
+
+    def list_tasks_for_push_reconcile(
+        self,
+        *,
+        statuses: tuple[TaskStatus, ...],
+        limit: int = 20,
+    ) -> list[TaskRecord]:
+        placeholders = ",".join("?" * len(statuses))
+        with self._read_conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM task_executions
+                WHERE status IN ({placeholders})
+                  AND (commit_sha IS NULL OR commit_sha = '')
+                ORDER BY updated_at DESC LIMIT ?
+                """,
+                (*[s.value for s in statuses], limit),
+            ).fetchall()
+            return [self._row_to_task(r) for r in rows]
+
+    def list_tasks_by_status(self, *statuses: TaskStatus, limit: int = 50) -> list[TaskRecord]:
+        placeholders = ",".join("?" * len(statuses))
+        with self._read_conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM task_executions
+                WHERE status IN ({placeholders})
+                ORDER BY id DESC LIMIT ?
+                """,
+                (*[s.value for s in statuses], limit),
+            ).fetchall()
+            return [self._row_to_task(r) for r in rows]
 
     def try_acquire_lease(
         self,
@@ -855,7 +982,7 @@ class StateStore:
         owner: str,
         ttl_seconds: int = 300,
     ) -> bool:
-        self.recover_stale_lease()
+        self.recover_stale_lease(progress_grace_seconds=900)
         now = datetime.now(UTC)
         now_iso = now.isoformat()
         expires = (now + timedelta(seconds=ttl_seconds)).isoformat()
@@ -914,7 +1041,7 @@ class StateStore:
             return False
         if lease.lease_expires_at:
             if lease.lease_expires_at < datetime.now(UTC).isoformat():
-                self.recover_stale_lease()
+                self.recover_stale_lease(progress_grace_seconds=900)
                 return False
         return True
 

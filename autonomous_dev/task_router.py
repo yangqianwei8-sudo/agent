@@ -96,7 +96,10 @@ class TaskRouter:
                     "task_id": active.id,
                 }
 
-        self.store.recover_stale_lease()
+        self.store.recover_stale_lease(
+            heartbeat_ttl_seconds=self.settings.worker_lease_ttl_seconds,
+            progress_grace_seconds=self.settings.cursor_long_op_suspect_seconds,
+        )
         if self.store.is_locked():
             self.store.mark_delivery(
                 delivery_id,
