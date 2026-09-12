@@ -10,7 +10,7 @@ from autonomous_dev.config import AutonomousDevSettings
 from autonomous_dev.github_client import GitHubClient, GitHubClientError
 from autonomous_dev.review_executor import ReviewExecutor
 from autonomous_dev.reviewer_service import ReviewerCredentialError
-from autonomous_dev.state import StateStore, TaskRecord
+from autonomous_dev.state import ReviewInvocationStatus, StateStore, TaskRecord
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,19 @@ class GitHubIssueReviewAdapter(ReviewTriggerAdapter):
         self._store = store
 
     def trigger(self, task: TaskRecord, *, commit_sha: str) -> ReviewTriggerResult:
+        existing = self._store.get_review_invocation(task.id, commit_sha)
+        if existing and existing.status in {
+            ReviewInvocationStatus.PENDING,
+            ReviewInvocationStatus.RUNNING,
+            ReviewInvocationStatus.COMPLETED,
+        }:
+            detail = (
+                f"GitHub review handoff deduped issue=#{task.issue_number} "
+                f"commit={commit_sha} status={existing.status.value}"
+            )
+            logger.debug(detail)
+            return ReviewTriggerResult(triggered=False, adapter="github_issue", detail=detail)
+
         _, count = self._store.get_review_trigger(task.id)
         body = (
             f"## Ready for Review\n\n"

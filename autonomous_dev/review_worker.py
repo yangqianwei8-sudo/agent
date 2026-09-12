@@ -61,7 +61,9 @@ def process_due_reviews(
 
     with _worker_lock:
         store.recover_stale_reviewer_lock()
-        if store.recover_orphaned_reviewer_lock():
+        if store.recover_orphaned_reviewer_lock(
+            stall_seconds=settings.reviewer_orphan_lock_stall_seconds,
+        ):
             logger.warning("recovered orphaned reviewer lock")
         finalized = store.finalize_obsolete_review_invocations()
         for inv_id in finalized:

@@ -3136,3 +3136,97 @@ def test_self_heal_dashboard_exposes_retry_state(infra_env, monkeypatch):
     assert payload["system_status"] == SystemStatus.SELF_HEAL_PENDING.value
     assert payload["self_heal"]["attempt_count"] == 2
 
+
+def test_reviewer_stall_self_heal_recovers_missing_invocation(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    from autonomous_dev.loop_recovery import run_loop_recovery_tick
+
+    repo, db = infra_env
+    monkeypatch.setenv("REVIEWER_STALL_SECONDS", "0")
+    monkeypatch.setenv("REVIEW_RETRY_BACKOFF_SECONDS", "0")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok\n", encoding="utf-8")
+    task = store.create_task(issue_number=61, delivery_id="reviewer-stall")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="stallabc123456")
+    _mock_github_client.bodies[61] = f"{REVIEWER_ACCEPTANCE_MARKER}\nReviewer stall recovery."
+
+    counts = run_loop_recovery_tick(settings, store)
+    assert counts["stalled_ready_for_review"] >= 1
+
+    deadline = time.time() + 15
+    inv = store.get_review_invocation(task.id, "stallabc123456")
+    while time.time() < deadline:
+        inv = store.get_review_invocation(task.id, "stallabc123456")
+        if inv and inv.status == ReviewInvocationStatus.COMPLETED:
+            break
+        from autonomous_dev.review_worker import process_due_reviews
+
+        process_due_reviews(settings, store)
+        time.sleep(0.1)
+    assert inv is not None
+    assert inv.status == ReviewInvocationStatus.COMPLETED
+    assert inv.verdict == ReviewVerdict.PASS
+
+
+def test_reviewer_handoff_deduped_for_same_commit(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    from autonomous_dev.review_bridge import GitHubIssueReviewAdapter
+
+    _, db = infra_env
+    store = StateStore(db)
+    task = store.create_task(issue_number=62, delivery_id="handoff-dedup")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="dedup123456789")
+    store.create_review_invocation(
+        invocation_id="inv-dedup",
+        task_id=task.id,
+        issue_number=62,
+        commit_sha="dedup123456789",
+    )
+    adapter = GitHubIssueReviewAdapter(_mock_github_client, store)
+    result = adapter.trigger(task, commit_sha="dedup123456789")
+    assert result.triggered is False
+    assert "deduped" in result.detail
+    handoffs = [
+        c for n, c in _mock_github_client.comments if n == 62 and "Ready for Review" in c
+    ]
+    assert handoffs == []
+
+
+def test_reviewer_self_heal_dashboard_exposes_recovery_state(infra_env, monkeypatch):
+    from autonomous_dev.dashboard import build_dashboard_payload
+    from autonomous_dev.state import ReviewerReactivationStatus
+    from autonomous_dev.status_deriver import SystemStatus
+
+    _, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    task = store.create_task(
+        issue_number=63,
+        delivery_id="reviewer-dash",
+        status=TaskStatus.READY_FOR_REVIEW,
+    )
+    store.update_task(task.id, commit_sha="dash1234567890")
+    store.upsert_reviewer_reactivation(
+        issue_number=63,
+        task_id=task.id,
+        attempt_count=2,
+        next_retry_at=(datetime.now(UTC) + timedelta(seconds=120)).isoformat(),
+        last_error="reviewer lock orphaned",
+        status=ReviewerReactivationStatus.STALE_RECOVERED,
+    )
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard._fetch_issue_labels_bounded",
+        lambda *a, **k: (["cursor-task", "ready-for-review"], None),
+    )
+    payload = build_dashboard_payload(settings, store)
+    assert payload["system_status"] == SystemStatus.REVIEWER_STALE_RECOVERED.value
+    assert payload["reviewer_self_heal"]["status"] == "stale-recovered"
+    assert payload["reviewer_self_heal"]["attempt_count"] == 2
+    assert payload["runtime_evidence"]["reviewer_status"] == "stale-recovered"
+

@@ -47,6 +47,8 @@ class AutonomousDevSettings(BaseSettings):
     review_max_attempts: int = 5
     review_retry_backoff_seconds: int = 5
     review_recovery_interval_seconds: int = 10
+    reviewer_stall_seconds: int = 60
+    reviewer_orphan_lock_stall_seconds: int = 45
     worker_retry_max_attempts: int = 5
     worker_retry_backoff_seconds: int = 10
     handoff_stall_seconds: int = 20

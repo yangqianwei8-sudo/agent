@@ -55,6 +55,7 @@ def run_loop_recovery_tick(settings: AutonomousDevSettings, store: StateStore) -
         "stale_labels": 0,
         "stale_db_running": 0,
         "technical_needs_fix": 0,
+        "stalled_ready_for_review": 0,
     }
     github = GitHubClient(settings)
     review_bridge = ReviewBridge(settings, store)
@@ -84,6 +85,15 @@ def run_loop_recovery_tick(settings: AutonomousDevSettings, store: StateStore) -
         )
     except Exception:
         logger.exception("technical needs-fix self-heal failed")
+
+    try:
+        from autonomous_dev.reviewer_self_heal import reconcile_stalled_ready_for_review
+
+        counts["stalled_ready_for_review"] = reconcile_stalled_ready_for_review(
+            settings, store
+        )
+    except Exception:
+        logger.exception("reviewer stall self-heal failed")
     return counts
 
 

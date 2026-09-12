@@ -9,6 +9,8 @@ from enum import StrEnum
 from typing import Any
 
 from autonomous_dev.state import (
+    ReviewerReactivationRecord,
+    ReviewerReactivationStatus,
     ReviewInvocationRecord,
     ReviewInvocationStatus,
     TaskRecord,
@@ -39,6 +41,11 @@ class SystemStatus(StrEnum):
     SELF_HEAL_PENDING = "SELF_HEAL_PENDING"
     SELF_HEAL_RUNNING = "SELF_HEAL_RUNNING"
     SELF_HEAL_EXHAUSTED = "SELF_HEAL_EXHAUSTED"
+    REVIEWER_RETRY_PENDING = "REVIEWER_RETRY_PENDING"
+    REVIEWER_RUNNING = "REVIEWER_RUNNING"
+    REVIEWER_RETRYING = "REVIEWER_RETRYING"
+    REVIEWER_STALE_RECOVERED = "REVIEWER_STALE_RECOVERED"
+    REVIEWER_EXHAUSTED = "REVIEWER_EXHAUSTED"
     FAILED = "FAILED"
     STALE = "STALE"
     IDLE = "IDLE"
@@ -123,6 +130,7 @@ def derive_system_status(
     recent_failed_task: TaskRecord | None = None,
     handoff_state: str | None = None,
     worker_reactivation: WorkerReactivationRecord | None = None,
+    reviewer_reactivation: ReviewerReactivationRecord | None = None,
 ) -> SystemStatus:
     now = now or datetime.now(UTC)
 
@@ -159,15 +167,31 @@ def derive_system_status(
             return SystemStatus.SELF_HEAL_PENDING
         return SystemStatus.SELF_HEAL_PENDING
 
-    if (
-        task_status == TaskStatus.READY_FOR_REVIEW
-        or reviewer_locked
-        or (
-            active_review is not None
-            and active_review.status
-            in {ReviewInvocationStatus.RUNNING, ReviewInvocationStatus.PENDING}
-        )
+    if task_status == TaskStatus.READY_FOR_REVIEW or reviewer_locked or (
+        active_review is not None
+        and active_review.status
+        in {ReviewInvocationStatus.RUNNING, ReviewInvocationStatus.PENDING}
     ):
+        if reviewer_reactivation is not None:
+            if reviewer_reactivation.status == ReviewerReactivationStatus.EXHAUSTED:
+                return SystemStatus.REVIEWER_EXHAUSTED
+            if reviewer_reactivation.status == ReviewerReactivationStatus.STALE_RECOVERED:
+                return SystemStatus.REVIEWER_STALE_RECOVERED
+            if reviewer_reactivation.status == ReviewerReactivationStatus.RETRYING:
+                return SystemStatus.REVIEWER_RETRYING
+            if reviewer_reactivation.status == ReviewerReactivationStatus.RUNNING:
+                return SystemStatus.REVIEWER_RUNNING
+            if reviewer_reactivation.next_retry_at:
+                retry_at = _parse_ts(reviewer_reactivation.next_retry_at)
+                if retry_at is not None and retry_at > now:
+                    return SystemStatus.REVIEWER_RETRY_PENDING
+            return SystemStatus.REVIEWER_RETRY_PENDING
+        if active_review and active_review.status == ReviewInvocationStatus.FAILED:
+            if active_review.next_retry_at:
+                retry_at = _parse_ts(active_review.next_retry_at)
+                if retry_at is not None and retry_at > now:
+                    return SystemStatus.REVIEWER_RETRY_PENDING
+            return SystemStatus.REVIEWER_RETRYING
         return SystemStatus.REVIEWING
 
     if task_status in {TaskStatus.RUNNING, TaskStatus.QUEUED}:
@@ -212,6 +236,16 @@ def derive_current_phase(
         return "等待产品/业务决策"
     if system_status == SystemStatus.REVIEWING:
         return "Reviewer 审查中"
+    if system_status == SystemStatus.REVIEWER_RETRY_PENDING:
+        return "Reviewer 停滞 — 等待自动重试"
+    if system_status == SystemStatus.REVIEWER_RUNNING:
+        return "Reviewer 自动恢复执行中"
+    if system_status == SystemStatus.REVIEWER_RETRYING:
+        return "Reviewer 技术失败 — 自动重试中"
+    if system_status == SystemStatus.REVIEWER_STALE_RECOVERED:
+        return "Reviewer 停滞已自动回收"
+    if system_status == SystemStatus.REVIEWER_EXHAUSTED:
+        return "Reviewer 自动重试已耗尽"
     if system_status == SystemStatus.STALE:
         return "Worker 运行时过期"
     if system_status == SystemStatus.FAILED:
@@ -300,9 +334,23 @@ def derive_pipeline_stages(
         cursor_state = "pass"
         tests_state = "pass"
         commit_state = "pass"
-        if active_review and active_review.status.value == "running":
+        if system_status in {
+            SystemStatus.REVIEWER_STALE_RECOVERED,
+        }:
+            reviewer_state = "stale-recovered"
+        elif system_status in {
+            SystemStatus.REVIEWER_RETRYING,
+            SystemStatus.REVIEWER_RETRY_PENDING,
+        }:
+            reviewer_state = "retrying"
+        elif system_status == SystemStatus.REVIEWER_EXHAUSTED:
+            reviewer_state = "exhausted"
+        elif active_review and active_review.status.value == "running":
             reviewer_state = "running"
-        elif system_status == SystemStatus.REVIEWING:
+        elif system_status in {
+            SystemStatus.REVIEWING,
+            SystemStatus.REVIEWER_RUNNING,
+        }:
             reviewer_state = "running"
         else:
             reviewer_state = "pending"

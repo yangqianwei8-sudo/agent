@@ -82,6 +82,14 @@ class WorkerReactivationStatus(StrEnum):
     EXHAUSTED = "exhausted"
 
 
+class ReviewerReactivationStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    RETRYING = "retrying"
+    STALE_RECOVERED = "stale-recovered"
+    EXHAUSTED = "exhausted"
+
+
 @dataclass
 class ExecutionEventRecord:
     id: int
@@ -147,6 +155,18 @@ class WorkerReactivationRecord:
     next_retry_at: str | None
     last_error: str | None
     status: WorkerReactivationStatus
+    last_kick_at: str | None
+    updated_at: str
+
+
+@dataclass
+class ReviewerReactivationRecord:
+    issue_number: int
+    task_id: int | None
+    attempt_count: int
+    next_retry_at: str | None
+    last_error: str | None
+    status: ReviewerReactivationStatus
     last_kick_at: str | None
     updated_at: str
 
@@ -307,6 +327,16 @@ class StateStore:
                 CREATE INDEX IF NOT EXISTS idx_task_handoffs_status
                     ON task_handoffs(status, created_at DESC);
                 CREATE TABLE IF NOT EXISTS worker_reactivations (
+                    issue_number INTEGER PRIMARY KEY,
+                    task_id INTEGER,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at TEXT,
+                    last_error TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    last_kick_at TEXT,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS reviewer_reactivations (
                     issue_number INTEGER PRIMARY KEY,
                     task_id INTEGER,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
@@ -650,6 +680,107 @@ class StateStore:
             ).fetchone()
             assert updated is not None
             return self._row_to_worker_reactivation(updated)
+
+    def get_reviewer_reactivation(self, issue_number: int) -> ReviewerReactivationRecord | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM reviewer_reactivations WHERE issue_number = ?",
+                (issue_number,),
+            ).fetchone()
+            return self._row_to_reviewer_reactivation(row) if row else None
+
+    def list_due_reviewer_reactivations(
+        self,
+        *,
+        limit: int = 20,
+        now_iso: str | None = None,
+    ) -> list[ReviewerReactivationRecord]:
+        now = now_iso or datetime.now(UTC).isoformat()
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM reviewer_reactivations
+                WHERE status IN ('pending', 'running', 'retrying', 'stale-recovered')
+                  AND (next_retry_at IS NULL OR next_retry_at <= ?)
+                ORDER BY updated_at ASC LIMIT ?
+                """,
+                (now, limit),
+            ).fetchall()
+            return [self._row_to_reviewer_reactivation(r) for r in rows]
+
+    def upsert_reviewer_reactivation(
+        self,
+        *,
+        issue_number: int,
+        task_id: int | None = None,
+        attempt_count: int | None = None,
+        next_retry_at: str | None = None,
+        last_error: str | None = None,
+        status: ReviewerReactivationStatus | None = None,
+        last_kick_at: str | None = None,
+        clear_next_retry: bool = False,
+    ) -> ReviewerReactivationRecord:
+        now = datetime.now(UTC).isoformat()
+        with self._lock, self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM reviewer_reactivations WHERE issue_number = ?",
+                (issue_number,),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO reviewer_reactivations
+                    (issue_number, task_id, attempt_count, next_retry_at, last_error,
+                     status, last_kick_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        issue_number,
+                        task_id,
+                        attempt_count or 0,
+                        next_retry_at,
+                        last_error,
+                        (status or ReviewerReactivationStatus.PENDING).value,
+                        last_kick_at,
+                        now,
+                    ),
+                )
+            else:
+                new_attempt = attempt_count if attempt_count is not None else row["attempt_count"]
+                new_status = (status or ReviewerReactivationStatus(row["status"])).value
+                new_task = task_id if task_id is not None else row["task_id"]
+                new_error = last_error if last_error is not None else row["last_error"]
+                new_kick = last_kick_at if last_kick_at is not None else row["last_kick_at"]
+                if clear_next_retry:
+                    new_next = None
+                elif next_retry_at is not None:
+                    new_next = next_retry_at
+                else:
+                    new_next = row["next_retry_at"]
+                conn.execute(
+                    """
+                    UPDATE reviewer_reactivations
+                    SET task_id = ?, attempt_count = ?, next_retry_at = ?, last_error = ?,
+                        status = ?, last_kick_at = ?, updated_at = ?
+                    WHERE issue_number = ?
+                    """,
+                    (
+                        new_task,
+                        new_attempt,
+                        new_next,
+                        new_error,
+                        new_status,
+                        new_kick,
+                        now,
+                        issue_number,
+                    ),
+                )
+            updated = conn.execute(
+                "SELECT * FROM reviewer_reactivations WHERE issue_number = ?",
+                (issue_number,),
+            ).fetchone()
+            assert updated is not None
+            return self._row_to_reviewer_reactivation(updated)
 
     def get_active_execution(self, execution_key: str) -> TaskRecord | None:
         with self._conn() as conn:
@@ -1695,6 +1826,19 @@ class StateStore:
             next_retry_at=row["next_retry_at"],
             last_error=row["last_error"],
             status=WorkerReactivationStatus(row["status"]),
+            last_kick_at=row["last_kick_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _row_to_reviewer_reactivation(row: sqlite3.Row) -> ReviewerReactivationRecord:
+        return ReviewerReactivationRecord(
+            issue_number=row["issue_number"],
+            task_id=row["task_id"],
+            attempt_count=int(row["attempt_count"]),
+            next_retry_at=row["next_retry_at"],
+            last_error=row["last_error"],
+            status=ReviewerReactivationStatus(row["status"]),
             last_kick_at=row["last_kick_at"],
             updated_at=row["updated_at"],
         )

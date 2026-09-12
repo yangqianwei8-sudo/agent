@@ -263,6 +263,10 @@ def build_dashboard_payload(
     worker_reactivation = (
         store.get_worker_reactivation(self_heal_issue) if self_heal_issue else None
     )
+    reviewer_reactivation = (
+        store.get_reviewer_reactivation(self_heal_issue) if self_heal_issue else None
+    )
+    from autonomous_dev.reviewer_self_heal import derive_reviewer_self_heal_dashboard_state
     from autonomous_dev.worker_self_heal import derive_self_heal_dashboard_state
 
     self_heal_state = derive_self_heal_dashboard_state(
@@ -272,6 +276,15 @@ def build_dashboard_payload(
     )
     if self_heal_state is not None:
         self_heal_state["max_attempts"] = settings.worker_retry_max_attempts
+
+    reviewer_self_heal_state = derive_reviewer_self_heal_dashboard_state(
+        store,
+        issue_number=self_heal_issue,
+        primary_status=primary_task.status if primary_task else None,
+        active_review_status=active_review.status if active_review else None,
+    )
+    if reviewer_self_heal_state is not None:
+        reviewer_self_heal_state["max_attempts"] = settings.review_max_attempts
 
     system_status = derive_system_status(
         primary_task=primary_task,
@@ -283,6 +296,7 @@ def build_dashboard_payload(
         recent_failed_task=snapshot["recent_failed"],
         handoff_state=handoff_state,
         worker_reactivation=worker_reactivation,
+        reviewer_reactivation=reviewer_reactivation,
     )
 
     labels: list[str] = []
@@ -381,9 +395,13 @@ def build_dashboard_payload(
             "reviewer_configured": settings.resolve_reviewer_credentials() is not None,
             "reviewer_locked": reviewer_locked,
             "reviewer_status": (
-                active_review.status.value
-                if active_review
-                else ("locked" if reviewer_locked else "idle")
+                reviewer_self_heal_state["status"]
+                if reviewer_self_heal_state
+                else (
+                    active_review.status.value
+                    if active_review
+                    else ("locked" if reviewer_locked else "idle")
+                )
             ),
             "last_reviewer_invocation": (
                 {
@@ -434,6 +452,7 @@ def build_dashboard_payload(
             else None
         ),
         "self_heal": self_heal_state,
+        "reviewer_self_heal": reviewer_self_heal_state,
     }
     return sanitize_for_json(payload)
 
