@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sealos DevBox — restart uvicorn on exit (long-running + auto-recovery).
+# Sealos DevBox — supervise uvicorn with process + health recovery.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,14 +40,41 @@ fi
 
 HOST="${APP_HOST:-0.0.0.0}"
 PORT="${APP_PORT:-8000}"
+HEALTH_URL="${AUTONOMOUS_HEALTH_URL:-http://127.0.0.1:${PORT}/healthz}"
+HEALTH_INTERVAL="${AUTONOMOUS_HEALTH_INTERVAL_SECONDS:-10}"
+HEALTH_FAILURE_LIMIT="${AUTONOMOUS_HEALTH_FAILURE_LIMIT:-3}"
+STARTUP_GRACE="${AUTONOMOUS_STARTUP_GRACE_SECONDS:-15}"
 
 _terminate_stale_uvicorn() {
-  # Acceptance scripts or manual runs may leave 127.0.0.1:8000 bound, blocking public 0.0.0.0.
   if command -v fuser >/dev/null 2>&1; then
     fuser -k "${PORT}/tcp" >/dev/null 2>&1 || true
   fi
   pkill -f "uvicorn backend.main:app" >/dev/null 2>&1 || true
   sleep 1
+}
+
+_health_ok() {
+  if command -v curl >/dev/null 2>&1; then
+    curl --silent --show-error --fail --max-time 4 "$HEALTH_URL" >/dev/null 2>&1
+    return $?
+  fi
+  "$VENV_PYTHON" - "$HEALTH_URL" <<'PY' >/dev/null 2>&1
+import sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=4) as r:
+    raise SystemExit(0 if 200 <= r.status < 300 else 1)
+PY
+}
+
+_stop_child() {
+  local child_pid="$1"
+  if kill -0 "$child_pid" 2>/dev/null; then
+    kill -TERM "$child_pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      kill -0 "$child_pid" 2>/dev/null || return 0
+      sleep 1
+    done
+    kill -KILL "$child_pid" 2>/dev/null || true
+  fi
 }
 
 echo "[$(date -Is)] supervisor started root=$ROOT host=$HOST port=$PORT" >> "$LOGFILE"
@@ -58,8 +85,34 @@ while true; do
     # shellcheck disable=SC1091
     source "$ROOT/deploy/load-env.sh" "$ROOT/.env"
   fi
+
   echo "[$(date -Is)] starting uvicorn git_sha=${GIT_SHA:-unknown}" >> "$LOGFILE"
-  "$VENV_UVICORN" backend.main:app --host "$HOST" --port "$PORT" >> "$LOGFILE" 2>&1 || true
-  echo "[$(date -Is)] uvicorn exited — restarting in 2s" >> "$LOGFILE"
+  "$VENV_UVICORN" backend.main:app --host "$HOST" --port "$PORT" >> "$LOGFILE" 2>&1 &
+  child_pid=$!
+  failures=0
+  started_at=$(date +%s)
+
+  while kill -0 "$child_pid" 2>/dev/null; do
+    sleep "$HEALTH_INTERVAL"
+    now=$(date +%s)
+    if (( now - started_at < STARTUP_GRACE )); then
+      continue
+    fi
+
+    if _health_ok; then
+      failures=0
+    else
+      failures=$((failures + 1))
+      echo "[$(date -Is)] health check failed count=$failures url=$HEALTH_URL child=$child_pid" >> "$LOGFILE"
+      if (( failures >= HEALTH_FAILURE_LIMIT )); then
+        echo "[$(date -Is)] health failure threshold reached; restarting uvicorn child=$child_pid" >> "$LOGFILE"
+        _stop_child "$child_pid"
+        break
+      fi
+    fi
+  done
+
+  wait "$child_pid" 2>/dev/null || true
+  echo "[$(date -Is)] uvicorn exited/unhealthy — restarting in 2s" >> "$LOGFILE"
   sleep 2
 done
