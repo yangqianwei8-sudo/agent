@@ -68,38 +68,6 @@ def _create_chain(github: GitHubClient) -> tuple[int, int, int]:
     return issue_a, issue_b, issue_c
 
 
-def _wait_until_worker_idle(store: StateStore, *, timeout: int = 1200) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        store.recover_stale_lease()
-        if not store.is_locked():
-            return True
-        time.sleep(2)
-    return not store.is_locked()
-
-
-def _close_blocking_repair_issues(github: GitHubClient) -> list[int]:
-    """Close stale [REPAIR] issues that preempt AUTO chain workers."""
-    closed: list[int] = []
-    for issue in github.list_open_issues_with_label("cursor-task", limit=100):
-        title = str(issue.get("title") or "")
-        if not title.startswith("[REPAIR]"):
-            continue
-        num = int(issue["number"])
-        labels = {lbl["name"] for lbl in (issue.get("labels") or []) if isinstance(lbl, dict)}
-        if "worker-running" not in labels and "current-task" not in labels:
-            continue
-        try:
-            github.close_issue(
-                num,
-                reason="Superseded — AUTO-A/B/C acceptance chain requires idle worker",
-            )
-            closed.append(num)
-        except Exception:
-            pass
-    return closed
-
-
 def _activate_a(github: GitHubClient, issue_a: int) -> None:
     github.enforce_single_current_task(issue_a)
 
@@ -147,15 +115,6 @@ def run_acceptance() -> int:
     github = GitHubClient(settings)
     results: dict[str, str] = {}
     timings: dict[str, float] = {}
-
-    closed = _close_blocking_repair_issues(github)
-    if closed:
-        _record_step("closed_blocking_repairs", {"issues": closed})
-        print(f"Closed blocking repairs: {closed}")
-
-    if not _wait_until_worker_idle(store, timeout=1200):
-        print("FAIL: worker still locked after 1200s")
-        return 1
 
     issue_a, issue_b, issue_c = _create_chain(github)
     _record_step("created", {"issue_a": issue_a, "issue_b": issue_b, "issue_c": issue_c})
