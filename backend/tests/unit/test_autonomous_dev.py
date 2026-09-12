@@ -3526,3 +3526,24 @@ def test_issue62_startup_failure_observable_and_self_heals(
     assert dash.get("worker_failure") is not None
     assert dash["worker_failure"]["stage"] == "worker-startup"
 
+
+def test_worker_failure_module_integrated():
+    """Regression #63: worker_failure.py must exist and export all integration entrypoints."""
+    import autonomous_dev.worker_failure as wf
+
+    required = (
+        "classify_worker_failure",
+        "defer_same_generation_to_self_heal",
+        "derive_failure_dashboard_state",
+        "handle_technical_worker_failure",
+        "report_worker_failure",
+        "trigger_post_failure_recovery",
+    )
+    for name in required:
+        assert hasattr(wf, name), f"missing export: {name}"
+        assert callable(getattr(wf, name))
+
+    from autonomous_dev.dashboard import build_dashboard_payload  # noqa: F401
+    from autonomous_dev.task_router import TaskRouter  # noqa: F401
+    from autonomous_dev.worker import Worker  # noqa: F401
+

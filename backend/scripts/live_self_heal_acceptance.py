@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Live acceptance — technical needs-fix self-heal without manual label edits."""
+"""Live acceptance — technical needs-fix self-heal without manual label edits.
+
+Use an isolated AUTONOMOUS_STATE_DB_PATH when the shared runtime already holds a
+worker lease (e.g. AUTONOMOUS_STATE_DB_PATH=/tmp/self_heal_acceptance.db).
+Set WORKER_RETRY_BACKOFF_SECONDS=0 for faster local runs.
+"""
 
 from __future__ import annotations
 
