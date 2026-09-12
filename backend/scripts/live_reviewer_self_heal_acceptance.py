@@ -148,11 +148,18 @@ def _dashboard_reviewer_state(
     return "FAIL"
 
 
+def _prefixed(results: dict[str, str], prefix: str, evidence: dict[str, str]) -> None:
+    for key, value in evidence.items():
+        results[f"{prefix}_{key}" if prefix else key] = value
+
+
 def main() -> int:
     settings = get_autonomous_settings()
     store = StateStore(settings.state_db_path)
     issue_num = int(os.environ.get("REVIEWER_SELF_HEAL_ISSUE", "57"))
     commit_prefix = os.environ.get("REVIEWER_SELF_HEAL_COMMIT", "642ea99")
+    continue_issue = int(os.environ.get("REVIEWER_SELF_HEAL_CONTINUE_ISSUE", "56"))
+    continue_commit = os.environ.get("REVIEWER_SELF_HEAL_CONTINUE_COMMIT", "c12d306")
     base = os.environ.get("AUTONOMOUS_ACCEPTANCE_BASE", _default_base())
     results: dict[str, str] = {}
 
@@ -161,7 +168,12 @@ def main() -> int:
             print("FAIL: healthz unavailable")
             return 1
 
-        results.update(_lineage_evidence(store, issue_num, commit_prefix))
+        _prefixed(results, "", _lineage_evidence(store, issue_num, commit_prefix))
+        _prefixed(
+            results,
+            "continue",
+            _lineage_evidence(store, continue_issue, continue_commit),
+        )
 
         counts = run_loop_recovery_tick(settings, store)
         results["loop_recovery_tick"] = (
@@ -191,6 +203,18 @@ def main() -> int:
                         break
                 run_loop_recovery_tick(settings, store)
                 time.sleep(2)
+
+        results["resume_review"] = (
+            "PASS"
+            if results.get("verdict_path") == "PASS" or results.get("verdict_completed") == "PASS"
+            else "FAIL"
+        )
+        results["continue_governance"] = (
+            "PASS"
+            if results.get("continue_verdict_path") == "PASS"
+            or results.get("continue_verdict_completed") == "PASS"
+            else "FAIL"
+        )
 
         results["dashboard_reviewer_state"] = _dashboard_reviewer_state(
             client, base, store, issue_num
