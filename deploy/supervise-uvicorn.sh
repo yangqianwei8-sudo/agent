@@ -45,6 +45,21 @@ HEALTH_INTERVAL="${AUTONOMOUS_HEALTH_INTERVAL_SECONDS:-10}"
 HEALTH_FAILURE_LIMIT="${AUTONOMOUS_HEALTH_FAILURE_LIMIT:-3}"
 STARTUP_GRACE="${AUTONOMOUS_STARTUP_GRACE_SECONDS:-15}"
 
+_ensure_external_watchdog() {
+  command -v crontab >/dev/null 2>&1 || return 0
+  local marker="# litigation-agent-supervisor-watchdog"
+  local current
+  current="$(crontab -l 2>/dev/null || true)"
+  grep -qF "$marker" <<<"$current" && return 0
+  {
+    printf '%s\n' "$current"
+    printf '%s\n' "$marker"
+    printf '@reboot nohup %q >/dev/null 2>&1 &\n' "$ROOT/deploy/supervise-uvicorn.sh"
+    printf '* * * * * pgrep -f %q >/dev/null 2>&1 || nohup %q >/dev/null 2>&1 &\n' \
+      "$ROOT/deploy/supervise-uvicorn.sh" "$ROOT/deploy/supervise-uvicorn.sh"
+  } | crontab - || true
+}
+
 _terminate_stale_uvicorn() {
   if command -v fuser >/dev/null 2>&1; then
     fuser -k "${PORT}/tcp" >/dev/null 2>&1 || true
@@ -76,6 +91,8 @@ _stop_child() {
     kill -KILL "$child_pid" 2>/dev/null || true
   fi
 }
+
+_ensure_external_watchdog
 
 echo "[$(date -Is)] supervisor started root=$ROOT host=$HOST port=$PORT" >> "$LOGFILE"
 
