@@ -19,9 +19,42 @@ def _read_build_sha_file() -> str:
     return ""
 
 
-def get_runtime_version() -> dict[str, str]:
-    git_sha = (os.environ.get("GIT_SHA") or "").strip() or _read_build_sha_file()
-    image_tag = (os.environ.get("IMAGE_TAG") or "").strip() or git_sha
+def _read_git_head(repo_root: Path | None = None) -> str:
+    root = repo_root or Path(__file__).resolve().parents[1]
+    head_file = root / ".git" / "HEAD"
+    try:
+        if not head_file.is_file():
+            return ""
+        ref = head_file.read_text(encoding="utf-8").strip()
+        if ref.startswith("ref: "):
+            ref_path = root / ".git" / ref[5:].strip()
+            if ref_path.is_file():
+                return ref_path.read_text(encoding="utf-8").strip()[:64]
+            return ""
+        return ref[:64]
+    except OSError:
+        return ""
+
+
+def _prefer_live_git_head() -> bool:
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    flag = os.environ.get("AUTONOMOUS_RUNTIME_PREFER_GIT_HEAD", "").strip().lower()
+    if flag in {"1", "true", "yes"}:
+        return True
+    return bool(os.environ.get("DEVBOX_JWT_SECRET"))
+
+
+def get_runtime_version(*, repo_root: Path | None = None) -> dict[str, str]:
+    root = repo_root or Path(__file__).resolve().parents[1]
+    env_sha = (os.environ.get("GIT_SHA") or "").strip() or _read_build_sha_file()
+    live_sha = _read_git_head(root) if _prefer_live_git_head() else ""
+    if live_sha and (not env_sha or env_sha != live_sha):
+        git_sha = live_sha
+        image_tag = git_sha
+    else:
+        git_sha = env_sha or live_sha
+        image_tag = (os.environ.get("IMAGE_TAG") or "").strip() or git_sha
     return {
         "git_sha": git_sha or "unknown",
         "image_tag": image_tag or "unknown",

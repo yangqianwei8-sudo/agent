@@ -35,7 +35,11 @@ async def lifespan(_app: FastAPI):
 
                 logging.getLogger(__name__).exception("startup loop recovery failed")
 
-        threading.Thread(target=_boot_recovery, name="autonomous-startup-recovery", daemon=True).start()
+        threading.Thread(
+            target=_boot_recovery,
+            name="autonomous-startup-recovery",
+            daemon=True,
+        ).start()
         start_watchdog()
     yield
     stop_watchdog()

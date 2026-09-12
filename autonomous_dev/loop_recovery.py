@@ -210,15 +210,4 @@ def _find_orphan_commit_for_task(repo_root: Path, task: TaskRecord) -> str | Non
             return sha
         if task.issue_number == 24 and "auto handoff" in msg.lower():
             return sha
-    lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
-    for line in lines:
-        parts = line.strip().split(" ", 1)
-        if len(parts) < 1:
-            continue
-        sha = parts[0]
-        msg = parts[1] if len(parts) > 1 else ""
-        if f"issue #{task.issue_number}" in msg.lower():
-            return sha
-        if f"#{task.issue_number}" in msg and "autonomous worker" in msg.lower():
-            return sha
     return None

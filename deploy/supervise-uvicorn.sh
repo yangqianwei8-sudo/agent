@@ -54,7 +54,11 @@ echo "[$(date -Is)] supervisor started root=$ROOT host=$HOST port=$PORT" >> "$LO
 
 while true; do
   _terminate_stale_uvicorn
-  echo "[$(date -Is)] starting uvicorn" >> "$LOGFILE"
+  if [[ -f "$ROOT/deploy/load-env.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$ROOT/deploy/load-env.sh" "$ROOT/.env"
+  fi
+  echo "[$(date -Is)] starting uvicorn git_sha=${GIT_SHA:-unknown}" >> "$LOGFILE"
   "$VENV_UVICORN" backend.main:app --host "$HOST" --port "$PORT" >> "$LOGFILE" 2>&1 || true
   echo "[$(date -Is)] uvicorn exited — restarting in 2s" >> "$LOGFILE"
   sleep 2
