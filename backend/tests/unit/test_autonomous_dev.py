@@ -3537,6 +3537,7 @@ def test_worker_failure_module_integrated():
         "derive_failure_dashboard_state",
         "handle_technical_worker_failure",
         "report_worker_failure",
+        "structured_error_text",
         "trigger_post_failure_recovery",
     )
     for name in required:
@@ -3600,4 +3601,47 @@ def test_dashboard_primary_task_visible_in_needs_fix(infra_env, monkeypatch):
     assert payload["current_task"]["task_status"] == "needs-fix"
     assert payload["worker_failure"]["stage"] == "worker-startup"
     assert payload["worker_failure"]["message"] == "startup failed"
+
+
+def test_structured_error_text_sanitizes_secrets():
+    """Regression #64: structured_error_text must redact tokens/secrets from messages."""
+    from autonomous_dev.worker_failure import structured_error_text
+
+    raw = "auth failed ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"
+    text = structured_error_text("worker-startup", "RuntimeError", raw)
+    assert "ghp_" not in text
+    assert "[REDACTED]" in text
+    assert text.startswith("[worker-startup] RuntimeError:")
+
+
+def test_report_worker_failure_posts_exactly_one_comment(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression #64: exactly one GitHub comment per execution generation."""
+    from autonomous_dev.worker_failure import FAILURE_COMMENT_MARKER, report_worker_failure
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    issue_num = 64
+    execution_key = f"{settings.github_repo}#{issue_num}#gen-dedup"
+    task = store.create_task(
+        issue_number=issue_num,
+        delivery_id="dedup-first",
+        execution_key=execution_key,
+    )
+    store.update_task(task.id, status=TaskStatus.NEEDS_FIX, error="startup failed")
+    exc = RuntimeError("lease acquire failed")
+
+    report_worker_failure(settings, store, _mock_github_client, task, exc=exc)
+    report_worker_failure(settings, store, _mock_github_client, task, exc=exc)
+
+    comments = [
+        c
+        for n, c in _mock_github_client.comments
+        if n == issue_num and FAILURE_COMMENT_MARKER in c and execution_key in c
+    ]
+    assert len(comments) == 1
+    assert store.get_execution_failure(execution_key) is not None
+    assert store.get_execution_failure(execution_key).comment_posted_at is not None
 

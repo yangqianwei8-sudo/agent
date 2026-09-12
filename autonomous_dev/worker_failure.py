@@ -51,7 +51,8 @@ def classify_worker_failure(exc: BaseException) -> tuple[str, str, str]:
 
 
 def structured_error_text(stage: str, error_class: str, message: str) -> str:
-    return f"[{stage}] {error_class}: {message}"
+    sanitized = summarize_error(message) or error_class
+    return f"[{stage}] {error_class}: {sanitized}"
 
 
 def compute_next_action(
