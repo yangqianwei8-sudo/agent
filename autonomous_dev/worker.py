@@ -405,6 +405,8 @@ class Worker:
     def _verify_push(self, local_head: str) -> None:
         if self.settings.autonomous_worker_mode == "deterministic":
             return
+        # Local origin/main ref is stale immediately after push — refresh before compare.
+        self._run(["git", "fetch", "origin", "main"], check=False)
         remote = self._run(["git", "rev-parse", "origin/main"], check=True)
         if remote.stdout.strip() != local_head:
             raise RuntimeError(
