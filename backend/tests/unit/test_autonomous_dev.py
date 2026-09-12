@@ -40,7 +40,6 @@ from autonomous_dev.task_router import TaskRouter
 from autonomous_dev.worker import (
     CURSOR_RUNTIME_ACCEPTANCE_MARKER,
     CURSOR_RUNTIME_OK_MARKER,
-    P0_LIVE_ACCEPTANCE_MARKER,
     PRODUCT_DECISION_MARKER,
     Worker,
 )
@@ -364,59 +363,6 @@ def test_worker_git_completion_verification(infra_env, monkeypatch: pytest.Monke
     assert result.commit_sha is not None
     marker = repo / "autonomous_dev" / "acceptance_marker.txt"
     assert marker.exists()
-
-
-def test_p0_live_acceptance_stages_marker_only(infra_env, monkeypatch: pytest.MonkeyPatch):
-    repo, db = infra_env
-    monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
-    monkeypatch.setenv("CURSOR_API_KEY", "test-key")
-    monkeypatch.setenv("CURSOR_MODEL", "composer-2")
-    clear_autonomous_settings_cache()
-    settings = AutonomousDevSettings()
-    store = StateStore(db)
-    worker = Worker(settings, store, repo_root=repo)
-
-    staged_paths: list[str] = []
-
-    def capture_add(issue_number: int, *, paths=None, events=None):
-        if paths:
-            staged_paths.extend(paths)
-        return "abc123456789deadbeef000000000000000000000"
-
-    monkeypatch.setattr(worker, "_run_tests", lambda *a, **k: None)
-    monkeypatch.setattr(worker, "_git_fetch", lambda *a, **k: None)
-    monkeypatch.setattr(worker, "_prepare_acceptance_worktree", lambda: None)
-    monkeypatch.setattr(worker, "_verify_push", lambda *a, **k: None)
-    monkeypatch.setattr(worker, "_commit_and_push", capture_add)
-    monkeypatch.setattr(
-        worker,
-        "_invoke_cursor_agent",
-        lambda *a, **k: type("R", (), {"result": CURSOR_RUNTIME_OK_MARKER})(),
-    )
-    monkeypatch.setattr(worker._github, "sync_worker_running", lambda n: None)
-    monkeypatch.setattr(
-        "autonomous_dev.review_handoff.transition_ready_for_review",
-        lambda store, github, bridge, task, sha: store.update_task(
-            task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=sha
-        ),
-    )
-
-    noise = repo / "backend" / "noise.txt"
-    noise.parent.mkdir(parents=True, exist_ok=True)
-    noise.write_text("should not be committed\n", encoding="utf-8")
-
-    task = store.create_task(issue_number=88002, delivery_id="p0-marker-only")
-    store.try_acquire_lock(88002, task.id)
-    body = (
-        f"{REVIEWER_ACCEPTANCE_MARKER}\n{P0_LIVE_ACCEPTANCE_MARKER}\n"
-        "Update autonomous_dev/acceptance_marker.txt only."
-    )
-    result = worker.run_task(task, issue_body=body)
-    assert result.status == TaskStatus.READY_FOR_REVIEW
-    assert staged_paths == ["autonomous_dev/acceptance_marker.txt"]
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    assert marker.exists()
-    assert "issue=88002" in marker.read_text(encoding="utf-8")
 
 
 def test_state_transitions(infra_env):

@@ -275,23 +275,18 @@ class Worker:
     def _run_p0_live_acceptance(
         self, task: TaskRecord, issue_body: str, *, events: ExecutionEventRecorder
     ) -> str:
-        """P0 live path: marker-only change + tests + commit + push (no Cursor file edits)."""
+        """P0 live path: cursor_sdk invoked + harmless change + tests + commit + push."""
         self._git_fetch(events)
-        self._prepare_acceptance_worktree()
+        self._ensure_clean_or_resolve()
         self._apply_harmless_change(task.issue_number, events=events)
         prompt = (
             f"P0 live acceptance for Issue #{task.issue_number}. "
-            "Do not read or modify any files. "
+            "Harmless marker file updated. Do not modify other files. "
             f"Reply with exactly: {CURSOR_RUNTIME_OK_MARKER}\n\n{issue_body}"
         )
         self._invoke_cursor_agent(prompt, events=events)
         self._run_tests(events)
-        marker_path = "autonomous_dev/acceptance_marker.txt"
-        commit_sha = self._commit_and_push(
-            task.issue_number,
-            paths=[marker_path],
-            events=events,
-        )
+        commit_sha = self._commit_and_push(task.issue_number, events=events)
         self._verify_push(commit_sha)
         return commit_sha
 
@@ -326,23 +321,6 @@ class Worker:
                 self._run(["git", "clean", "-fd", "data/"], check=False)
                 return
             raise RuntimeError(f"working tree not clean: {status.stdout.strip()[:500]}")
-
-    def _prepare_acceptance_worktree(self) -> None:
-        """Reset dirty worktree before P0 acceptance — only marker may change."""
-        status = self._run(["git", "status", "--porcelain"], check=True)
-        if not status.stdout.strip():
-            return
-        logger.warning(
-            "acceptance worktree dirty — restoring tracked files before marker update"
-        )
-        self._run(["git", "restore", "--staged", "--worktree", "."], check=False)
-        self._run(["git", "clean", "-fd", "data/"], check=False)
-        remaining = self._run(["git", "status", "--porcelain"], check=True)
-        if remaining.stdout.strip():
-            raise RuntimeError(
-                f"working tree not clean after acceptance restore: "
-                f"{remaining.stdout.strip()[:500]}"
-            )
 
     def _apply_harmless_change(self, issue_number: int, *, events: ExecutionEventRecorder | None = None) -> None:
         marker = self.repo_root / "autonomous_dev" / "acceptance_marker.txt"
@@ -384,17 +362,10 @@ class Worker:
             self._run(["git", "config", "user.name", "autonomous-dev-bot"], check=False)
 
     def _commit_and_push(
-        self,
-        issue_number: int,
-        *,
-        paths: list[str] | None = None,
-        events: ExecutionEventRecorder | None = None,
+        self, issue_number: int, *, events: ExecutionEventRecorder | None = None
     ) -> str:
         self._ensure_git_identity()
-        if paths:
-            self._run(["git", "add", *paths])
-        else:
-            self._run(["git", "add", "-A"])
+        self._run(["git", "add", "-A"])
         msg = f"chore: autonomous worker update for issue #{issue_number}"
         diff_stat = self._run(["git", "diff", "--stat", "--cached"], check=False)
         if events and diff_stat.stdout.strip():
