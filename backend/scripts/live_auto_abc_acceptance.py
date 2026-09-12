@@ -69,7 +69,7 @@ def _create_chain(github: GitHubClient) -> tuple[int, int, int]:
 
 
 def _activate_a(github: GitHubClient, issue_a: int) -> None:
-    github.set_issue_labels(issue_a, {"cursor-task", LABEL_CURRENT_TASK})
+    github.enforce_single_current_task(issue_a)
 
 
 def _wait_task_state(
