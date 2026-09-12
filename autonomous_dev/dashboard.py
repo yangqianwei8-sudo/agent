@@ -307,7 +307,8 @@ def build_dashboard_payload(
     )
 
     labels: list[str] = []
-    label_issue = current_task.issue_number if current_task else None
+    display_task = current_task or primary_task
+    label_issue = display_task.issue_number if display_task else None
     fetched_labels, label_reason = _fetch_issue_labels_bounded(settings, label_issue)
     if label_reason:
         degraded_reasons.append(label_reason)
@@ -380,7 +381,7 @@ def build_dashboard_payload(
     payload: dict[str, Any] = {
         "system_status": system_status.value,
         "current_task": _task_to_dict(
-            current_task,
+            display_task,
             settings=settings,
             system_status=system_status,
             lease=lease,
@@ -560,6 +561,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="hero-grid" id="hero-grid"></div>
   </div>
 
+  <section id="self-heal-section" style="display:none">
+    <h2>Technical Self-Heal</h2>
+    <div id="worker-failure-panel" class="grid"></div>
+    <div id="self-heal-panel" class="grid" style="margin-top:8px"></div>
+  </section>
+
   <section>
     <h2>实时开发过程</h2>
     <div id="trace-terminal" class="trace-terminal"></div>
@@ -643,14 +650,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById("version-line").textContent = `生产版本：${prod} · GitHub main：${main} · image：${(rv.image_tag || "—").slice(0, 7)}`;
     }
 
+    function renderSelfHeal(data) {
+      const sh = data.self_heal;
+      const wf = data.worker_failure;
+      const section = document.getElementById("self-heal-section");
+      if (!sh && !wf) {
+        section.style.display = "none";
+        return;
+      }
+      section.style.display = "block";
+      document.getElementById("worker-failure-panel").innerHTML = wf ? [
+        kv("Stage", wf.stage), kv("Error Class", wf.error_class),
+        kv("Message", wf.message), kv("Retry Count", wf.retry_count),
+        kv("Next Action", wf.next_action), kv("Comment Posted", wf.comment_posted),
+      ].join("") : kv("Failure", "—");
+      document.getElementById("self-heal-panel").innerHTML = sh ? [
+        kv("Status", sh.status), kv("Attempts", `${sh.attempt_count ?? "—"} / ${sh.max_attempts ?? "—"}`),
+        kv("Next Retry", fmtClock(sh.next_retry_at)), kv("Last Error", sh.last_error),
+        kv("Reason", sh.reason),
+      ].join("") : kv("Self-Heal", "—");
+    }
+
     function renderHero(data) {
       const t = data.execution_trace || {};
       const task = data.current_task;
+      const wf = data.worker_failure;
       const motion = t.motion_status || "IDLE";
       const pill = document.getElementById("hero-motion");
       pill.className = `pill motion-${motion}`;
       pill.textContent = `执行状态：${MOTION_LABELS[motion] || motion} (${motion})`;
-      document.getElementById("hero-current").textContent = `当前：${t.current_action || "—"}`;
+      let currentLine = t.current_action || "—";
+      if (wf && wf.stage) currentLine = `[${wf.stage}] ${wf.error_class || "Error"}: ${wf.message || "—"}`;
+      document.getElementById("hero-current").textContent = `当前：${currentLine}`;
       const issue = task ? `#${task.issue_number}` : "—";
       const title = task && task.title ? ` · ${task.title}` : "";
       document.getElementById("hero-task").textContent = `当前任务：Issue ${issue}${title} · 阶段 ${t.current_phase || "—"} · telemetry ${t.telemetry_level || "—"}`;
@@ -707,6 +738,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       lastPayload = data;
       renderVersion(data);
       renderHero(data);
+      renderSelfHeal(data);
       renderPanels(data);
       renderTrace(data.execution_trace);
       const status = data.system_status || "IDLE";
