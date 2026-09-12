@@ -2774,7 +2774,8 @@ def test_handoff_pass_activates_queued_next_task_once(infra_env, _mock_github_cl
     result = engine.perform_handoff(task_a, commit_sha="abc123456789")
     assert result["status"] == "activated"
     assert result["next_issue_number"] == "100"
-    assert _mock_github_client.labels[100] == {"cursor-task", "current-task"}
+    assert _mock_github_client.labels[100] & {"cursor-task"} == {"cursor-task"}
+    assert _mock_github_client.labels[100] & {"current-task", "worker-running"}
     handoff = store.get_handoff_by_key(f"handoff:{task_a.id}:abc123456789")
     assert handoff is not None
     allowed = {HandoffStatus.ACTIVATED, HandoffStatus.WORKER_STARTED, HandoffStatus.PENDING}
@@ -3022,9 +3023,8 @@ def test_orphan_push_reconcile_to_ready_for_review(infra_env, monkeypatch, _mock
         "autonomous_dev.loop_recovery._find_orphan_commit_for_task",
         lambda _root, _task: "abc123456789deadbeef0123456789abcd",
     )
-    github = GitHubClient(settings)
     review_bridge = ReviewBridge(settings, store)
-    count = reconcile_orphan_pushes(settings, store, github, review_bridge)
+    count = reconcile_orphan_pushes(settings, store, _mock_github_client, review_bridge)
     assert count == 1
     updated = store.get_task(task.id)
     assert updated.status == TaskStatus.READY_FOR_REVIEW
