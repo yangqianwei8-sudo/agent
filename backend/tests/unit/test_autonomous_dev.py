@@ -3246,6 +3246,130 @@ def test_reviewer_self_heal_dashboard_exposes_recovery_state(infra_env, monkeypa
     assert payload["runtime_evidence"]["reviewer_status"] == "stale-recovered"
 
 
+def test_reviewer_exhausted_dashboard_state(infra_env, monkeypatch):
+    from autonomous_dev.dashboard import build_dashboard_payload
+    from autonomous_dev.state import ReviewerReactivationStatus
+    from autonomous_dev.status_deriver import SystemStatus
+
+    _, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    task = store.create_task(
+        issue_number=64,
+        delivery_id="reviewer-exhausted",
+        status=TaskStatus.READY_FOR_REVIEW,
+    )
+    store.update_task(task.id, commit_sha="exhaust12345678")
+    store.upsert_reviewer_reactivation(
+        issue_number=64,
+        task_id=task.id,
+        attempt_count=settings.review_max_attempts + 1,
+        next_retry_at=None,
+        last_error="reviewer recovery budget exhausted",
+        status=ReviewerReactivationStatus.EXHAUSTED,
+    )
+    monkeypatch.setattr(
+        "autonomous_dev.dashboard._fetch_issue_labels_bounded",
+        lambda *a, **k: (["cursor-task", "ready-for-review"], None),
+    )
+    payload = build_dashboard_payload(settings, store)
+    assert payload["system_status"] == SystemStatus.REVIEWER_EXHAUSTED.value
+    assert payload["reviewer_self_heal"]["status"] == "exhausted"
+    assert payload["runtime_evidence"]["reviewer_status"] == "exhausted"
+
+
+def test_orphaned_reviewer_lock_reclaimed_missing_invocation(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression #62: orphaned reviewer lock with no invocation must recover to verdict."""
+    import sqlite3
+
+    from autonomous_dev.loop_recovery import run_loop_recovery_tick
+    from autonomous_dev.review_worker import process_due_reviews
+
+    repo, db = infra_env
+    monkeypatch.setenv("REVIEWER_STALL_SECONDS", "0")
+    monkeypatch.setenv("REVIEWER_ORPHAN_LOCK_STALL_SECONDS", "0")
+    monkeypatch.setenv("REVIEW_RETRY_BACKOFF_SECONDS", "0")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok\n", encoding="utf-8")
+    task = store.create_task(issue_number=65, delivery_id="orphan-lock")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="orphan12345678")
+    _mock_github_client.bodies[65] = f"{REVIEWER_ACCEPTANCE_MARKER}\nOrphan lock recovery."
+
+    assert store.try_acquire_reviewer_lock(task.id, owner="orphan-owner", ttl_seconds=3600)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE reviewer_lock SET acquired_at = ? WHERE id = 1",
+            ("2000-01-01T00:00:00+00:00",),
+        )
+    assert store.get_review_invocation(task.id, "orphan12345678") is None
+
+    counts = run_loop_recovery_tick(settings, store)
+    assert counts["stalled_ready_for_review"] >= 1
+
+    deadline = time.time() + 15
+    inv = store.get_review_invocation(task.id, "orphan12345678")
+    while time.time() < deadline:
+        inv = store.get_review_invocation(task.id, "orphan12345678")
+        if inv and inv.status == ReviewInvocationStatus.COMPLETED:
+            break
+        process_due_reviews(settings, store)
+        time.sleep(0.1)
+    assert inv is not None
+    assert inv.status == ReviewInvocationStatus.COMPLETED
+    assert inv.verdict == ReviewVerdict.PASS
+    react = store.get_reviewer_reactivation(65)
+    assert react is not None
+    assert react.attempt_count >= 1
+
+
+def test_reviewer_infra_failure_never_becomes_product_decision(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    repo, db = infra_env
+    monkeypatch.setenv("REVIEW_RETRY_BACKOFF_SECONDS", "0")
+    monkeypatch.setenv("REVIEW_MAX_ATTEMPTS", "1")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    task = store.create_task(issue_number=66, delivery_id="infra-not-pd")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="infra123456789")
+    invocation_id = "inv-infra-fail"
+    store.create_review_invocation(
+        invocation_id=invocation_id,
+        task_id=task.id,
+        issue_number=66,
+        commit_sha="infra123456789",
+    )
+    store.update_review_invocation(
+        invocation_id,
+        status=ReviewInvocationStatus.RUNNING,
+        started_at=datetime.now(UTC).isoformat(),
+        attempt_count=0,
+    )
+
+    def boom(_self, _ctx, *, invocation_id=None):
+        raise RuntimeError("simulated reviewer API 503")
+
+    monkeypatch.setattr(ReviewerService, "review", boom)
+    executor = ReviewExecutor(settings, store)
+    invocation = store.get_review_invocation(task.id, "infra123456789")
+    assert invocation is not None
+    outcome = executor.execute_review_invocation(task, invocation)
+    assert outcome["status"] == "failed"
+    assert outcome.get("retryable") == "false"
+
+    updated = store.get_task(task.id)
+    assert updated is not None
+    assert updated.status == TaskStatus.READY_FOR_REVIEW
+    assert updated.status != TaskStatus.PRODUCT_DECISION
+
+
 def test_issue62_startup_failure_observable_and_self_heals(
     infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
 ):
