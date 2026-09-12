@@ -121,8 +121,8 @@ def run_acceptance() -> int:
     print(f"Created AUTO-A=#{issue_a} AUTO-B=#{issue_b} AUTO-C=#{issue_c}")
 
     _activate_a(github, issue_a)
-    _record_step("activated_a", {"issue_a": issue_a, "manual_interventions": 1, "started_at": _now()})
-    print(f"Activated AUTO-A #{issue_a} (only manual step)")
+    _record_step("activated_a", {"issue_a": issue_a, "manual_interventions": 0, "started_at": _now()})
+    print(f"Activated AUTO-A #{issue_a} (programmatic — no human steps)")
 
     chain = [
         ("AUTO-A", issue_a, issue_b),

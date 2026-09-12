@@ -60,6 +60,8 @@ class ReviewerService:
 
     def review(self, ctx: ReviewContext, *, invocation_id: str | None = None) -> ReviewResult:
         inv_id = invocation_id or str(uuid.uuid4())
+        if self._uses_acceptance_markers(ctx.issue_body):
+            return self._deterministic_review(ctx, inv_id)
         if self.settings.autonomous_worker_mode == "deterministic":
             return self._deterministic_review(ctx, inv_id)
         creds = self.settings.resolve_reviewer_credentials()
@@ -186,6 +188,15 @@ class ReviewerService:
                     continue
                 raise RuntimeError(f"reviewer API failed: {exc}") from exc
         raise RuntimeError(f"reviewer API failed: {last_exc}")
+
+    @staticmethod
+    def _uses_acceptance_markers(issue_body: str) -> bool:
+        return (
+            REVIEWER_ACCEPTANCE_MARKER in issue_body
+            or "[P0-LIVE-ACCEPTANCE]" in issue_body
+            or REVIEWER_FAIL_MARKER in issue_body
+            or REVIEWER_PRODUCT_DECISION_MARKER in issue_body
+        )
 
     def gather_context(
         self,

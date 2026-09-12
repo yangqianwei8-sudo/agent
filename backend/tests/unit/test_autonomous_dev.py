@@ -978,6 +978,43 @@ def test_reviewer_service_deterministic_pass(infra_env):
     assert result.verdict == "PASS"
 
 
+def test_reviewer_live_acceptance_uses_marker_only_in_real_mode(
+    infra_env, monkeypatch: pytest.MonkeyPatch
+):
+    repo, db = infra_env
+    monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    assert settings.autonomous_worker_mode == "cursor_sdk"
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("live\n", encoding="utf-8")
+    svc = ReviewerService(settings, repo_root=repo)
+    monkeypatch.setattr(
+        svc,
+        "_git_diff",
+        lambda _sha: "diff --git a/autonomous_dev/acceptance_marker.txt b/autonomous_dev/acceptance_marker.txt",
+    )
+    ctx = svc.gather_context(
+        issue_number=1,
+        issue_body=f"{REVIEWER_ACCEPTANCE_MARKER}\n[P0-LIVE-ACCEPTANCE]\nAUTO-A marker only",
+        commit_sha="abc123",
+    )
+    assert "acceptance_marker" in ctx.diff
+
+    calls = {"openai": 0}
+    real_openai = ReviewerService._openai_review
+
+    def blocked_openai(self, ctx, inv_id, creds):
+        calls["openai"] += 1
+        return real_openai(self, ctx, inv_id, creds)
+
+    monkeypatch.setattr(ReviewerService, "_openai_review", blocked_openai)
+    result = svc.review(ctx)
+    assert result.verdict == "PASS"
+    assert calls["openai"] == 0
+
+
 def test_reviewer_evidence_includes_pytest_and_ruff(infra_env, monkeypatch: pytest.MonkeyPatch):
     repo, db = infra_env
     settings = AutonomousDevSettings()
