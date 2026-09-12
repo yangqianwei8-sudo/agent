@@ -206,6 +206,14 @@ class ReviewerService:
         commit_sha: str,
     ) -> ReviewContext:
         diff = self._git_diff(commit_sha)
+        if self._uses_acceptance_markers(issue_body):
+            return ReviewContext(
+                issue_number=issue_number,
+                issue_body=issue_body,
+                commit_sha=commit_sha,
+                diff=diff,
+                test_evidence="acceptance-marker-only (skipped full suite for P0 live chain)",
+            )
         tests = self._gather_test_evidence(commit_sha)
         return ReviewContext(
             issue_number=issue_number,
