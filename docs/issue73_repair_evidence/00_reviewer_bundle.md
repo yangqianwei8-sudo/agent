@@ -1,6 +1,6 @@
 # Issue #73 Resubmit — Issue-Centered V2 (#60 repair)
 
-Generated: 2026-09-13T09:26:11.238147Z | Base: `f84972a` | Repair: `b7e78c4`
+Generated: 2026-09-13T09:38:43.857385Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `1bac082`
 
 **SSOT:** `docs/issue73_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -11,8 +11,8 @@ Generated: 2026-09-13T09:26:11.238147Z | Base: `f84972a` | Repair: `b7e78c4`
 | Full migration | 406 | `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` |
 | Full domain | 1133 | `backend/domain/issue_centered.py` |
 | Full application | 521 | `backend/application/issue_work_product.py` |
-| Invariant tests | 224 | `backend/tests/integration/test_issue_centered_v2_invariants.py` |
-| Production patch | 2304 | `issue73_repair_production.patch` |
+| Invariant tests | 246 | `backend/tests/integration/test_issue_centered_v2_invariants.py` |
+| Production patch | 2326 | `issue73_repair_production.patch` |
 
 SSOT copies (identical to production): `sources/migration_h9b0c1d2e3f4.py`, `sources/domain_issue_centered.py`, `sources/application_issue_work_product.py`, `sources/test_issue_centered_v2_invariants.py`.
 
@@ -59,14 +59,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `assert len(split_audits) >= 1`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T09:26:11.238147Z
+## (B) Test output — actual run 2026-09-13T09:38:43.857385Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #73 repair capture | commit=b7e78c44f82ad016affa6619783d514c37018cbd | timestamp=2026-09-13T09:26:11.238147+00:00
+# Issue #73 repair capture | commit=1bac0823e427025295adc2df76abf5c7937671b0 | timestamp=2026-09-13T09:38:43.857385+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -115,7 +115,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #73 repair capture | commit=b7e78c44f82ad016affa6619783d514c37018cbd | timestamp=2026-09-13T09:26:11.238147+00:00
+# Issue #73 repair capture | commit=1bac0823e427025295adc2df76abf5c7937671b0 | timestamp=2026-09-13T09:38:43.857385+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -2243,10 +2243,10 @@ class IssueWorkProductService:
 
 ## (F) Invariant tests — backend/tests/integration/test_issue_centered_v2_invariants.py (complete, untruncated, inlined)
 
-Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py` (224 lines)
+Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py` (246 lines)
 
 ```python
-"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #80 SSOT)."""
+"""Issue-centered V2 — four invariant assertions (Issue #73 / #60 / #83 SSOT)."""
 
 from __future__ import annotations
 
@@ -2259,8 +2259,7 @@ from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
 )
-from backend.domain.services import _reject_claim_direction_production_mutation
-from backend.domain.services import DomainService
+from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
 from backend.models import AuditLog, HumanDecision
 from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 from backend.tests.integration.test_issue_centered_v2 import _seed_fact
@@ -2354,13 +2353,36 @@ def test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case(
             actor_id=actor_id,
         )
     # Cross-case fact → ValidationError
-    with pytest.raises(ValidationError, match="cross-case"):
+    with pytest.raises(ValidationError, match="cross-case fact link rejected"):
         svc.link_fact_to_proof_task(
             case_id=c2.id,
             proof_task_key=task.proof_task_key,
             proof_task_version=task.version,
             fact_key=fact.fact_key,
             fact_version=fact.version,
+            role="SUPPORT",
+            actor_id=actor_id,
+        )
+    # Cross-case proof task (task in c2, link attempted under c1) → ValidationError
+    issue1 = svc.confirm_issue(
+        svc.propose_issue(case_id=c1.id, statement="案A焦点").issue_key,
+        actor_id=actor_id,
+    )
+    task1 = svc.create_lawyer_proof_task(
+        case_id=c1.id,
+        issue_key=issue1.issue_key,
+        issue_version=issue1.version,
+        description="案A任务",
+        actor_id=actor_id,
+    )
+    fact2 = _seed_fact(svc, c2.id, actor_id, item)
+    with pytest.raises(ValidationError, match="cross-case proof task link rejected"):
+        svc.link_fact_to_proof_task(
+            case_id=c2.id,
+            proof_task_key=task1.proof_task_key,
+            proof_task_version=task1.version,
+            fact_key=fact2.fact_key,
+            fact_version=fact2.version,
             role="SUPPORT",
             actor_id=actor_id,
         )
@@ -2473,9 +2495,9 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
 
 Verified by: all 19 pytest tests + live acceptance 30 steps — **PASSED**.
 
-## (G) Untruncated production diff — all four files (2304 lines)
+## (G) Untruncated production diff — all four files (2326 lines)
 
-Generated: `git diff f84972a -- <four production paths>`
+Generated: `git diff f84972a213c44ba602b07ae3801637dc5c045f16 -- <four production paths>`
 
 Full raw patch (NOT truncated, ends at last line of invariant tests):
 
@@ -4557,11 +4579,11 @@ index 0000000..b57f649
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..2a1e06b
+index 0000000..0699363
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
-@@ -0,0 +1,223 @@
-+"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #80 SSOT)."""
+@@ -0,0 +1,245 @@
++"""Issue-centered V2 — four invariant assertions (Issue #73 / #60 / #83 SSOT)."""
 +
 +from __future__ import annotations
 +
@@ -4574,8 +4596,7 @@ index 0000000..2a1e06b
 +    _guard_explicit_proof_task_fact_versions,
 +    _guard_formal_defense_opponent_material_ref,
 +)
-+from backend.domain.services import _reject_claim_direction_production_mutation
-+from backend.domain.services import DomainService
++from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
 +from backend.models import AuditLog, HumanDecision
 +from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 +from backend.tests.integration.test_issue_centered_v2 import _seed_fact
@@ -4669,13 +4690,36 @@ index 0000000..2a1e06b
 +            actor_id=actor_id,
 +        )
 +    # Cross-case fact → ValidationError
-+    with pytest.raises(ValidationError, match="cross-case"):
++    with pytest.raises(ValidationError, match="cross-case fact link rejected"):
 +        svc.link_fact_to_proof_task(
 +            case_id=c2.id,
 +            proof_task_key=task.proof_task_key,
 +            proof_task_version=task.version,
 +            fact_key=fact.fact_key,
 +            fact_version=fact.version,
++            role="SUPPORT",
++            actor_id=actor_id,
++        )
++    # Cross-case proof task (task in c2, link attempted under c1) → ValidationError
++    issue1 = svc.confirm_issue(
++        svc.propose_issue(case_id=c1.id, statement="案A焦点").issue_key,
++        actor_id=actor_id,
++    )
++    task1 = svc.create_lawyer_proof_task(
++        case_id=c1.id,
++        issue_key=issue1.issue_key,
++        issue_version=issue1.version,
++        description="案A任务",
++        actor_id=actor_id,
++    )
++    fact2 = _seed_fact(svc, c2.id, actor_id, item)
++    with pytest.raises(ValidationError, match="cross-case proof task link rejected"):
++        svc.link_fact_to_proof_task(
++            case_id=c2.id,
++            proof_task_key=task1.proof_task_key,
++            proof_task_version=task1.version,
++            fact_key=fact2.fact_key,
++            fact_version=fact2.version,
 +            role="SUPPORT",
 +            actor_id=actor_id,
 +        )

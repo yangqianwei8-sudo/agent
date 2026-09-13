@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE = ROOT / "docs" / "issue73_repair_evidence"
 # Stable base before issue-centered v2 (parent of c19379b); distinct from repair HEAD.
-PATCH_BASE = "f84972a"
+PATCH_BASE = "f84972a213c44ba602b07ae3801637dc5c045f16"
 
 PRODUCTION_FILES = {
     "migration": ROOT / "alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py",
@@ -402,7 +402,7 @@ def _repair_sha_from_argv() -> str | None:
 def main() -> None:
     align_only = "--align-only" in sys.argv
     ts = datetime.now(UTC)
-    patch_base = _git_short(PATCH_BASE)
+    patch_base = _git_full(PATCH_BASE)
     repair_override = _repair_sha_from_argv()
     repair_full = repair_override or _git_full("HEAD")
     repair_head = repair_full[:7] if repair_override else _git_short("HEAD")

@@ -105,13 +105,36 @@ def test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case(
             actor_id=actor_id,
         )
     # Cross-case fact → ValidationError
-    with pytest.raises(ValidationError, match="cross-case"):
+    with pytest.raises(ValidationError, match="cross-case fact link rejected"):
         svc.link_fact_to_proof_task(
             case_id=c2.id,
             proof_task_key=task.proof_task_key,
             proof_task_version=task.version,
             fact_key=fact.fact_key,
             fact_version=fact.version,
+            role="SUPPORT",
+            actor_id=actor_id,
+        )
+    # Cross-case proof task (task in c2, link attempted under c1) → ValidationError
+    issue1 = svc.confirm_issue(
+        svc.propose_issue(case_id=c1.id, statement="案A焦点").issue_key,
+        actor_id=actor_id,
+    )
+    task1 = svc.create_lawyer_proof_task(
+        case_id=c1.id,
+        issue_key=issue1.issue_key,
+        issue_version=issue1.version,
+        description="案A任务",
+        actor_id=actor_id,
+    )
+    fact2 = _seed_fact(svc, c2.id, actor_id, item)
+    with pytest.raises(ValidationError, match="cross-case proof task link rejected"):
+        svc.link_fact_to_proof_task(
+            case_id=c2.id,
+            proof_task_key=task1.proof_task_key,
+            proof_task_version=task1.version,
+            fact_key=fact2.fact_key,
+            fact_version=fact2.version,
             role="SUPPORT",
             actor_id=actor_id,
         )
