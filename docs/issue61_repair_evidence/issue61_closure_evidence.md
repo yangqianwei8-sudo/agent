@@ -1,8 +1,8 @@
 # Issue #61 Closure Evidence — Reviewer Stall Self-Heal
 
-Generated: 2026-09-13T07:42:00Z  
-Base fix commit: `53bdaab` (stale reactivation task_id recovery)  
-Verification HEAD: `c5fb219` (re-verified with fresh closure evidence)
+Generated: 2026-09-13T07:55:49Z  
+Base fix commits: `bea2dc4` (reviewer stall self-heal), `53bdaab` (stale reactivation task_id recovery)  
+Verification HEAD: `fcbfd59`
 
 ## Summary
 
@@ -19,7 +19,8 @@ Reviewer-stage stall recovery is autonomous and deterministic:
 
 | Check | Result |
 |-------|--------|
-| pytest (reviewer self-heal regression) | 8 passed |
+| pytest (reviewer self-heal regression) | 9 passed |
+| pytest (full suite) | 244 passed |
 | ruff | PASS |
 | secret scan | PASS (0 findings, .env not tracked) |
 | live reviewer-stall recovery (#57/#56 lineage) | PASS |
