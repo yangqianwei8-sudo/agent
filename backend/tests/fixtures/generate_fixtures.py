@@ -15,12 +15,15 @@ FIXTURES = Path(__file__).resolve().parent
 DETERMINISTIC_PDF_EPOCH = "20000101000000+00'00'"
 
 
-def generate() -> None:
-    FIXTURES.mkdir(parents=True, exist_ok=True)
-    _write_text_pdf(FIXTURES / "sample_text.pdf")
-    _write_blank_pdf(FIXTURES / "sample_scanned.pdf")
-    _write_docx(FIXTURES / "sample.docx")
-    _write_png(FIXTURES / "sample_image.png")
+def generate(*, output_dir: Path | None = None) -> Path:
+    """Write golden fixtures. Returns the output directory (committed or temp)."""
+    root = output_dir if output_dir is not None else FIXTURES
+    root.mkdir(parents=True, exist_ok=True)
+    _write_text_pdf(root / "sample_text.pdf")
+    _write_blank_pdf(root / "sample_scanned.pdf")
+    _write_docx(root / "sample.docx")
+    _write_png(root / "sample_image.png")
+    return root
 
 
 def _write_text_pdf(path: Path) -> None:
@@ -69,6 +72,9 @@ def _write_blank_pdf(path: Path) -> None:
 
 
 def _write_docx(path: Path) -> None:
+    import io
+    import zipfile
+
     from docx import Document
 
     doc = Document()
@@ -79,7 +85,18 @@ def _write_docx(path: Path) -> None:
     table.rows[0].cells[1].text = "Amount"
     table.rows[1].cells[0].text = "Fee"
     table.rows[1].cells[1].text = "100000"
-    doc.save(path)
+    raw = io.BytesIO()
+    doc.save(raw)
+    raw.seek(0)
+    fixed_zip_dt = (2000, 1, 1, 0, 0, 0)
+    with zipfile.ZipFile(raw, "r") as src, zipfile.ZipFile(path, "w") as dst:
+        for info in src.infolist():
+            data = src.read(info.filename)
+            normalized = zipfile.ZipInfo(filename=info.filename)
+            normalized.compress_type = info.compress_type
+            normalized.external_attr = info.external_attr
+            normalized.date_time = fixed_zip_dt
+            dst.writestr(normalized, data)
 
 
 def _write_png(path: Path) -> None:

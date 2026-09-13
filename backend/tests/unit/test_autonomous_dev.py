@@ -2766,6 +2766,53 @@ def test_runtime_version_module(infra_env, monkeypatch):
     assert v["image_tag"] == "sha999"
 
 
+def test_acceptance_marker_write_read_and_parse(infra_env):
+    from autonomous_dev.acceptance_marker import (
+        format_marker_content,
+        parse_marker_issue_number,
+        read_marker,
+        write_marker,
+    )
+
+    repo, _db = infra_env
+    fixed = datetime(2026, 9, 13, 6, 30, 0, tzinfo=UTC)
+    path = write_marker(repo, issue_number=79, at=fixed)
+    assert path.exists()
+    assert read_marker(repo) == format_marker_content(issue_number=79, at=fixed)
+    assert parse_marker_issue_number(read_marker(repo)) == 79
+
+
+def test_build_roadmap_issue_body_accept_title_includes_markers():
+    from autonomous_dev.next_task_resolver import build_roadmap_issue_body
+
+    body = build_roadmap_issue_body(
+        source_issue_number=37,
+        stable_key="roadmap-issue:37:e0bff02d3b4a8815",
+        next_title="[ACCEPT] Restart B 747cb2ef",
+        source_body="unrelated source",
+    )
+    assert REVIEWER_ACCEPTANCE_MARKER in body
+    assert "[P0-LIVE-ACCEPTANCE]" in body
+    assert "Harmless marker-only change for [ACCEPT] Restart B 747cb2ef." in body
+    assert "Update autonomous_dev/acceptance_marker.txt only." in body
+    assert "roadmap-issue:37:e0bff02d3b4a8815" in body
+
+
+def test_build_roadmap_issue_body_non_accept_without_source_marker():
+    from autonomous_dev.next_task_resolver import build_roadmap_issue_body
+
+    body = build_roadmap_issue_body(
+        source_issue_number=10,
+        stable_key="roadmap-issue:10:abc123",
+        next_title="Implement feature X",
+        source_body="Regular engineering task with no acceptance markers.",
+    )
+    assert REVIEWER_ACCEPTANCE_MARKER not in body
+    assert "[P0-LIVE-ACCEPTANCE]" not in body
+    assert "Auto-materialized from roadmap after PASS on issue #10." in body
+    assert "roadmap-issue:10:abc123" in body
+
+
 def test_roadmap_materialize_accept_includes_reviewer_markers(infra_env, _mock_github_client):
     from autonomous_dev.next_task_resolver import NextTaskOutcome, NextTaskResolver
 

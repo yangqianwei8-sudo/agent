@@ -66,7 +66,7 @@ def _stable_idempotency_key(*, source_issue: int, title: str) -> str:
     return f"roadmap-issue:{source_issue}:{digest}"
 
 
-def _build_roadmap_issue_body(
+def build_roadmap_issue_body(
     *,
     source_issue_number: int,
     stable_key: str,
@@ -129,7 +129,7 @@ class NextTaskResolver:
             return NextTaskResolution(
                 outcome=NextTaskOutcome.CREATE_NEW,
                 title=next_title,
-                body=_build_roadmap_issue_body(
+                body=build_roadmap_issue_body(
                     source_issue_number=source_issue_number,
                     stable_key=stable_key,
                     next_title=next_title,

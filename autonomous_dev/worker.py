@@ -7,7 +7,6 @@ import subprocess
 import sys
 import threading
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from autonomous_dev.config import AutonomousDevSettings
@@ -407,12 +406,9 @@ class Worker:
             events.command_finished(reset, output="reset to origin/main", ok=True, phase="git")
 
     def _apply_harmless_change(self, issue_number: int, *, events: ExecutionEventRecorder | None = None) -> None:
-        marker = self.repo_root / "autonomous_dev" / "acceptance_marker.txt"
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(
-            f"worker-run issue={issue_number} at={datetime.now(UTC).isoformat()}\n",
-            encoding="utf-8",
-        )
+        from autonomous_dev.acceptance_marker import write_marker
+
+        marker = write_marker(self.repo_root, issue_number=issue_number)
         if events:
             events.file_edit(marker)
 
