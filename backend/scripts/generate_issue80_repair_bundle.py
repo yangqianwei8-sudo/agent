@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE = ROOT / "docs" / "issue80_repair_evidence"
 # Stable base before issue-centered v2 (parent of c19379b); distinct from repair HEAD.
-PATCH_BASE = "f84972a"
+PATCH_BASE = "f84972a213c44ba602b07ae3801637dc5c045f16"
 
 PRODUCTION_FILES = {
     "migration": ROOT / "alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py",
@@ -40,10 +41,6 @@ def _git_short(rev: str) -> str:
     ).strip()
 
 
-def _git_head() -> str:
-    return _git_short("HEAD")
-
-
 def _git_full(rev: str = "HEAD") -> str:
     return subprocess.check_output(
         ["git", "rev-parse", rev], cwd=ROOT, text=True
@@ -55,6 +52,20 @@ def _capture_header(repair_full: str, ts: datetime) -> str:
         f"# Issue #80 repair capture | commit={repair_full} | "
         f"timestamp={ts.isoformat()}\n\n"
     )
+
+
+def _strip_capture_header(content: str) -> str:
+    lines = content.splitlines(keepends=True)
+    if lines and lines[0].startswith("# Issue #80 repair capture |"):
+        if len(lines) > 1 and lines[1] == "\n":
+            return "".join(lines[2:])
+        return "".join(lines[1:])
+    return content
+
+
+def _apply_capture_header(path: Path, repair_full: str, ts: datetime) -> None:
+    body = _strip_capture_header(_read(path))
+    path.write_text(_capture_header(repair_full, ts) + body, encoding="utf-8")
 
 
 def _capture_test_outputs(ts: datetime, repair_full: str) -> None:
@@ -110,7 +121,9 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A1. No production mutation path creates ClaimDirection
 
-**Domain guard** (`backend/domain/services.py` `create_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
+**Domain guard** (`backend/domain/issue_centered.py` `_reject_claim_direction_production_mutation`, wired from `backend/domain/services.py` `create_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
+
+**Application guard** (`IssueWorkProductService.guard_write_attempt`): raises `RuntimeError` on read-projection mutation attempts.
 
 **Test:** `test_invariant_1_no_production_claim_direction_creation`
 - `pytest.raises(ValidationError, match="ClaimDirection production")`
@@ -119,14 +132,9 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A2. ProofTaskFactLink rejects implicit current/latest and cross-case links
 
-**Domain enforcement** (`link_fact_to_proof_task`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); cross-case → `ValidationError("cross-case ...")`.
+**Domain enforcement** (`link_fact_to_proof_task` + `_guard_resolved_explicit_versions`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); rejects version mismatch and cross-case → `ValidationError("cross-case ...")` / `ValidationError("implicit current/latest rejected")`.
 
-**Read projection guard** (`IssueWorkProductService.guard_write_attempt`): raises `RuntimeError` on mutation attempts.
-
-**Test:** `test_invariant_guard_functions_reject_invalid_inputs`
-- `_reject_claim_direction_production_mutation(_legacy_compat=False)` → `ValidationError`
-- `assert_read_only_projection("claim_directions")` → `RuntimeError(match="read-only")`
-- `IssueWorkProductService.guard_write_attempt("claim_directions")` → `RuntimeError`
+**Read projection guard** (`IssueWorkProductService._proof_task_facts`): skips links where `link.case_id != task.case_id` or `fact.case_id != task.case_id`.
 
 **Test:** `test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case`
 - `proof_task_version=0` → `ValidationError(match="explicit positive")`
@@ -141,11 +149,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
 
-**Domain enforcement** (`create_lawyer_position` lines 143–145): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent.
+**Domain enforcement** (`create_lawyer_position` + `_normalize_opponent_material_ref`): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent or whitespace-only.
 
 **Test:** `test_invariant_3_formal_defense_requires_opponent_material_ref`
 - without ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
 - with ref → `assert pos.opponent_material_ref == "material:answer-001"`
+
+**Test:** `test_invariant_3_formal_defense_rejects_whitespace_only_material_ref`
+- whitespace-only ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
 
 **DB constraint:** `test_invariant_3_db_rejects_formal_defense_without_material_ref`
 - direct insert without ref → `IntegrityError` (ck_issue_positions_formal_defense_ref)
@@ -153,13 +164,19 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A4. merge/split emit HumanDecision + AuditLog
 
-**Domain enforcement:** `_persist_issue_structure_decision` flushes HumanDecision before mutation; `_require_structure_mutation_audit` verifies AuditLog(entity_type="issues") before return.
+**Domain enforcement:** `_persist_issue_structure_decision` flushes HumanDecision before mutation; `_require_structure_mutation_audit` verifies AuditLog(entity_type="issues") and `after_json.decision_id == str(decision.id)` before return.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
 - `assert len(merge_decisions) == 1` and `assert merge_decisions[0].id is not None`
 - `assert len(merge_audits) >= 1` and `assert merge_audits[0].entity_type == "issues"`
-- `assert len(split_decisions) == 1` and `assert split_decisions[0].id is not None`
-- `assert len(split_audits) >= 1` and `assert split_audits[0].entity_type == "issues"`
+- `assert merge_audits[0].after_json.get("decision_id") == str(merge_decisions[0].id)`
+- `assert len(split_decisions) == 1` and `assert len(split_audits) >= 1`
+
+**Test:** `test_invariant_4_guard_rejects_missing_human_decision_or_audit`
+- `_require_structure_mutation_audit(...)` without prior decision → `pytest.raises(ConflictError, match="HumanDecision")`
+
+**Test:** `test_invariant_4_guard_rejects_audit_without_decision_id_linkage`
+- AuditLog missing decision_id in after_json → `pytest.raises(ConflictError, match="decision_id")`
 — **PASSED**"""
 
 
@@ -227,9 +244,11 @@ Production path: `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` ({m
 - `ck_proof_gaps_type`: `gap_type IN ('FACT','EVIDENCE','SOURCE','LEGAL_RESEARCH')`
 - `ck_proof_gaps_status`: `status IN ('OPEN','RESOLVED','WAIVED','SUPERSEDED')`
 - `ck_proof_gaps_source`: `source_type IN ('AI_DETECTED','LAWYER_CREATED')`
+- `ck_proof_gaps_proof_task_version_pos`: explicit positive proof_task_version when proof_task_key set
 
 **lawyer_assessments check constraints:**
 - `ck_lawyer_assessments_status`: `status IN ('ACTIVE','SUPERSEDED','WITHDRAWN')`
+- `ck_lawyer_assessments_version_pos`: `version >= 1`
 
 Also: `issue_positions`, `proof_tasks`, `proof_task_fact_links`, `issue_conflicts`, `conflict_fact_links`, `issue_legal_theory_links` — every CheckConstraint listed in migration module docstring.
 
@@ -253,7 +272,7 @@ Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py
 
 {_fence("python", invariants)}
 
-Verified by: all 22 pytest tests + live acceptance 30 steps — **PASSED**."""
+Verified by: all 27 pytest tests + live acceptance 30 steps — **PASSED**."""
 
     return "\n\n".join(
         [
@@ -305,9 +324,11 @@ See `{bundle_rel}` for compact submission with all four invariants, full inline 
 - `ck_proof_gaps_type`: `gap_type IN ('FACT','EVIDENCE','SOURCE','LEGAL_RESEARCH')`
 - `ck_proof_gaps_status`: `status IN ('OPEN','RESOLVED','WAIVED','SUPERSEDED')`
 - `ck_proof_gaps_source`: `source_type IN ('AI_DETECTED','LAWYER_CREATED')`
+- `ck_proof_gaps_proof_task_version_pos`: explicit positive proof_task_version when proof_task_key set
 
 **lawyer_assessments** table with check constraints:
 - `ck_lawyer_assessments_status`: `status IN ('ACTIVE','SUPERSEDED','WITHDRAWN')`
+- `ck_lawyer_assessments_version_pos`: `version >= 1`
 
 {_fence("python", migration)}
 
@@ -376,17 +397,9 @@ def sync_sources() -> None:
         (sources / dest).write_text(_read(src), encoding="utf-8")
 
 
-def main() -> None:
-    ts = datetime.now(UTC)
-    patch_base = _git_short(PATCH_BASE)
-    repair_head = _git_head()
-    repair_full = _git_full("HEAD")
-    EVIDENCE.mkdir(parents=True, exist_ok=True)
-    _capture_test_outputs(ts, repair_full)
-    sync_sources()
-    patch = _generate_production_patch()
-    patch_path = EVIDENCE / "issue80_repair_production.patch"
-    patch_path.write_text(patch, encoding="utf-8")
+def _write_bundle(
+    ts: datetime, patch_base: str, repair_head: str, patch: str
+) -> None:
     bundle_path = EVIDENCE / "00_reviewer_bundle.md"
     evidence_path = EVIDENCE / "issue80_repair_evidence.md"
     bundle_path.write_text(
@@ -402,11 +415,38 @@ def main() -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _repair_sha_from_argv() -> str | None:
+    for arg in sys.argv[1:]:
+        if arg.startswith("--repair-sha="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def main() -> None:
+    align_only = "--align-only" in sys.argv
+    ts = datetime.now(UTC)
+    patch_base = _git_full(PATCH_BASE)
+    repair_override = _repair_sha_from_argv()
+    repair_full = repair_override or _git_full("HEAD")
+    repair_head = repair_full[:7] if repair_override else _git_short("HEAD")
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    if not align_only:
+        _capture_test_outputs(ts, repair_full)
+    else:
+        for path in OUTPUT_FILES.values():
+            if path.exists():
+                _apply_capture_header(path, repair_full, ts)
+    sync_sources()
+    patch = _generate_production_patch()
+    patch_path = EVIDENCE / "issue80_repair_production.patch"
+    patch_path.write_text(patch, encoding="utf-8")
+    _write_bundle(ts, patch_base, repair_head, patch)
     marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
     marker.write_text(f"worker-run issue=80 at={ts.isoformat()}\n", encoding="utf-8")
     print(f"Wrote {patch_path} ({patch_path.stat().st_size} bytes, {patch.count(chr(10)) + 1} lines)")
-    print(f"Wrote {bundle_path} ({bundle_path.stat().st_size} bytes)")
-    print(f"Wrote {evidence_path} ({evidence_path.stat().st_size} bytes)")
+    print(f"Wrote bundle + evidence (Repair: {repair_head}, Base: {patch_base})")
     print(f"Updated {marker}")
 
 

@@ -1,6 +1,6 @@
 """phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 
-Issue #83 repair SSOT (#86 / #84 / #73 / #60): four invariants enforced at DB + domain layers:
+Issue #80 repair SSOT (#73 / #60 / #83 / #86 / #84): four invariants enforced at DB + domain layers:
 - INV-1: ClaimDirection production mutation blocked in domain/application (not this migration)
 - INV-2: proof_task_fact_links version positivity (ck_*_version_pos) rejects implicit 0/latest
 - INV-3: issue_positions FORMAL_DEFENSE ref + side constraints (ck_*_formal_defense_*)
@@ -22,7 +22,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-# INV SSOT (#84): canonical allowed-value sets for CheckConstraints (used in upgrade()).
+# INV SSOT (#80): canonical allowed-value sets for CheckConstraints (used in upgrade()).
 _INV2_MIN_EXPLICIT_VERSION = 1
 _PROOF_GAP_TYPES = ("FACT", "EVIDENCE", "SOURCE", "LEGAL_RESEARCH")
 _PROOF_GAP_STATUSES = ("OPEN", "RESOLVED", "WAIVED", "SUPERSEDED")
@@ -335,6 +335,11 @@ def upgrade() -> None:
         _in_check("ck_proof_gaps_type", "gap_type", _PROOF_GAP_TYPES),
         _in_check("ck_proof_gaps_status", "status", _PROOF_GAP_STATUSES),
         _in_check("ck_proof_gaps_source", "source_type", _PROOF_GAP_SOURCES),
+        sa.CheckConstraint(
+            "(proof_task_key IS NULL) OR "
+            "(proof_task_version IS NOT NULL AND proof_task_version >= 1)",
+            name="ck_proof_gaps_proof_task_version_pos",
+        ),
     )
     op.create_index("ix_proof_gaps_case", "proof_gaps", ["case_id"])
     op.create_index("ix_proof_gaps_issue", "proof_gaps", ["issue_key", "issue_version"])
@@ -369,6 +374,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("assessment_key", "version", name="uq_lawyer_assessments_key_version"),
         _in_check("ck_lawyer_assessments_status", "status", _LAWYER_ASSESSMENT_STATUSES),
+        _version_pos_check("ck_lawyer_assessments_version_pos", "version"),
     )
     op.create_index("ix_lawyer_assessments_case", "lawyer_assessments", ["case_id"])
     op.create_index(

@@ -1,6 +1,6 @@
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #60 repair SSOT / #83 / #86 / #84 / #73).
+Read-only projection over Issue-centered V2 domain (Issue #80 repair SSOT / #73 / #60 / #83 / #86 / #84).
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 invariant enforcement remains in backend/domain/issue_centered.py.
 """
@@ -368,8 +368,10 @@ class IssueWorkProductService:
                 continue
             if link.fact_version < 1:
                 continue
+            if getattr(link, "case_id", None) != task.case_id:
+                continue
             fact = self.repo.get_fact_version(link.fact_key, link.fact_version)
-            if fact is None:
+            if fact is None or fact.case_id != task.case_id:
                 continue
             evidence = self._fact_evidence(fact.id)
             view = ProofTaskFactView(

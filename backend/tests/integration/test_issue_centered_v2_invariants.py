@@ -1,4 +1,4 @@
-"""Issue-centered V2 — four invariant assertions (Issue #60 SSOT repair / #83 / #86 / #85 / #84 / #73)."""
+"""Issue-centered V2 — four invariant assertions (Issue #80 SSOT repair / #73 / #60 / #83 / #86 / #85 / #84)."""
 
 from __future__ import annotations
 
@@ -404,6 +404,43 @@ def test_invariant_4_guard_rejects_missing_human_decision_or_audit(
     db_session.add(decision)
     db_session.flush()
     with pytest.raises(ConflictError, match="AuditLog"):
+        _require_structure_mutation_audit(
+            svc,
+            case_id=case.id,
+            action="merge_issues",
+            decision_type="MERGE_ISSUES",
+        )
+
+
+def test_invariant_4_guard_rejects_audit_without_decision_id_linkage(
+    db_session, owner_id, actor_id
+) -> None:
+    """INV-4: AuditLog.after_json must reference the emitted HumanDecision id."""
+    svc = DomainService(db_session)
+    case = svc.create_case(title="INV4-audit-link", owner_user_id=owner_id)
+    decision = HumanDecision(
+        case_id=case.id,
+        actor_id=actor_id,
+        decision_type="MERGE_ISSUES",
+        target_type="Issue",
+        target_id=uuid.uuid4(),
+        result=DecisionResult.CONFIRMED.value,
+        input_payload_json={"probe": True},
+    )
+    db_session.add(decision)
+    db_session.flush()
+    db_session.add(
+        AuditLog(
+            case_id=case.id,
+            actor_id=actor_id,
+            action="merge_issues",
+            entity_type="issues",
+            entity_id=uuid.uuid4(),
+            after_json={"issue_key": str(uuid.uuid4())},
+        )
+    )
+    db_session.flush()
+    with pytest.raises(ConflictError, match="decision_id"):
         _require_structure_mutation_audit(
             svc,
             case_id=case.id,

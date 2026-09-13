@@ -1,6 +1,6 @@
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #60 repair SSOT / #83 / #86 / #85 / #84 / #73):
+Explicit invariants enforced in this module (Issue #80 repair SSOT / #73 / #60 / #83 / #86 / #85 / #84):
   INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
   INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
          (no get_current_*); rejects implicit current/latest and cross-case links.
@@ -231,6 +231,12 @@ def _require_structure_mutation_audit(
     ).first()
     if audit is None:
         raise ConflictError(f"{action} must emit AuditLog before completing")
+    decision_id = str(decision.id)
+    after = audit.after_json or {}
+    if after.get("decision_id") != decision_id:
+        raise ConflictError(
+            f"{action} AuditLog.after_json must reference HumanDecision decision_id"
+        )
 
 
 class IssueCenteredDomainMixin:
