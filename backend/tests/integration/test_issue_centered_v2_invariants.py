@@ -1,4 +1,4 @@
-"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 SSOT)."""
+"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #80 SSOT)."""
 
 from __future__ import annotations
 

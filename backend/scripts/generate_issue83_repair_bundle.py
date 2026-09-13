@@ -46,7 +46,7 @@ def _git_head() -> str:
 def _generate_production_patch() -> str:
     rel_paths = [str(p.relative_to(ROOT)) for p in PRODUCTION_FILES.values()]
     return subprocess.check_output(
-        ["git", "diff", f"{PATCH_BASE}..HEAD", "--", *rel_paths],
+        ["git", "diff", PATCH_BASE, "--", *rel_paths],
         cwd=ROOT,
         text=True,
     )
@@ -133,7 +133,7 @@ SSOT copies (identical to production): `sources/migration_h9b0c1d2e3f4.py`, `sou
 
     patch_section = f"""## (G) Untruncated production diff — all four files ({patch_lines} lines)
 
-Generated: `git diff {PATCH_BASE}..HEAD -- <four production paths>`
+Generated: `git diff {PATCH_BASE} -- <four production paths>`
 
 Full raw patch (NOT truncated, ends at last line of invariant tests):
 
@@ -291,7 +291,7 @@ All four invariant tests **PASSED** — see section (A) in `{bundle_rel}`.
 
 File: `issue83_repair_production.patch`
 
-Generated: `git diff {PATCH_BASE}..HEAD -- <four production paths>`
+Generated: `git diff {PATCH_BASE} -- <four production paths>`
 
 {_fence("diff", patch)}
 """

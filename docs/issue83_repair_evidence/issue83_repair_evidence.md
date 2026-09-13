@@ -1,8 +1,8 @@
 # Issue #83 Repair Evidence — Issue-Centered V2 (#80)
 
-Generated: 2026-09-13T08:36:10.066910Z
+Generated: 2026-09-13T08:48:47.024271Z
 Base commit: `f84972a` (pre issue-centered v2; parent of c19379b)
-Repair commit: `523da1f`
+Repair commit: `a87f42d`
 
 **This directory is the sole SSOT for Issue #83 repair submission.**
 
@@ -29,7 +29,7 @@ See `docs/issue83_repair_evidence/00_reviewer_bundle.md` for compact submission 
 ```python
 """phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 
-Issue #60 / #73 SSOT: includes proof_gaps and lawyer_assessments with every CheckConstraint:
+Issue #60 / #73 / #80 SSOT: includes proof_gaps and lawyer_assessments with every CheckConstraint:
 - proof_gaps: ck_proof_gaps_type, ck_proof_gaps_status, ck_proof_gaps_source
 - lawyer_assessments: ck_lawyer_assessments_status
 - issue_positions: ck_issue_positions_side/type/source/status
@@ -441,7 +441,7 @@ Production: `backend/domain/issue_centered.py` (1071 lines) | SSOT: `sources/dom
 ```python
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #60 / #73):
+Explicit invariants enforced in this module (Issue #60 / #73 / #80):
   INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
          (no get_current_*); rejects cross-case links.
   INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
@@ -1518,7 +1518,7 @@ Production: `backend/application/issue_work_product.py` (507 lines) | SSOT: `sou
 ```python
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #60 / #73).
+Read-only projection over Issue-centered V2 domain (Issue #60 / #73 / #80).
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 invariant enforcement remains in backend/domain/issue_centered.py and services.py.
 """
@@ -2029,7 +2029,7 @@ class IssueWorkProductService:
 Production: `backend/tests/integration/test_issue_centered_v2_invariants.py` (198 lines) | SSOT: `sources/test_issue_centered_v2_invariants.py`
 
 ```python
-"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 SSOT)."""
+"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #80 SSOT)."""
 
 from __future__ import annotations
 
@@ -2275,7 +2275,7 @@ backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_f
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 19 passed, 2 warnings in 1.39s ========================
+======================== 19 passed, 2 warnings in 1.78s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py
@@ -2331,18 +2331,18 @@ All four invariant tests **PASSED** — see section (A) in `docs/issue83_repair_
 
 File: `issue83_repair_production.patch`
 
-Generated: `git diff f84972a..HEAD -- <four production paths>`
+Generated: `git diff f84972a -- <four production paths>`
 
 ```diff
 diff --git a/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py b/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py
 new file mode 100644
-index 0000000..fcf25ef
+index 0000000..c47e6e0
 --- /dev/null
 +++ b/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py
 @@ -0,0 +1,405 @@
 +"""phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 +
-+Issue #60 / #73 SSOT: includes proof_gaps and lawyer_assessments with every CheckConstraint:
++Issue #60 / #73 / #80 SSOT: includes proof_gaps and lawyer_assessments with every CheckConstraint:
 +- proof_gaps: ck_proof_gaps_type, ck_proof_gaps_status, ck_proof_gaps_source
 +- lawyer_assessments: ck_lawyer_assessments_status
 +- issue_positions: ck_issue_positions_side/type/source/status
@@ -2747,13 +2747,13 @@ index 0000000..fcf25ef
 +    op.drop_table("issue_positions")
 diff --git a/backend/application/issue_work_product.py b/backend/application/issue_work_product.py
 new file mode 100644
-index 0000000..eb20d35
+index 0000000..bdb0eb5
 --- /dev/null
 +++ b/backend/application/issue_work_product.py
 @@ -0,0 +1,506 @@
 +"""Issue Work Product — canonical issue-centered read projection.
 +
-+Read-only projection over Issue-centered V2 domain (Issue #60 / #73).
++Read-only projection over Issue-centered V2 domain (Issue #60 / #73 / #80).
 +Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 +invariant enforcement remains in backend/domain/issue_centered.py and services.py.
 +"""
@@ -3259,13 +3259,13 @@ index 0000000..eb20d35
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..0a5f950
+index 0000000..6a341b8
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
 @@ -0,0 +1,1070 @@
 +"""Issue-centered V2 domain mutations — mixed into DomainService.
 +
-+Explicit invariants enforced in this module (Issue #60 / #73):
++Explicit invariants enforced in this module (Issue #60 / #73 / #80):
 +  INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
 +         (no get_current_*); rejects cross-case links.
 +  INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
@@ -4335,11 +4335,11 @@ index 0000000..0a5f950
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..79d2a2b
+index 0000000..542a92e
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
 @@ -0,0 +1,197 @@
-+"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 SSOT)."""
++"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #80 SSOT)."""
 +
 +from __future__ import annotations
 +
