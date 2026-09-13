@@ -1,6 +1,6 @@
 # Issue #80 Resubmit — Issue-Centered V2 (#73 / #86 repair)
 
-Generated: 2026-09-13T10:58:04.458785Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `dc01e47`
+Generated: 2026-09-13T10:58:24.368139Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `092c3c8`
 
 **SSOT:** `docs/issue80_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -81,14 +81,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - AuditLog missing decision_id in after_json → `pytest.raises(ConflictError, match="decision_id")`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T10:58:04.458785Z
+## (B) Test output — actual run 2026-09-13T10:58:24.368139Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #80 repair capture | commit=dc01e47caba0ee6fdcd3f2a2ba2f312990a8a814 | timestamp=2026-09-13T10:58:04.458785+00:00
+# Issue #80 repair capture | commit=092c3c8caba0ee6fdcd3f2a2ba2f312990a8a814 | timestamp=2026-09-13T10:58:24.368139+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -149,7 +149,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #80 repair capture | commit=dc01e47caba0ee6fdcd3f2a2ba2f312990a8a814 | timestamp=2026-09-13T10:58:04.458785+00:00
+# Issue #80 repair capture | commit=092c3c8caba0ee6fdcd3f2a2ba2f312990a8a814 | timestamp=2026-09-13T10:58:24.368139+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
