@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 from autonomous_dev.acceptance_marker import read_marker
 from autonomous_dev.p0_acceptance import (
+    ACCEPTANCE_GATE_PYTEST_TARGETS,
+    acceptance_gate_pytest_argv,
     evaluate_marker_only_review,
     execute_marker_only_acceptance,
     is_marker_only_acceptance,
@@ -185,3 +187,32 @@ def test_marker_only_acceptance_end_to_end_with_independent_fixture_generation()
         assert marker_path.name == "acceptance_marker.txt"
         assert "worker-run issue=38" in read_marker(repo)
         assert commit_sha == "deadbeef"
+
+
+def test_issue75_repair_infrastructure_complete() -> None:
+    """Issue #75 repair SSOT: issue #38 P0 chain modules, gate, and fixtures wired."""
+    from backend.fixtures.deterministic import (
+        DEFAULT_FIXTURES_DIR,
+        pin_pdf_deterministic_metadata,
+        verify_independent_generation_byte_identity,
+    )
+
+    verify_independent_generation_byte_identity()
+    validate_fixtures(DEFAULT_FIXTURES_DIR)
+
+    assert is_marker_only_acceptance(_issue38_body())
+    assert marker_commit_paths() == ["autonomous_dev/acceptance_marker.txt"]
+    assert "backend/tests/unit/test_generate_fixtures.py" in ACCEPTANCE_GATE_PYTEST_TARGETS
+    assert "backend/tests/unit/test_issue38_p0_acceptance.py" in ACCEPTANCE_GATE_PYTEST_TARGETS
+    assert acceptance_gate_pytest_argv()[0:2] == ["-m", "pytest"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        generate(output_dir=root)
+        first = {name: (root / name).read_bytes() for name in FIXTURE_NAMES}
+        for name in ("sample_text.pdf", "sample_scanned.pdf"):
+            assert pdf_has_deterministic_metadata(first[name])
+            assert pin_pdf_deterministic_metadata(first[name]) == first[name]
+        generate(output_dir=root)
+        second = {name: (root / name).read_bytes() for name in FIXTURE_NAMES}
+        assert first == second
