@@ -1,6 +1,6 @@
 # Issue #73 Resubmit — Issue-Centered V2 (#60 repair)
 
-Generated: 2026-09-13T10:09:52.095512Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `3d36dec`
+Generated: 2026-09-13T10:10:06.061264Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `049aa2f`
 
 **SSOT:** `docs/issue73_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -41,7 +41,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
 
-**Domain enforcement** (`create_lawyer_position` lines 143–145): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent.
+**Domain enforcement** (`_guard_formal_defense_opponent_material_ref`, `create_lawyer_position`): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent.
 
 **Test:** `test_invariant_3_formal_defense_requires_opponent_material_ref`
 - without ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
@@ -59,14 +59,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `assert len(split_audits) >= 1`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T10:09:52.095512Z
+## (B) Test output — actual run 2026-09-13T10:10:06.061264Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #73 repair capture | commit=3d36decf568695cf12f63f0f264c499f5037c95e | timestamp=2026-09-13T10:09:52.095512+00:00
+# Issue #73 repair capture | commit=049aa2f5c1199ab1c9ef9aa7d68f506ab38df8ba | timestamp=2026-09-13T10:10:06.061264+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -121,7 +121,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #73 repair capture | commit=3d36decf568695cf12f63f0f264c499f5037c95e | timestamp=2026-09-13T10:09:52.095512+00:00
+# Issue #73 repair capture | commit=049aa2f5c1199ab1c9ef9aa7d68f506ab38df8ba | timestamp=2026-09-13T10:10:06.061264+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -2782,7 +2782,7 @@ def test_invariant_3_db_rejects_formal_defense_without_material_ref(
     db_session.rollback()
 ```
 
-Verified by: all 19 pytest tests + live acceptance 30 steps — **PASSED**.
+Verified by: all 24 pytest tests + live acceptance 30 steps — **PASSED**.
 
 ## (G) Untruncated production diff — all four files (2609 lines)
 
