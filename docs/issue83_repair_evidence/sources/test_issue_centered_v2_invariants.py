@@ -1,4 +1,4 @@
-"""Issue-centered V2 — four invariant assertions (Issue #83 / #80 / #73 SSOT repair)."""
+"""Issue-centered V2 — four invariant assertions (Issue #73 SSOT repair / #60)."""
 
 from __future__ import annotations
 
@@ -12,11 +12,14 @@ from backend.application.issue_work_product import (
     IssueWorkProductService,
     assert_read_only_projection,
     enforce_inv1_read_only,
+    is_read_only_projection,
 )
+from backend.domain.enums import DecisionResult
 from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
+    _guard_formal_defense_side,
     _require_structure_mutation_audit,
 )
 from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
@@ -41,6 +44,10 @@ def test_invariant_guard_functions_reject_invalid_inputs() -> None:
     _guard_formal_defense_opponent_material_ref(
         "FORMAL_DEFENSE", "material:answer-001"
     )
+    with pytest.raises(ValidationError, match="OPPONENT side"):
+        _guard_formal_defense_side("FORMAL_DEFENSE", "OUR")
+    _guard_formal_defense_side("FORMAL_DEFENSE", "OPPONENT")
+    assert is_read_only_projection() is True
     with pytest.raises(RuntimeError, match="read-only"):
         assert_read_only_projection("claim_directions")
     with pytest.raises(RuntimeError, match="read-only"):
@@ -241,6 +248,8 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     )
     assert len(merge_audits) >= 1
     assert merge_audits[0].entity_type == "issues"
+    assert merge_audits[0].after_json is not None
+    assert merge_audits[0].after_json.get("decision_id") == str(merge_decisions[0].id)
 
     split = svc.split_issue(
         case_id=case.id,
@@ -274,6 +283,31 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     )
     assert len(split_audits) >= 1
     assert split_audits[0].entity_type == "issues"
+    assert split_audits[0].after_json is not None
+    assert split_audits[0].after_json.get("decision_id") == str(split_decisions[0].id)
+
+
+def test_invariant_3_formal_defense_rejects_wrong_side(
+    db_session, owner_id, actor_id
+) -> None:
+    """INV-3: FORMAL_DEFENSE must be recorded on OPPONENT side."""
+    svc = DomainService(db_session)
+    case = svc.create_case(title="INV3-side", owner_user_id=owner_id)
+    issue = svc.confirm_issue(
+        svc.propose_issue(case_id=case.id, statement="抗辩侧焦点").issue_key,
+        actor_id=actor_id,
+    )
+    with pytest.raises(ValidationError, match="OPPONENT side"):
+        svc.create_lawyer_position(
+            case_id=case.id,
+            issue_key=issue.issue_key,
+            issue_version=issue.version,
+            side="OUR",
+            position_type="FORMAL_DEFENSE",
+            statement="错误侧正式抗辩",
+            actor_id=actor_id,
+            opponent_material_ref="material:answer-001",
+        )
 
 
 def test_invariant_4_guard_rejects_missing_human_decision_or_audit(
@@ -283,6 +317,24 @@ def test_invariant_4_guard_rejects_missing_human_decision_or_audit(
     svc = DomainService(db_session)
     case = svc.create_case(title="INV4-guard", owner_user_id=owner_id)
     with pytest.raises(ConflictError, match="HumanDecision"):
+        _require_structure_mutation_audit(
+            svc,
+            case_id=case.id,
+            action="merge_issues",
+            decision_type="MERGE_ISSUES",
+        )
+    decision = HumanDecision(
+        case_id=case.id,
+        actor_id=actor_id,
+        decision_type="MERGE_ISSUES",
+        target_type="Issue",
+        target_id=uuid.uuid4(),
+        result=DecisionResult.CONFIRMED.value,
+        input_payload_json={"probe": True},
+    )
+    db_session.add(decision)
+    db_session.flush()
+    with pytest.raises(ConflictError, match="AuditLog"):
         _require_structure_mutation_audit(
             svc,
             case_id=case.id,
