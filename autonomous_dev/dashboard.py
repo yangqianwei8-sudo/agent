@@ -260,38 +260,49 @@ def build_dashboard_payload(
         if current_task
         else (primary_task.issue_number if primary_task else None)
     )
-    worker_reactivation = (
-        store.get_worker_reactivation(self_heal_issue) if self_heal_issue else None
-    )
-    reviewer_reactivation = (
-        store.get_reviewer_reactivation(self_heal_issue) if self_heal_issue else None
-    )
-    from autonomous_dev.reviewer_self_heal import derive_reviewer_self_heal_dashboard_state
-    from autonomous_dev.worker_self_heal import derive_self_heal_dashboard_state
-
-    self_heal_state = derive_self_heal_dashboard_state(
-        store,
-        issue_number=self_heal_issue,
-        primary_status=primary_task.status if primary_task else None,
-    )
-    if self_heal_state is not None:
-        self_heal_state["max_attempts"] = settings.worker_retry_max_attempts
-
+    # Simplified recovery state — derived from task history, not separate tables
+    from autonomous_dev.recovery_simple import _compute_retry_count
     from autonomous_dev.worker_failure import derive_failure_dashboard_state
+
+    retry_count = _compute_retry_count(store, self_heal_issue) if self_heal_issue else 0
+    self_heal_state = (
+        {
+            "status": "pending",
+            "attempt_count": retry_count,
+            "max_attempts": settings.worker_retry_max_attempts,
+            "reason": "automated retry from task history",
+        }
+        if self_heal_issue
+        and primary_task
+        and primary_task.status in {TaskStatus.NEEDS_FIX, TaskStatus.FAILED}
+        else None
+    )
 
     worker_failure_state = derive_failure_dashboard_state(
         store,
         task=primary_task or current_task,
     )
 
-    reviewer_self_heal_state = derive_reviewer_self_heal_dashboard_state(
-        store,
-        issue_number=self_heal_issue,
-        primary_status=primary_task.status if primary_task else None,
-        active_review_status=active_review.status if active_review else None,
+    reviewer_self_heal_state = (
+        {
+            "status": "stalled" if primary_task.status == TaskStatus.READY_FOR_REVIEW else "pending",
+            "attempt_count": retry_count,
+            "max_attempts": settings.review_max_attempts,
+            "reason": "automated reviewer retry",
+        }
+        if self_heal_issue
+        and primary_task
+        and primary_task.status == TaskStatus.READY_FOR_REVIEW
+        else None
     )
-    if reviewer_self_heal_state is not None:
-        reviewer_self_heal_state["max_attempts"] = settings.review_max_attempts
+
+    # Legacy reactivation records (deprecated tables, read-only for backward compat)
+    worker_reactivation = (
+        store.get_worker_reactivation(self_heal_issue) if self_heal_issue else None
+    )
+    reviewer_reactivation = (
+        store.get_reviewer_reactivation(self_heal_issue) if self_heal_issue else None
+    )
 
     system_status = derive_system_status(
         primary_task=primary_task,

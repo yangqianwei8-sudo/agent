@@ -154,11 +154,20 @@ def _tick() -> None:
 
 def _tick_full_scan(settings: AutonomousDevSettings) -> None:
     store = StateStore(settings.state_db_path)
-    from autonomous_dev.reviewer_self_heal import reconcile_stalled_ready_for_review
+    from autonomous_dev.recovery_simple import reconcile_needs_fix_and_stalled_reviews
+    from autonomous_dev.github_client import GitHubClient
 
-    recovered = reconcile_stalled_ready_for_review(settings, store)
-    if recovered:
-        logger.info("watchdog full scan recovered %s stalled reviewer task(s)", recovered)
+    recovered = reconcile_needs_fix_and_stalled_reviews(
+        settings, store, GitHubClient(settings)
+    )
+    total = recovered["needs_fix"] + recovered["reviewer"]
+    if total:
+        logger.info(
+            "watchdog full scan recovered %s task(s) (needs_fix=%s reviewer=%s)",
+            total,
+            recovered["needs_fix"],
+            recovered["reviewer"],
+        )
 
 
 def _github_timeout(settings: AutonomousDevSettings) -> httpx.Timeout:
