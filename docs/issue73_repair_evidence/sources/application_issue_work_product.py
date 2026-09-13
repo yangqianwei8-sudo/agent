@@ -1,8 +1,8 @@
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #73 repair SSOT / #60).
+Read-only projection over Issue-centered V2 domain (Issue #60 repair SSOT / #83 / #86 / #84 / #73).
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
-invariant enforcement remains in backend/domain/issue_centered.py and services.py.
+invariant enforcement remains in backend/domain/issue_centered.py.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from backend.application.issue_matrix import IssueMatrixService
 from backend.domain.enums import LawyerJudgmentState, ProofState
 from backend.domain.errors import NotFoundError
+from backend.domain.issue_centered import _reject_claim_direction_production_mutation
 from backend.models import AuditLog, Case, HumanDecision, Issue, LegalTheory
 from backend.repositories.base import Repository
 from backend.schemas.issue_work_product import (
@@ -32,7 +33,7 @@ from backend.schemas.issue_work_product import (
     StructuralWarningView,
 )
 
-# INV-1 (#73): read projection — must never mutate ClaimDirection or issue-centered writes.
+# INV-1 (#84): read projection — must never mutate ClaimDirection or issue-centered writes.
 _READ_ONLY_PROJECTION = True
 _FORBIDDEN_MUTATION_ENTITY_TYPES = frozenset(
     {"claim_directions", "issue_positions", "proof_tasks", "proof_task_fact_links", "issues"}
@@ -47,6 +48,11 @@ def assert_read_only_projection(entity_type: str) -> None:
         )
 
 
+def guard_claim_direction_production_mutation(*, _legacy_compat: bool = False) -> None:
+    """INV-1: block ClaimDirection writes from the read projection layer."""
+    _reject_claim_direction_production_mutation(_legacy_compat=_legacy_compat)
+
+
 def enforce_inv1_read_only(entity_type: str) -> None:
     """INV-1: block mutation attempts from the read projection layer."""
     assert_read_only_projection(entity_type)
@@ -55,6 +61,11 @@ def enforce_inv1_read_only(entity_type: str) -> None:
 def is_read_only_projection() -> bool:
     """INV-1: expose read-only configuration for invariant checks."""
     return _READ_ONLY_PROJECTION
+
+
+def _link_matches_explicit_task_version(link, task_version: int) -> bool:
+    """INV-2: read path ignores links that alias implicit current/latest versions."""
+    return link.proof_task_version == task_version
 
 
 _PROOF_STATE_ZH = {
@@ -353,6 +364,10 @@ class IssueWorkProductService:
         for link in self.repo.list_proof_task_fact_links(
             task.proof_task_key, task.version
         ):
+            if not _link_matches_explicit_task_version(link, task.version):
+                continue
+            if link.fact_version < 1:
+                continue
             fact = self.repo.get_fact_version(link.fact_key, link.fact_version)
             if fact is None:
                 continue
