@@ -39,17 +39,57 @@ def _default_base() -> str:
     return f"http://127.0.0.1:{port}"
 
 
+def _lineage_tasks(store: StateStore, issue_num: int, commit_prefix: str) -> list:
+    import sqlite3
+
+    conn = sqlite3.connect(store.db_path)
+    rows = conn.execute(
+        """
+        SELECT id FROM task_executions
+        WHERE issue_number = ?
+          AND (commit_sha LIKE ? OR status = 'ready-for-review')
+        ORDER BY id DESC
+        """,
+        (issue_num, f"{commit_prefix}%"),
+    ).fetchall()
+    tasks = []
+    for (task_id,) in rows:
+        task = store.get_task(task_id)
+        if task is not None:
+            tasks.append(task)
+    active = store.get_active_task_for_issue(issue_num)
+    if active is not None and all(t.id != active.id for t in tasks):
+        tasks.insert(0, active)
+    latest = store.get_task_by_issue(issue_num)
+    if latest is not None and all(t.id != latest.id for t in tasks):
+        tasks.append(latest)
+    return tasks
+
+
+def _lineage_invocation(store: StateStore, issue_num: int, commit_prefix: str):
+    for task in _lineage_tasks(store, issue_num, commit_prefix):
+        if not task.commit_sha:
+            continue
+        inv = store.get_review_invocation(task.id, task.commit_sha)
+        if inv is not None:
+            return task, inv
+    return None, None
+
+
 def _lineage_evidence(store: StateStore, issue_num: int, commit_prefix: str) -> dict[str, str]:
-    task = store.get_task_by_issue(issue_num)
-    if not task:
+    tasks = _lineage_tasks(store, issue_num, commit_prefix)
+    if not tasks:
         return {"task_found": "FAIL"}
 
     results: dict[str, str] = {"task_found": "PASS"}
-    commit_sha = task.commit_sha or ""
+    task, inv = _lineage_invocation(store, issue_num, commit_prefix)
+    active = store.get_active_task_for_issue(issue_num)
     react = store.get_reviewer_reactivation(issue_num)
-    inv = store.get_review_invocation(task.id, commit_sha) if commit_sha else None
+    commit_sha = (task.commit_sha if task else "") or (active.commit_sha if active else "")
 
-    if task.status == TaskStatus.READY_FOR_REVIEW:
+    if active and active.status == TaskStatus.READY_FOR_REVIEW:
+        results["ready_for_review"] = "PASS"
+    elif any(t.status == TaskStatus.READY_FOR_REVIEW for t in tasks):
         results["ready_for_review"] = "PASS"
     elif react is not None or (inv and inv.status == ReviewInvocationStatus.COMPLETED):
         results["ready_for_review"] = "PASS"
@@ -182,17 +222,11 @@ def main() -> int:
 
         if results.get("ready_for_review") == "PASS" and results.get("verdict_path") == "FAIL":
             deadline = time.time() + 180
-            task = store.get_task_by_issue(issue_num)
-            commit_sha = (task.commit_sha or "") if task else ""
             while time.time() < deadline:
                 react = store.get_reviewer_reactivation(issue_num)
                 if react and react.attempt_count >= 1:
                     results["reviewer_recovery"] = "PASS"
-                inv = (
-                    store.get_review_invocation(task.id, commit_sha)
-                    if task and commit_sha
-                    else None
-                )
+                task, inv = _lineage_invocation(store, issue_num, commit_prefix)
                 if inv and inv.status in {
                     ReviewInvocationStatus.COMPLETED,
                     ReviewInvocationStatus.RUNNING,
@@ -200,6 +234,7 @@ def main() -> int:
                 }:
                     results["verdict_path"] = "PASS"
                     if inv.status == ReviewInvocationStatus.COMPLETED:
+                        results["verdict_completed"] = "PASS"
                         break
                 run_loop_recovery_tick(settings, store)
                 time.sleep(2)

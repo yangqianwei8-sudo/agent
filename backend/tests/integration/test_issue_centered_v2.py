@@ -127,7 +127,7 @@ def test_proof_task_adopt_and_fact_link(db_session: Session, owner_id, actor_id)
 
 
 def test_proof_task_fact_link_rejects_implicit_version(db_session: Session, owner_id, actor_id):
-    """ProofTaskFactLink requires explicit proof_task_version and fact_version (no current/latest)."""
+    """ProofTaskFactLink requires explicit versions (no current/latest)."""
     svc = DomainService(db_session)
     case = svc.create_case(title="Ver", owner_user_id=owner_id)
     *_, item = _seed_accepted_evidence(db_session, owner_id=owner_id, actor_id=actor_id, case=case)

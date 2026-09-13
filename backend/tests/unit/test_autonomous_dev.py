@@ -3395,6 +3395,61 @@ def test_pending_invocation_orphan_lock_triggers_stall_recovery(
     assert inv.verdict == ReviewVerdict.PASS
 
 
+def test_reviewer_stall_recovers_when_reactivation_task_id_stale(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression #61: due reactivation must not block ready-for-review on stale task_id."""
+    from autonomous_dev.loop_recovery import run_loop_recovery_tick
+    from autonomous_dev.review_worker import process_due_reviews
+    from autonomous_dev.state import ReviewerReactivationStatus
+
+    repo, db = infra_env
+    monkeypatch.setenv("REVIEWER_STALL_SECONDS", "0")
+    monkeypatch.setenv("REVIEW_RETRY_BACKOFF_SECONDS", "0")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("ok\n", encoding="utf-8")
+    commit_sha = "staletask1234567"
+    stalled = store.create_task(issue_number=68, delivery_id="stale-rfreview")
+    store.update_task(
+        stalled.id,
+        status=TaskStatus.READY_FOR_REVIEW,
+        commit_sha=commit_sha,
+    )
+    newer = store.create_task(issue_number=68, delivery_id="stale-needs-fix")
+    store.update_task(newer.id, status=TaskStatus.NEEDS_FIX, commit_sha=commit_sha)
+    store.upsert_reviewer_reactivation(
+        issue_number=68,
+        task_id=newer.id,
+        attempt_count=0,
+        next_retry_at=None,
+        last_error="stale task pointer",
+        status=ReviewerReactivationStatus.PENDING,
+    )
+    _mock_github_client.bodies[68] = f"{REVIEWER_ACCEPTANCE_MARKER}\nStale reactivation recovery."
+
+    counts = run_loop_recovery_tick(settings, store)
+    assert counts["stalled_ready_for_review"] >= 1
+
+    deadline = time.time() + 15
+    inv = store.get_review_invocation(stalled.id, commit_sha)
+    while time.time() < deadline:
+        inv = store.get_review_invocation(stalled.id, commit_sha)
+        if inv and inv.status == ReviewInvocationStatus.COMPLETED:
+            break
+        process_due_reviews(settings, store)
+        time.sleep(0.1)
+    assert inv is not None
+    assert inv.status == ReviewInvocationStatus.COMPLETED
+    assert inv.verdict == ReviewVerdict.PASS
+    react = store.get_reviewer_reactivation(68)
+    assert react is not None
+    assert react.task_id == stalled.id
+
+
 def test_reviewer_infra_failure_never_becomes_product_decision(
     infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
 ):

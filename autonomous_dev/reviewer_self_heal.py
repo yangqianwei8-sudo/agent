@@ -136,6 +136,17 @@ def _cooldown_blocks_kick(record, *, cooldown_seconds: int, now: datetime) -> bo
     return (now - last).total_seconds() < cooldown_seconds
 
 
+def _resolve_ready_for_review_task(store: StateStore, issue_number: int) -> TaskRecord | None:
+    """Return the active ready-for-review task even if reactivation task_id is stale."""
+    task = store.get_active_task_for_issue(issue_number)
+    if task is not None and task.status == TaskStatus.READY_FOR_REVIEW:
+        return task
+    for candidate in store.list_tasks_by_status(TaskStatus.READY_FOR_REVIEW, limit=50):
+        if candidate.issue_number == issue_number:
+            return candidate
+    return None
+
+
 def kick_reviewer_reactivation(
     settings: AutonomousDevSettings,
     store: StateStore,
@@ -220,7 +231,9 @@ def kick_reviewer_reactivation(
         issue_number=task.issue_number,
         task_id=task.id,
         attempt_count=attempt,
-        next_retry_at=next_retry if schedule_status not in {"scheduled", "already_scheduled", "idempotent"} else None,
+        next_retry_at=next_retry
+        if schedule_status not in {"scheduled", "already_scheduled", "idempotent"}
+        else None,
         last_error=reason[:2000],
         status=next_status,
         last_kick_at=now_iso,
@@ -247,40 +260,33 @@ def reconcile_stalled_ready_for_review(
     """Detect ready-for-review tasks with no completed verdict and reschedule review."""
     recovered = 0
     now = datetime.now(UTC)
-    seen: set[int] = set()
+    processed: set[int] = set()
+
+    def _try_recover(task: TaskRecord, *, reason: str) -> None:
+        nonlocal recovered
+        if task.issue_number in processed:
+            return
+        if not is_reviewer_stalled(settings, store, task, now=now):
+            return
+        result = kick_reviewer_reactivation(
+            settings,
+            store,
+            task,
+            reason=reason,
+            recovery_status=ReviewerReactivationStatus.STALE_RECOVERED,
+        )
+        processed.add(task.issue_number)
+        if result.get("status") not in {"skipped", "deferred", "exhausted"}:
+            recovered += 1
 
     for record in store.list_due_reviewer_reactivations(limit=20):
-        num = record.issue_number
-        seen.add(num)
-        task = store.get_task(record.task_id) if record.task_id else store.get_task_by_issue(num)
-        if task is None or task.status != TaskStatus.READY_FOR_REVIEW:
+        task = _resolve_ready_for_review_task(store, record.issue_number)
+        if task is None:
             continue
-        if not is_reviewer_stalled(settings, store, task, now=now):
-            continue
-        result = kick_reviewer_reactivation(
-            settings,
-            store,
-            task,
-            reason="loop_recovery reviewer reactivation",
-            recovery_status=ReviewerReactivationStatus.STALE_RECOVERED,
-        )
-        if result.get("status") not in {"skipped", "deferred", "exhausted"}:
-            recovered += 1
+        _try_recover(task, reason="loop_recovery reviewer reactivation")
 
     for task in store.list_tasks_by_status(TaskStatus.READY_FOR_REVIEW, limit=50):
-        if task.issue_number in seen:
-            continue
-        if not is_reviewer_stalled(settings, store, task, now=now):
-            continue
-        result = kick_reviewer_reactivation(
-            settings,
-            store,
-            task,
-            reason="loop_recovery stalled ready-for-review",
-            recovery_status=ReviewerReactivationStatus.STALE_RECOVERED,
-        )
-        if result.get("status") not in {"skipped", "deferred", "exhausted"}:
-            recovered += 1
+        _try_recover(task, reason="loop_recovery stalled ready-for-review")
 
     return recovered
 
