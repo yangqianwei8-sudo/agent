@@ -2938,6 +2938,43 @@ def test_issue38_restart_b_reviewer_passes_on_marker_diff(infra_env):
     assert "Harmless acceptance marker updated as required" in result.reason
 
 
+def test_issue38_reviewer_fails_when_diff_lacks_marker(infra_env):
+    """P0 acceptance without marker change must FAIL — exercises diff_includes_marker."""
+    from autonomous_dev.next_task_resolver import build_roadmap_issue_body
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    body = build_roadmap_issue_body(
+        source_issue_number=37,
+        stable_key="roadmap-issue:37:e0bff02d3b4a8815",
+        next_title="[ACCEPT] Restart B 747cb2ef",
+        source_body=f"{REVIEWER_ACCEPTANCE_MARKER}\n[P0-LIVE-ACCEPTANCE]",
+    )
+    readme = repo / "README.md"
+    readme.write_text("# no marker change\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "unrelated change without marker"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    commit_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    svc = ReviewerService(settings, repo_root=repo)
+    ctx = svc.gather_context(issue_number=38, issue_body=body, commit_sha=commit_sha)
+    assert "acceptance_marker" not in ctx.diff
+    result = svc.review(ctx)
+    assert result.verdict == "FAIL"
+    assert "Expected acceptance_marker.txt change not found in diff" in result.reason
+
+
 def test_handoff_pass_activates_queued_next_task_once(infra_env, _mock_github_client):
     from autonomous_dev.state import HandoffStatus
     from autonomous_dev.task_handoff import TaskHandoffEngine
