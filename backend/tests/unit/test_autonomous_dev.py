@@ -3008,7 +3008,6 @@ def test_p0_acceptance_evaluate_marker_only_review_pass_and_fail():
 
 def test_p0_acceptance_execute_marker_only_acceptance_commits_marker_only(infra_env):
     """Production execute_marker_only_acceptance must stage only the marker path."""
-    from autonomous_dev.next_task_resolver import build_roadmap_issue_body
     from autonomous_dev.p0_acceptance import execute_marker_only_acceptance, marker_commit_paths
 
     repo, db = infra_env
@@ -3119,7 +3118,10 @@ def test_worker_deterministic_marker_only_commits_marker_path_only(
 
 def test_p0_acceptance_gate_includes_fixture_determinism_tests():
     """Marker-only gate must exercise PDF CreationDate/ModDate and /ID pinning."""
-    from autonomous_dev.p0_acceptance import ACCEPTANCE_GATE_PYTEST_TARGETS, acceptance_gate_pytest_argv
+    from autonomous_dev.p0_acceptance import (
+        ACCEPTANCE_GATE_PYTEST_TARGETS,
+        acceptance_gate_pytest_argv,
+    )
 
     assert "backend/tests/unit/test_generate_fixtures.py" in ACCEPTANCE_GATE_PYTEST_TARGETS
     assert acceptance_gate_pytest_argv() == [
@@ -3136,8 +3138,9 @@ def test_issue75_repair_ensure_golden_fixtures_blocks_marker_on_drift(
     """Issue #38 repair: fixture drift must fail before marker-only commit proceeds."""
     import tempfile
 
-    from backend.fixtures.deterministic import generate
     from autonomous_dev.p0_acceptance import ensure_golden_fixtures_stable
+
+    from backend.fixtures.deterministic import generate
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -3851,6 +3854,57 @@ def test_reviewer_infra_failure_never_becomes_product_decision(
     assert updated is not None
     assert updated.status == TaskStatus.READY_FOR_REVIEW
     assert updated.status != TaskStatus.PRODUCT_DECISION
+
+
+def test_reviewer_permanently_failed_invocation_recovers_via_self_heal(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression #61: exhausted invocation must not block stall detection forever."""
+    from autonomous_dev.loop_recovery import run_loop_recovery_tick
+    from autonomous_dev.review_worker import process_due_reviews
+
+    repo, db = infra_env
+    monkeypatch.setenv("REVIEWER_STALL_SECONDS", "0")
+    monkeypatch.setenv("REVIEW_MAX_ATTEMPTS", "1")
+    monkeypatch.setenv("REVIEW_RETRY_BACKOFF_SECONDS", "0")
+    clear_autonomous_settings_cache()
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    commit_sha = _commit_acceptance_marker(repo, issue_number=69, message="acceptance ok")
+    task = store.create_task(issue_number=69, delivery_id="perm-failed-inv")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
+    store.create_review_invocation(
+        invocation_id="inv-perm-failed",
+        task_id=task.id,
+        issue_number=69,
+        commit_sha=commit_sha,
+    )
+    store.update_review_invocation(
+        "inv-perm-failed",
+        status=ReviewInvocationStatus.FAILED,
+        error="simulated reviewer API 503",
+        attempt_count=settings.review_max_attempts,
+        next_retry_at=None,
+    )
+    _mock_github_client.bodies[69] = f"{REVIEWER_ACCEPTANCE_MARKER}\nPermanent fail recovery."
+
+    counts = run_loop_recovery_tick(settings, store)
+    assert counts["stalled_ready_for_review"] >= 1
+
+    deadline = time.time() + 15
+    inv = store.get_review_invocation(task.id, commit_sha)
+    while time.time() < deadline:
+        inv = store.get_review_invocation(task.id, commit_sha)
+        if inv and inv.status == ReviewInvocationStatus.COMPLETED:
+            break
+        process_due_reviews(settings, store)
+        time.sleep(0.1)
+    assert inv is not None
+    assert inv.status == ReviewInvocationStatus.COMPLETED
+    assert inv.verdict == ReviewVerdict.PASS
+    react = store.get_reviewer_reactivation(69)
+    assert react is not None
+    assert react.attempt_count >= 1
 
 
 def test_issue62_startup_failure_observable_and_self_heals(

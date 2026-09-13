@@ -91,7 +91,8 @@ def _invocation_blocks_stall(
             return True
     if inv.status == ReviewInvocationStatus.FAILED:
         if not store.is_review_retryable(inv, max_attempts=settings.review_max_attempts):
-            return True
+            # Invocation budget exhausted — reactivation layer resets and retries.
+            return False
         retry_at = _parse_ts(inv.next_retry_at)
         if retry_at is not None and retry_at > now:
             return True
@@ -212,6 +213,16 @@ def kick_reviewer_reactivation(
             last_kick_at=now_iso,
         )
         return {"status": "exhausted", "reason": "recovery attempts exceeded"}
+
+    inv = store.get_review_invocation(task.id, task.commit_sha)
+    if inv is not None and inv.status == ReviewInvocationStatus.FAILED:
+        if not store.is_review_retryable(inv, max_attempts=settings.review_max_attempts):
+            store.reset_review_for_retry(inv.invocation_id)
+            store.update_review_invocation(
+                inv.invocation_id,
+                attempt_count=0,
+                clear_next_retry=True,
+            )
 
     executor = ReviewExecutor(settings, store)
     outcome = executor.schedule_review(task, commit_sha=task.commit_sha)

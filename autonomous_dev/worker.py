@@ -18,7 +18,6 @@ from autonomous_dev.p0_acceptance import (
     apply_harmless_marker_change,
     execute_marker_only_acceptance,
     is_marker_only_acceptance,
-    marker_commit_paths,
 )
 from autonomous_dev.product_decision import ProductDecisionPacket
 from autonomous_dev.review_bridge import ReviewBridge
