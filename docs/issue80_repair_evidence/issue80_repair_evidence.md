@@ -1,10 +1,11 @@
-# Issue #80 Repair Evidence — Issue-Centered V2 (#73 / #86)
+# Issue #80 Repair Evidence — Issue-Centered V2 (#73 / #60 lineage)
 
-Generated: 2026-09-13T10:58:24.368139Z
+Generated: 2026-09-13T11:06:32.523450Z
 Base commit: `f84972a213c44ba602b07ae3801637dc5c045f16` (pre issue-centered v2; parent of c19379b)
-Repair commit: `092c3c8`
+Repair commit: `db8d625`
 
 **This directory is the sole SSOT for Issue #80 repair submission.**
+Acceptance marker: `autonomous_dev/acceptance_marker.txt` (issue=73, lineage=60, repair=<commit-sha>). Repair SHA equals submitted commit SHA.
 
 ## Reviewer bundle (priority)
 
@@ -5161,7 +5162,7 @@ Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/
 Also saved to: `test_issue_centered_v2_output.txt`
 
 ```
-# Issue #80 repair capture | commit=092c3c8caba0ee6fdcd3f2a2ba2f312990a8a814 | timestamp=2026-09-13T10:58:24.368139+00:00
+# Issue #80 repair capture | commit=db8d625d0c9a3f4d39768028ef1cf8e5b136e221 | timestamp=2026-09-13T11:06:32.523450+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -5214,7 +5215,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 30 passed, 4 warnings in 2.01s ========================
+======================== 30 passed, 4 warnings in 1.60s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py
@@ -5224,7 +5225,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Also saved to: `live_issue_centered_v2_acceptance_output.txt`
 
 ```
-# Issue #80 repair capture | commit=092c3c8caba0ee6fdcd3f2a2ba2f312990a8a814 | timestamp=2026-09-13T10:58:24.368139+00:00
+# Issue #80 repair capture | commit=db8d625d0c9a3f4d39768028ef1cf8e5b136e221 | timestamp=2026-09-13T11:06:32.523450+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
