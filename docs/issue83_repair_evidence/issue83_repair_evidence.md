@@ -1,8 +1,8 @@
 # Issue #83 Repair Evidence — Issue-Centered V2 (#80)
 
-Generated: 2026-09-13T10:51:21.086258Z
+Generated: 2026-09-13T10:54:11.509578Z
 Base commit: `f84972a213c44ba602b07ae3801637dc5c045f16` (pre issue-centered v2; parent of c19379b)
-Repair commit: `310ce4e`
+Repair commit: `85e8c62`
 
 **This directory is the sole SSOT for Issue #83 repair submission.**
 
@@ -474,7 +474,7 @@ Production: `backend/domain/issue_centered.py` (1284 lines) | SSOT: `sources/dom
 ```python
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #80/#73/#60/#83/#86/#85/#84 repair SSOT):
+Explicit invariants enforced in this module (Issue #80/#73/#60/#83/#86/#87/#85/#84 repair SSOT):
   INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
   INV-2: link_fact_to_proof_task resolves via get_proof_task_version/get_fact_version
          only (never get_current_*); rejects non-positive versions and cross-case links.
@@ -1764,7 +1764,7 @@ Production: `backend/application/issue_work_product.py` (567 lines) | SSOT: `sou
 ```python
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #80/#73/#60/#83/#86/#84 repair SSOT).
+Read-only projection over Issue-centered V2 domain (Issue #80/#73/#60/#83/#86/#87/#84 repair SSOT).
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 invariant enforcement remains in backend/domain/issue_centered.py.
 """
@@ -2335,7 +2335,7 @@ class IssueWorkProductService:
 Production: `backend/tests/integration/test_issue_centered_v2_invariants.py` (659 lines) | SSOT: `sources/test_issue_centered_v2_invariants.py`
 
 ```python
-"""Issue-centered V2 — four invariant assertions (Issue #80/#73/#60/#83/#86/#85/#84)."""
+"""Issue-centered V2 — four invariant assertions (Issue #80/#73/#60/#83/#86/#87/#85/#84)."""
 
 from __future__ import annotations
 
@@ -3004,7 +3004,7 @@ Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/
 Also saved to: `test_issue_centered_v2_output.txt`
 
 ```
-# Issue #83 repair capture | commit=310ce4e16a00b6e90675d80738b90357a20db918 | timestamp=2026-09-13T10:51:21.086258+00:00
+# Issue #83 repair capture | commit=85e8c625c55770d401681101d082ff655752933f | timestamp=2026-09-13T10:54:11.509578+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -3057,7 +3057,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 30 passed, 4 warnings in 1.73s ========================
+======================== 30 passed, 4 warnings in 1.68s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py
@@ -3067,7 +3067,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Also saved to: `live_issue_centered_v2_acceptance_output.txt`
 
 ```
-# Issue #83 repair capture | commit=310ce4e16a00b6e90675d80738b90357a20db918 | timestamp=2026-09-13T10:51:21.086258+00:00
+# Issue #83 repair capture | commit=85e8c625c55770d401681101d082ff655752933f | timestamp=2026-09-13T10:54:11.509578+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -3564,13 +3564,13 @@ index 0000000..540c2f1
 +    op.drop_table("issue_positions")
 diff --git a/backend/application/issue_work_product.py b/backend/application/issue_work_product.py
 new file mode 100644
-index 0000000..f215f6f
+index 0000000..2c1cfd6
 --- /dev/null
 +++ b/backend/application/issue_work_product.py
 @@ -0,0 +1,566 @@
 +"""Issue Work Product — canonical issue-centered read projection.
 +
-+Read-only projection over Issue-centered V2 domain (Issue #80/#73/#60/#83/#86/#84 repair SSOT).
++Read-only projection over Issue-centered V2 domain (Issue #80/#73/#60/#83/#86/#87/#84 repair SSOT).
 +Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 +invariant enforcement remains in backend/domain/issue_centered.py.
 +"""
@@ -4136,13 +4136,13 @@ index 0000000..f215f6f
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..26f3665
+index 0000000..2040fbf
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
 @@ -0,0 +1,1283 @@
 +"""Issue-centered V2 domain mutations — mixed into DomainService.
 +
-+Explicit invariants enforced in this module (Issue #80/#73/#60/#83/#86/#85/#84 repair SSOT):
++Explicit invariants enforced in this module (Issue #80/#73/#60/#83/#86/#87/#85/#84 repair SSOT):
 +  INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
 +  INV-2: link_fact_to_proof_task resolves via get_proof_task_version/get_fact_version
 +         only (never get_current_*); rejects non-positive versions and cross-case links.
@@ -5425,11 +5425,11 @@ index 0000000..26f3665
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..91d2af9
+index 0000000..08781e4
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
 @@ -0,0 +1,658 @@
-+"""Issue-centered V2 — four invariant assertions (Issue #80/#73/#60/#83/#86/#85/#84)."""
++"""Issue-centered V2 — four invariant assertions (Issue #80/#73/#60/#83/#86/#87/#85/#84)."""
 +
 +from __future__ import annotations
 +

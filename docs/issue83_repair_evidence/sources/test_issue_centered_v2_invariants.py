@@ -1,4 +1,4 @@
-"""Issue-centered V2 — four invariant assertions (Issue #80/#73/#60/#83/#86/#85/#84)."""
+"""Issue-centered V2 — four invariant assertions (Issue #80/#73/#60/#83/#86/#87/#85/#84)."""
 
 from __future__ import annotations
 
