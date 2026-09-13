@@ -1,6 +1,6 @@
 # Issue #83 Resubmit — Issue-Centered V2 (#80 repair)
 
-Generated: 2026-09-13T08:48:47.024271Z | Base: `f84972a` | Repair: `a87f42d`
+Generated: 2026-09-13T08:48:47.024271Z | Base: `f84972a` | Repair: `d369cdf`
 
 **SSOT:** `docs/issue83_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
