@@ -48,6 +48,26 @@ def test_pdf_fixtures_use_fixed_creation_date() -> None:
                 )
 
 
+def test_pdf_fixtures_have_stable_id_digest() -> None:
+    """ReportLab invariant mode must pin /ID so PDF bytes do not churn."""
+    id_pattern = re.compile(r"/ID\s*\[<([0-9a-f]+)><\1>\]")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        generate(output_dir=root)
+        first_ids = {}
+        for name in _PDF_FIXTURES:
+            text = (root / name).read_text(encoding="latin-1")
+            match = id_pattern.search(text)
+            assert match is not None, f"{name} missing stable /ID digest"
+            first_ids[name] = match.group(1)
+        generate(output_dir=root)
+        for name in _PDF_FIXTURES:
+            text = (root / name).read_text(encoding="latin-1")
+            match = id_pattern.search(text)
+            assert match is not None, f"{name} missing stable /ID digest on second run"
+            assert match.group(1) == first_ids[name], f"{name} /ID digest changed between runs"
+
+
 def test_docx_fixture_regenerates_byte_identically() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

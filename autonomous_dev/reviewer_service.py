@@ -16,6 +16,7 @@ from autonomous_dev.acceptance_evidence import (
     generate_acceptance_report,
     load_report,
 )
+from autonomous_dev.acceptance_marker import diff_includes_marker
 from autonomous_dev.config import AutonomousDevSettings
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ class ReviewerService:
                     ),
                 )
         if REVIEWER_ACCEPTANCE_MARKER in body or "[P0-LIVE-ACCEPTANCE]" in body:
-            if "acceptance_marker" in ctx.diff or "acceptance_marker.txt" in ctx.diff:
+            if diff_includes_marker(ctx.diff):
                 return ReviewResult(
                     verdict="PASS",
                     reason="Harmless acceptance marker updated as required",
@@ -224,8 +225,6 @@ class ReviewerService:
         )
 
     def _git_diff(self, commit_sha: str) -> str:
-        if self.settings.autonomous_worker_mode == "deterministic":
-            return f"diff --git a/autonomous_dev/acceptance_marker.txt issue #{commit_sha[:8]}"
         try:
             show = subprocess.run(
                 ["git", "show", "--stat", "--patch", commit_sha],

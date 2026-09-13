@@ -215,6 +215,32 @@ def infra_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reset_autonomous_singletons()
 
 
+def _commit_acceptance_marker(
+    repo: Path,
+    *,
+    issue_number: int = 1,
+    message: str = "acceptance marker",
+    at: datetime | None = None,
+) -> str:
+    from autonomous_dev.acceptance_marker import write_marker
+
+    write_marker(repo, issue_number=issue_number, at=at)
+    subprocess.run(["git", "add", "autonomous_dev/acceptance_marker.txt"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", message],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
 def _sign(body: bytes, secret: str = "test-secret") -> str:
     digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return f"sha256={digest}"
@@ -815,23 +841,21 @@ def test_reviewer_pass_completes_task_via_executor(infra_env, _mock_github_clien
     repo, db = infra_env
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("acceptance ok\n", encoding="utf-8")
+    commit_sha = _commit_acceptance_marker(repo, issue_number=20, message="acceptance ok")
     task = store.create_task(issue_number=20, delivery_id="rev-pass")
-    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="abc123def456")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
     _mock_github_client.bodies[20] = f"{REVIEWER_ACCEPTANCE_MARKER}\nHarmless acceptance."
     executor = ReviewExecutor(settings, store)
     result = executor.run_review_sync(
         task,
-        commit_sha="abc123def456",
+        commit_sha=commit_sha,
         issue_body=_mock_github_client.bodies[20],
     )
     assert result["verdict"] == "PASS"
     updated = store.get_task(task.id)
     assert updated is not None
     assert updated.status == TaskStatus.COMPLETED
-    inv = store.get_review_invocation(task.id, "abc123def456")
+    inv = store.get_review_invocation(task.id, commit_sha)
     assert inv is not None
     assert inv.verdict == ReviewVerdict.PASS
     assert inv.status == ReviewInvocationStatus.COMPLETED
@@ -881,17 +905,15 @@ def test_reviewer_exactly_once_idempotent(infra_env, _mock_github_client):
     repo, db = infra_env
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("ok\n", encoding="utf-8")
+    commit_sha = _commit_acceptance_marker(repo, issue_number=23, message="acceptance ok")
     task = store.create_task(issue_number=23, delivery_id="rev-idem")
-    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="idem12345678")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
     body = f"{REVIEWER_ACCEPTANCE_MARKER}\nAcceptance."
     _mock_github_client.bodies[23] = body
     executor = ReviewExecutor(settings, store)
-    executor.run_review_sync(task, commit_sha="idem12345678", issue_body=body)
+    executor.run_review_sync(task, commit_sha=commit_sha, issue_body=body)
     first_count = len(_mock_github_client.created_issues)
-    outcome = executor.schedule_review(task, commit_sha="idem12345678")
+    outcome = executor.schedule_review(task, commit_sha=commit_sha)
     assert outcome["status"] == "idempotent"
     assert len(_mock_github_client.created_issues) == first_count
 
@@ -949,9 +971,7 @@ def test_push_triggers_reviewer_bridge(infra_env, _mock_github_client):
     repo, db = infra_env
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("ok\n", encoding="utf-8")
+    commit_sha = _commit_acceptance_marker(repo, issue_number=26, message="acceptance ok")
     router = TaskRouter(settings, store)
     task = store.create_task(issue_number=26, delivery_id="push-rev")
     store.update_task(task.id, status=TaskStatus.RUNNING)
@@ -962,18 +982,18 @@ def test_push_triggers_reviewer_bridge(infra_env, _mock_github_client):
         delivery_id="push-rev-001",
         payload={
             "ref": "refs/heads/main",
-            "after": "rev1234567890",
+            "after": commit_sha,
             "commits": [{"message": "chore: issue #26"}],
         },
     )
     import time
 
     for _ in range(20):
-        inv = store.get_review_invocation(task.id, "rev1234567890")
+        inv = store.get_review_invocation(task.id, commit_sha)
         if inv and inv.status == ReviewInvocationStatus.COMPLETED:
             break
         time.sleep(0.1)
-    inv = store.get_review_invocation(task.id, "rev1234567890")
+    inv = store.get_review_invocation(task.id, commit_sha)
     assert inv is not None
     assert inv.verdict == ReviewVerdict.PASS
 
@@ -981,12 +1001,14 @@ def test_push_triggers_reviewer_bridge(infra_env, _mock_github_client):
 def test_reviewer_service_deterministic_pass(infra_env):
     repo, db = infra_env
     settings = AutonomousDevSettings()
+    commit_sha = _commit_acceptance_marker(repo, issue_number=1, message="acceptance marker for issue #1")
     svc = ReviewerService(settings, repo_root=repo)
     ctx = svc.gather_context(
         issue_number=1,
         issue_body=f"{REVIEWER_ACCEPTANCE_MARKER}\ntest",
-        commit_sha="abc123",
+        commit_sha=commit_sha,
     )
+    assert "acceptance_marker" in ctx.diff
     result = svc.review(ctx)
     assert result.verdict == "PASS"
 
@@ -1104,11 +1126,9 @@ def test_transient_failure_retries_to_single_verdict(
     clear_autonomous_settings_cache()
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("ok\n", encoding="utf-8")
+    commit_sha = _commit_acceptance_marker(repo, issue_number=31, message="acceptance ok")
     task = store.create_task(issue_number=31, delivery_id="transient-retry")
-    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="trans12345678")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
     body = f"{REVIEWER_ACCEPTANCE_MARKER}\nTransient retry test."
     _mock_github_client.bodies[31] = body
 
@@ -1125,10 +1145,10 @@ def test_transient_failure_retries_to_single_verdict(
     monkeypatch.setattr(reviewer, "review", flaky_review.__get__(reviewer, ReviewerService))
     executor = ReviewExecutor(settings, store, reviewer=reviewer)
 
-    first = executor.run_review_sync(task, commit_sha="trans12345678", issue_body=body)
+    first = executor.run_review_sync(task, commit_sha=commit_sha, issue_body=body)
     assert first["status"] == "failed"
     assert first.get("retryable") == "true"
-    inv = store.get_review_invocation(task.id, "trans12345678")
+    inv = store.get_review_invocation(task.id, commit_sha)
     assert inv is not None
     assert inv.status == ReviewInvocationStatus.FAILED
 
@@ -1141,7 +1161,7 @@ def test_transient_failure_retries_to_single_verdict(
 
     results = process_due_reviews(settings, store)
     assert any(r.get("verdict") == "PASS" for r in results)
-    inv2 = store.get_review_invocation(task.id, "trans12345678")
+    inv2 = store.get_review_invocation(task.id, commit_sha)
     assert inv2 is not None
     assert inv2.status == ReviewInvocationStatus.COMPLETED
     verdict_comments = [
@@ -1156,11 +1176,9 @@ def test_stale_running_review_recovered(
     repo, db = infra_env
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("ok\n", encoding="utf-8")
+    commit_sha = _commit_acceptance_marker(repo, issue_number=32, message="acceptance ok")
     task = store.create_task(issue_number=32, delivery_id="stale-running")
-    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="stale123456789")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
     body = f"{REVIEWER_ACCEPTANCE_MARKER}\nStale recovery test."
     _mock_github_client.bodies[32] = body
     invocation_id = "inv-stale-running"
@@ -1168,7 +1186,7 @@ def test_stale_running_review_recovered(
         invocation_id=invocation_id,
         task_id=task.id,
         issue_number=32,
-        commit_sha="stale123456789",
+        commit_sha=commit_sha,
     )
     store.update_review_invocation(
         invocation_id,
@@ -1181,7 +1199,7 @@ def test_stale_running_review_recovered(
     reset_autonomous_singletons()
     results = process_due_reviews(settings, store)
     assert results
-    inv = store.get_review_invocation(task.id, "stale123456789")
+    inv = store.get_review_invocation(task.id, commit_sha)
     assert inv is not None
     assert inv.status == ReviewInvocationStatus.COMPLETED
     assert inv.verdict == ReviewVerdict.PASS
@@ -1196,11 +1214,9 @@ def test_review_worker_no_deadlock_on_transient_kick(
     clear_autonomous_settings_cache()
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("ok\n", encoding="utf-8")
+    commit_sha = _commit_acceptance_marker(repo, issue_number=33, message="acceptance ok")
     task = store.create_task(issue_number=33, delivery_id="deadlock-kick")
-    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="deadlock123456")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
     body = f"{REVIEWER_ACCEPTANCE_MARKER}\nDeadlock kick test."
     _mock_github_client.bodies[33] = body
 
@@ -1221,13 +1237,13 @@ def test_review_worker_no_deadlock_on_transient_kick(
         "autonomous_dev.review_worker._get_executor",
         lambda _s, _st: executor,
     )
-    executor.schedule_review(task, commit_sha="deadlock123456")
+    executor.schedule_review(task, commit_sha=commit_sha)
     deadline = time.monotonic() + 30
-    inv = store.get_review_invocation(task.id, "deadlock123456")
+    inv = store.get_review_invocation(task.id, commit_sha)
     while inv is None or inv.status != ReviewInvocationStatus.COMPLETED:
         assert time.monotonic() < deadline, "review did not complete after async kick"
         time.sleep(0.05)
-        inv = store.get_review_invocation(task.id, "deadlock123456")
+        inv = store.get_review_invocation(task.id, commit_sha)
     assert inv is not None
     assert inv.verdict == ReviewVerdict.PASS
 
@@ -1263,11 +1279,9 @@ def test_verdict_persisted_when_github_apply_fails(
     repo, db = infra_env
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("ok\n", encoding="utf-8")
+    commit_sha = _commit_acceptance_marker(repo, issue_number=34, message="acceptance ok")
     task = store.create_task(issue_number=34, delivery_id="github-apply-fail")
-    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="ghfail1234567")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
     body = f"{REVIEWER_ACCEPTANCE_MARKER}\nGitHub apply fail test."
     _mock_github_client.bodies[34] = body
 
@@ -1279,10 +1293,10 @@ def test_verdict_persisted_when_github_apply_fails(
         boom_sync_completed,
     )
     executor = ReviewExecutor(settings, store)
-    result = executor.run_review_sync(task, commit_sha="ghfail1234567", issue_body=body)
+    result = executor.run_review_sync(task, commit_sha=commit_sha, issue_body=body)
     assert result["status"] == "completed"
     assert result["verdict"] == "PASS"
-    inv = store.get_review_invocation(task.id, "ghfail1234567")
+    inv = store.get_review_invocation(task.id, commit_sha)
     assert inv is not None
     assert inv.status == ReviewInvocationStatus.COMPLETED
     assert inv.verdict == ReviewVerdict.PASS
@@ -2766,6 +2780,18 @@ def test_runtime_version_module(infra_env, monkeypatch):
     assert v["image_tag"] == "sha999"
 
 
+def test_diff_includes_marker_detects_acceptance_marker_path():
+    from autonomous_dev.acceptance_marker import diff_includes_marker
+
+    diff = (
+        "diff --git a/autonomous_dev/acceptance_marker.txt "
+        "b/autonomous_dev/acceptance_marker.txt\n"
+        "index abc..def 100644\n"
+    )
+    assert diff_includes_marker(diff)
+    assert not diff_includes_marker("diff --git a/README.md b/README.md\n")
+
+
 def test_acceptance_marker_write_read_and_parse(infra_env):
     from autonomous_dev.acceptance_marker import (
         format_marker_content,
@@ -2866,10 +2892,8 @@ def test_worker_deterministic_acceptance_marker_records_issue_number(
     assert "worker-run issue=38" in content
 
 
-def test_issue38_restart_b_reviewer_passes_on_marker_diff(
-    infra_env, monkeypatch: pytest.MonkeyPatch
-):
-    """Materialized Restart B body plus marker diff satisfies deterministic reviewer."""
+def test_issue38_restart_b_reviewer_passes_on_marker_diff(infra_env):
+    """Materialized Restart B body plus real marker commit satisfies deterministic reviewer."""
     from autonomous_dev.acceptance_marker import write_marker
     from autonomous_dev.next_task_resolver import build_roadmap_issue_body
 
@@ -2881,18 +2905,34 @@ def test_issue38_restart_b_reviewer_passes_on_marker_diff(
         next_title="[ACCEPT] Restart B 747cb2ef",
         source_body=f"{REVIEWER_ACCEPTANCE_MARKER}\n[P0-LIVE-ACCEPTANCE]",
     )
-    write_marker(repo, issue_number=38)
+    fixed = datetime(2026, 9, 13, 7, 0, 0, tzinfo=UTC)
+    write_marker(repo, issue_number=37, at=fixed)
+    subprocess.run(["git", "add", "autonomous_dev/acceptance_marker.txt"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "prior marker"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    write_marker(repo, issue_number=38, at=fixed)
+    subprocess.run(["git", "add", "autonomous_dev/acceptance_marker.txt"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "issue #38 acceptance marker"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    commit_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
 
     svc = ReviewerService(settings, repo_root=repo)
-    monkeypatch.setattr(
-        svc,
-        "_git_diff",
-        lambda _sha: (
-            "diff --git a/autonomous_dev/acceptance_marker.txt "
-            "b/autonomous_dev/acceptance_marker.txt"
-        ),
-    )
-    ctx = svc.gather_context(issue_number=38, issue_body=body, commit_sha="abc123")
+    ctx = svc.gather_context(issue_number=38, issue_body=body, commit_sha=commit_sha)
+    assert "acceptance_marker" in ctx.diff
     result = svc.review(ctx)
     assert result.verdict == "PASS"
     assert "Harmless acceptance marker updated as required" in result.reason
@@ -3098,19 +3138,17 @@ def test_reviewer_pass_triggers_handoff_via_executor(infra_env, _mock_github_cli
     repo, db = infra_env
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("acceptance ok\n", encoding="utf-8")
+    commit_sha = _commit_acceptance_marker(repo, issue_number=90, message="acceptance ok")
     _mock_github_client.labels[107] = {"cursor-task"}
     _mock_github_client.titles[107] = "Executor handoff B"
     task = store.create_task(issue_number=90, delivery_id="rev-handoff")
-    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="exec12345678")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
     body = f"{REVIEWER_ACCEPTANCE_MARKER}\nHandoff acceptance."
     _mock_github_client.bodies[90] = body
     executor = ReviewExecutor(settings, store)
-    result = executor.run_review_sync(task, commit_sha="exec12345678", issue_body=body)
+    result = executor.run_review_sync(task, commit_sha=commit_sha, issue_body=body)
     assert result["verdict"] == "PASS"
-    handoff = store.get_handoff_by_key(f"handoff:{task.id}:exec12345678")
+    handoff = store.get_handoff_by_key(f"handoff:{task.id}:{commit_sha[:12]}")
     assert handoff is not None
     assert handoff.next_issue_number == 107
     assert "cursor-task" in _mock_github_client.labels[107]
@@ -3289,20 +3327,18 @@ def test_reviewer_stall_self_heal_recovers_missing_invocation(
     clear_autonomous_settings_cache()
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("ok\n", encoding="utf-8")
+    commit_sha = _commit_acceptance_marker(repo, issue_number=61, message="acceptance ok")
     task = store.create_task(issue_number=61, delivery_id="reviewer-stall")
-    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="stallabc123456")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
     _mock_github_client.bodies[61] = f"{REVIEWER_ACCEPTANCE_MARKER}\nReviewer stall recovery."
 
     counts = run_loop_recovery_tick(settings, store)
     assert counts["stalled_ready_for_review"] >= 1
 
     deadline = time.time() + 15
-    inv = store.get_review_invocation(task.id, "stallabc123456")
+    inv = store.get_review_invocation(task.id, commit_sha)
     while time.time() < deadline:
-        inv = store.get_review_invocation(task.id, "stallabc123456")
+        inv = store.get_review_invocation(task.id, commit_sha)
         if inv and inv.status == ReviewInvocationStatus.COMPLETED:
             break
         from autonomous_dev.review_worker import process_due_reviews
@@ -3418,11 +3454,9 @@ def test_orphaned_reviewer_lock_reclaimed_missing_invocation(
     clear_autonomous_settings_cache()
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("ok\n", encoding="utf-8")
+    commit_sha = _commit_acceptance_marker(repo, issue_number=65, message="acceptance ok")
     task = store.create_task(issue_number=65, delivery_id="orphan-lock")
-    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="orphan12345678")
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
     _mock_github_client.bodies[65] = f"{REVIEWER_ACCEPTANCE_MARKER}\nOrphan lock recovery."
 
     assert store.try_acquire_reviewer_lock(task.id, owner="orphan-owner", ttl_seconds=3600)
@@ -3431,15 +3465,15 @@ def test_orphaned_reviewer_lock_reclaimed_missing_invocation(
             "UPDATE reviewer_lock SET acquired_at = ? WHERE id = 1",
             ("2000-01-01T00:00:00+00:00",),
         )
-    assert store.get_review_invocation(task.id, "orphan12345678") is None
+    assert store.get_review_invocation(task.id, commit_sha) is None
 
     counts = run_loop_recovery_tick(settings, store)
     assert counts["stalled_ready_for_review"] >= 1
 
     deadline = time.time() + 15
-    inv = store.get_review_invocation(task.id, "orphan12345678")
+    inv = store.get_review_invocation(task.id, commit_sha)
     while time.time() < deadline:
-        inv = store.get_review_invocation(task.id, "orphan12345678")
+        inv = store.get_review_invocation(task.id, commit_sha)
         if inv and inv.status == ReviewInvocationStatus.COMPLETED:
             break
         process_due_reviews(settings, store)
@@ -3468,11 +3502,8 @@ def test_pending_invocation_orphan_lock_triggers_stall_recovery(
     clear_autonomous_settings_cache()
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("ok\n", encoding="utf-8")
+    commit_sha = _commit_acceptance_marker(repo, issue_number=67, message="acceptance ok")
     task = store.create_task(issue_number=67, delivery_id="pending-orphan-lock")
-    commit_sha = "pending123456789"
     store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha=commit_sha)
     store.create_review_invocation(
         invocation_id="inv-pending-orphan",
@@ -3518,10 +3549,7 @@ def test_reviewer_stall_recovers_when_reactivation_task_id_stale(
     clear_autonomous_settings_cache()
     settings = AutonomousDevSettings()
     store = StateStore(db)
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("ok\n", encoding="utf-8")
-    commit_sha = "staletask1234567"
+    commit_sha = _commit_acceptance_marker(repo, issue_number=68, message="acceptance ok")
     stalled = store.create_task(issue_number=68, delivery_id="stale-rfreview")
     store.update_task(
         stalled.id,
