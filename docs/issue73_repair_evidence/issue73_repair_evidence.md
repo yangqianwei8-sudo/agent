@@ -1,8 +1,8 @@
 # Issue #73 Repair Evidence — Issue-Centered V2 (#60)
 
-Generated: 2026-09-13T08:26:39.270454Z
-Base commit: `1a66b14`
-Repair commit: (this commit)
+Generated: 2026-09-13T08:34:08.573180Z
+Base commit: `f84972a` (pre issue-centered v2; parent of c19379b)
+Repair commit: `03b4246`
 
 **This directory is the sole SSOT for Issue #73 repair submission.**
 
@@ -2275,7 +2275,7 @@ backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_f
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 19 passed, 2 warnings in 1.48s ========================
+======================== 19 passed, 2 warnings in 1.42s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py
@@ -2331,7 +2331,7 @@ All four invariant tests **PASSED** — see section (A) in `docs/issue73_repair_
 
 File: `issue73_repair_production.patch`
 
-Generated: `git diff c19379b^..HEAD -- <four production paths>`
+Generated: `git diff f84972a..HEAD -- <four production paths>`
 
 ```diff
 diff --git a/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py b/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py

@@ -36,4 +36,4 @@ backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_f
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 19 passed, 2 warnings in 1.48s ========================
+======================== 19 passed, 2 warnings in 1.42s ========================
