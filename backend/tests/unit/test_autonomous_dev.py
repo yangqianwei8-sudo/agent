@@ -2969,6 +2969,15 @@ def test_issue38_reviewer_fails_when_diff_lacks_marker(infra_env):
     assert "Expected acceptance_marker.txt change not found in diff" in result.reason
 
 
+def test_p0_acceptance_apply_harmless_marker_change(infra_env):
+    from autonomous_dev.p0_acceptance import apply_harmless_marker_change
+
+    repo, _ = infra_env
+    path = apply_harmless_marker_change(repo, issue_number=81)
+    assert path.name == "acceptance_marker.txt"
+    assert "worker-run issue=81" in path.read_text(encoding="utf-8")
+
+
 def test_p0_acceptance_detects_marker_only_issue_body():
     from autonomous_dev.next_task_resolver import build_roadmap_issue_body
     from autonomous_dev.p0_acceptance import is_marker_only_acceptance, marker_commit_paths

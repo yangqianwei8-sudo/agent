@@ -8,6 +8,7 @@ worker commits do not pick up timestamp churn.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import tempfile
 from pathlib import Path
@@ -20,7 +21,30 @@ DETERMINISTIC_PDF_EPOCH = "20000101000000+00'00'"
 FIXTURE_NAMES = ("sample_text.pdf", "sample_scanned.pdf", "sample.docx", "sample_image.png")
 
 _PDF_DATE_RE = re.compile(r"(CreationDate|ModDate) \(D:([^)]+)\)")
-_PDF_ID_RE = re.compile(r"/ID\s*\[<([0-9a-f]+)><\1>\]")
+_PDF_ID_TOKEN_RE = re.compile(r"/ID\s*\[<[^>]+><[^>]+>\s*\]")
+_PDF_ID_RE = re.compile(r"/ID\s*\[<([0-9a-f]+)><\1>\]\s*")
+
+
+def pin_pdf_deterministic_metadata(pdf_bytes: bytes) -> bytes:
+    """Pin CreationDate, ModDate, and trailer /ID to fixed deterministic values."""
+    text = pdf_bytes.decode("latin-1")
+    text = _PDF_DATE_RE.sub(
+        lambda match: f"{match.group(1)} (D:{DETERMINISTIC_PDF_EPOCH})",
+        text,
+    )
+    doc_id = _content_derived_pdf_id(text)
+    text = _PDF_ID_TOKEN_RE.sub(f"/ID [<{doc_id}><{doc_id}>]", text)
+    return text.encode("latin-1")
+
+
+def _content_derived_pdf_id(pdf_text: str) -> str:
+    """Stable /ID digest from PDF body with metadata fields neutralized."""
+    neutral = _PDF_DATE_RE.sub(
+        lambda match: f"{match.group(1)} (D:{DETERMINISTIC_PDF_EPOCH})",
+        pdf_text,
+    )
+    neutral = _PDF_ID_TOKEN_RE.sub("", neutral)
+    return hashlib.sha256(neutral.encode("latin-1")).hexdigest()[:32]
 
 
 def pdf_has_deterministic_metadata(pdf_bytes: bytes) -> bool:
@@ -99,6 +123,7 @@ def _write_text_pdf(path: Path) -> None:
         c.drawString(72, y, line)
         y -= 18
     c.save()
+    path.write_bytes(pin_pdf_deterministic_metadata(path.read_bytes()))
 
 
 def _write_blank_pdf(path: Path) -> None:
@@ -113,6 +138,7 @@ def _write_blank_pdf(path: Path) -> None:
     c.showPage()
     c.line(72, 72, 200, 72)
     c.save()
+    path.write_bytes(pin_pdf_deterministic_metadata(path.read_bytes()))
 
 
 def _write_docx(path: Path) -> None:

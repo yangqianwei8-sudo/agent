@@ -7,6 +7,7 @@ from backend.fixtures.deterministic import (
     ensure_fixtures,
     generate,
     pdf_has_deterministic_metadata,
+    pin_pdf_deterministic_metadata,
     validate_fixtures,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "ensure_fixtures",
     "generate",
     "pdf_has_deterministic_metadata",
+    "pin_pdf_deterministic_metadata",
     "validate_fixtures",
 ]

@@ -14,6 +14,7 @@ from backend.fixtures.deterministic import (
     ensure_fixtures,
     generate,
     pdf_has_deterministic_metadata,
+    pin_pdf_deterministic_metadata,
     validate_fixtures,
 )
 
@@ -112,6 +113,22 @@ def test_validate_fixtures_detects_drift() -> None:
             assert "sample_text.pdf" in str(exc)
         else:
             raise AssertionError("expected drift validation to fail")
+
+
+def test_pin_pdf_deterministic_metadata_normalizes_dates_and_id() -> None:
+    """Production pin step must rewrite volatile ReportLab metadata in-place."""
+    raw = (
+        b"%PDF-1.4\n1 0 obj\n<< /CreationDate (D:20991231120000+00'00')"
+        b" /ModDate (D:20991231120000+00'00') >>\nendobj\ntrailer\n"
+        b"<< /ID [<deadbeefdeadbeefdeadbeefdeadbeef><cafebabe>]\n>>\n"
+        b"startxref\n0\n%%EOF\n"
+    )
+    pinned = pin_pdf_deterministic_metadata(raw)
+    assert pdf_has_deterministic_metadata(pinned)
+    text = pinned.decode("latin-1")
+    assert "20991231120000" not in text
+    assert "deadbeef" not in text
+    assert pin_pdf_deterministic_metadata(pinned) == pinned
 
 
 def test_pdf_has_deterministic_metadata() -> None:
