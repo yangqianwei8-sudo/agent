@@ -994,13 +994,13 @@ index 0000000..06beb1f
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..b0c3190
+index 0000000..169fe10
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
-@@ -0,0 +1,1235 @@
+@@ -0,0 +1,1237 @@
 +"""Issue-centered V2 domain mutations — mixed into DomainService.
 +
-+Explicit invariants enforced in this module (Issue #84 repair SSOT / #73 / #60):
++Explicit invariants enforced in this module (Issue #86 repair SSOT / #85 / #84 / #73 / #60):
 +  INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
 +  INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
 +         (no get_current_*); rejects implicit current/latest and cross-case links.
@@ -1580,6 +1580,8 @@ index 0000000..b0c3190
 +        role: str,
 +        actor_id: UUID,
 +    ) -> ProofTaskFactLink:
++        # INV-2: reject invalid/implicit versions before any DB row lookup.
++        _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
 +        self._require_case(case_id)
 +        task, fact = _resolve_proof_task_and_fact_for_link(
 +            self,
@@ -2235,11 +2237,11 @@ index 0000000..b0c3190
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..a443514
+index 0000000..c035192
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
 @@ -0,0 +1,448 @@
-+"""Issue-centered V2 — four invariant assertions (Issue #84 SSOT repair / #73 / #60)."""
++"""Issue-centered V2 — four invariant assertions (Issue #86 SSOT repair / #85 / #84 / #73 / #60)."""
 +
 +from __future__ import annotations
 +

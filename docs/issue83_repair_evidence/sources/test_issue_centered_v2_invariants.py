@@ -1,4 +1,4 @@
-"""Issue-centered V2 — four invariant assertions (Issue #84 SSOT repair / #73 / #60)."""
+"""Issue-centered V2 — four invariant assertions (Issue #86 SSOT repair / #85 / #84 / #73 / #60)."""
 
 from __future__ import annotations
 

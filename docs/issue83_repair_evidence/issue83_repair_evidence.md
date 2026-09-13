@@ -1,8 +1,8 @@
 # Issue #83 Repair Evidence — Issue-Centered V2 (#80)
 
-Generated: 2026-09-13T10:19:57.394908Z
+Generated: 2026-09-13T10:26:19.712399Z
 Base commit: `f84972a213c44ba602b07ae3801637dc5c045f16` (pre issue-centered v2; parent of c19379b)
-Repair commit: `775f545`
+Repair commit: `3dcb43d`
 
 **This directory is the sole SSOT for Issue #83 repair submission.**
 
@@ -16,7 +16,7 @@ See `docs/issue83_repair_evidence/00_reviewer_bundle.md` for compact submission 
 |----------|-------|
 | Production | `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` (430) |
 | SSOT copy | `sources/migration_h9b0c1d2e3f4.py` |
-| Repair patch | `issue83_repair_production.patch` (2689 lines, untruncated) |
+| Repair patch | `issue83_repair_production.patch` (2691 lines, untruncated) |
 
 **proof_gaps** table with check constraints:
 - `ck_proof_gaps_type`: `gap_type IN ('FACT','EVIDENCE','SOURCE','LEGAL_RESEARCH')`
@@ -460,12 +460,12 @@ def downgrade() -> None:
 
 ## (2) Full backend/domain/issue_centered.py — untruncated (production path modified, inlined below)
 
-Production: `backend/domain/issue_centered.py` (1236 lines) | SSOT: `sources/domain_issue_centered.py`
+Production: `backend/domain/issue_centered.py` (1238 lines) | SSOT: `sources/domain_issue_centered.py`
 
 ```python
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #84 repair SSOT / #73 / #60):
+Explicit invariants enforced in this module (Issue #86 repair SSOT / #85 / #84 / #73 / #60):
   INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
   INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
          (no get_current_*); rejects implicit current/latest and cross-case links.
@@ -1045,6 +1045,8 @@ class IssueCenteredDomainMixin:
         role: str,
         actor_id: UUID,
     ) -> ProofTaskFactLink:
+        # INV-2: reject invalid/implicit versions before any DB row lookup.
+        _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
         self._require_case(case_id)
         task, fact = _resolve_proof_task_and_fact_for_link(
             self,
@@ -2265,7 +2267,7 @@ class IssueWorkProductService:
 Production: `backend/tests/integration/test_issue_centered_v2_invariants.py` (449 lines) | SSOT: `sources/test_issue_centered_v2_invariants.py`
 
 ```python
-"""Issue-centered V2 — four invariant assertions (Issue #84 SSOT repair / #73 / #60)."""
+"""Issue-centered V2 — four invariant assertions (Issue #86 SSOT repair / #85 / #84 / #73 / #60)."""
 
 from __future__ import annotations
 
@@ -2724,7 +2726,7 @@ Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/
 Also saved to: `test_issue_centered_v2_output.txt`
 
 ```
-# Issue #83 repair capture | commit=775f545016cf3a723dc39f27c05ac5faf37d49b3 | timestamp=2026-09-13T10:19:57.394908+00:00
+# Issue #83 repair capture | commit=3dcb43dd4a3a78c7b8d12c1c504251ef6bbe13f7 | timestamp=2026-09-13T10:26:19.712399+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -2771,7 +2773,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 24 passed, 4 warnings in 1.95s ========================
+======================== 24 passed, 4 warnings in 1.54s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py
@@ -2781,7 +2783,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Also saved to: `live_issue_centered_v2_acceptance_output.txt`
 
 ```
-# Issue #83 repair capture | commit=775f545016cf3a723dc39f27c05ac5faf37d49b3 | timestamp=2026-09-13T10:19:57.394908+00:00
+# Issue #83 repair capture | commit=3dcb43dd4a3a78c7b8d12c1c504251ef6bbe13f7 | timestamp=2026-09-13T10:26:19.712399+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -2825,7 +2827,7 @@ Dedicated module: `backend/tests/integration/test_issue_centered_v2_invariants.p
 
 All four invariant tests **PASSED** — see section (A) in `docs/issue83_repair_evidence/00_reviewer_bundle.md`.
 
-## (7) Untruncated production diff — all four files (2689 lines)
+## (7) Untruncated production diff — all four files (2691 lines)
 
 File: `issue83_repair_production.patch`
 
@@ -3828,13 +3830,13 @@ index 0000000..06beb1f
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..b0c3190
+index 0000000..169fe10
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
-@@ -0,0 +1,1235 @@
+@@ -0,0 +1,1237 @@
 +"""Issue-centered V2 domain mutations — mixed into DomainService.
 +
-+Explicit invariants enforced in this module (Issue #84 repair SSOT / #73 / #60):
++Explicit invariants enforced in this module (Issue #86 repair SSOT / #85 / #84 / #73 / #60):
 +  INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
 +  INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
 +         (no get_current_*); rejects implicit current/latest and cross-case links.
@@ -4414,6 +4416,8 @@ index 0000000..b0c3190
 +        role: str,
 +        actor_id: UUID,
 +    ) -> ProofTaskFactLink:
++        # INV-2: reject invalid/implicit versions before any DB row lookup.
++        _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
 +        self._require_case(case_id)
 +        task, fact = _resolve_proof_task_and_fact_for_link(
 +            self,
@@ -5069,11 +5073,11 @@ index 0000000..b0c3190
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..a443514
+index 0000000..c035192
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
 @@ -0,0 +1,448 @@
-+"""Issue-centered V2 — four invariant assertions (Issue #84 SSOT repair / #73 / #60)."""
++"""Issue-centered V2 — four invariant assertions (Issue #86 SSOT repair / #85 / #84 / #73 / #60)."""
 +
 +from __future__ import annotations
 +
