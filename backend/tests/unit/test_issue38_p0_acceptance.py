@@ -22,8 +22,10 @@ from backend.fixtures.deterministic import (
     FIXTURE_NAMES,
     generate,
     pdf_has_deterministic_metadata,
+    pin_pdf_deterministic_metadata,
     sync_golden_fixtures,
     validate_fixtures,
+    verify_independent_generation_byte_identity,
 )
 
 
@@ -162,6 +164,21 @@ def test_committed_golden_fixtures_match_sync_output() -> None:
         sync_golden_fixtures(output_dir=root)
         for name in FIXTURE_NAMES:
             assert (DEFAULT_FIXTURES_DIR / name).read_bytes() == (root / name).read_bytes()
+
+
+def test_issue38_fixture_generation_pins_pdf_metadata_before_marker_commit() -> None:
+    """Issue #38 repair: production generator pins CreationDate/ModDate and stable /ID."""
+    verify_independent_generation_byte_identity()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        generate(output_dir=root)
+        first = {name: (root / name).read_bytes() for name in FIXTURE_NAMES}
+        for name in ("sample_text.pdf", "sample_scanned.pdf"):
+            assert pdf_has_deterministic_metadata(first[name])
+            assert pin_pdf_deterministic_metadata(first[name]) == first[name]
+        generate(output_dir=root)
+        second = {name: (root / name).read_bytes() for name in FIXTURE_NAMES}
+        assert first == second
 
 
 def test_marker_only_acceptance_end_to_end_with_stable_fixtures() -> None:

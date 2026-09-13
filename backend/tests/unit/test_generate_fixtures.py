@@ -16,6 +16,7 @@ from backend.fixtures.deterministic import (
     pdf_has_deterministic_metadata,
     pin_pdf_deterministic_metadata,
     validate_fixtures,
+    verify_independent_generation_byte_identity,
 )
 
 _PDF_FIXTURES = ("sample_text.pdf", "sample_scanned.pdf")
@@ -54,6 +55,11 @@ def test_pdf_fixtures_identical_across_independent_output_directories() -> None:
             bytes_b = (dir_b / name).read_bytes()
             assert bytes_a == bytes_b, f"{name} differed between independent directories"
             assert pdf_has_deterministic_metadata(bytes_a)
+
+
+def test_verify_independent_generation_byte_identity() -> None:
+    """Production guard: two generate() runs into separate dirs must match."""
+    verify_independent_generation_byte_identity()
 
 
 def test_generate_without_metadata_pin_drift_from_pinned_output(monkeypatch) -> None:

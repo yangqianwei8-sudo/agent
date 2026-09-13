@@ -3154,6 +3154,24 @@ def test_validate_marker_only_commit_paths_blocks_fixture_staging():
         )
 
 
+def test_ensure_golden_fixtures_stable_uses_independent_generation_check() -> None:
+    """Production guard must reject fixtures when independent generation would drift."""
+    import tempfile
+
+    from autonomous_dev.p0_acceptance import ensure_golden_fixtures_stable
+
+    from backend.fixtures.deterministic import generate, verify_independent_generation_byte_identity
+
+    verify_independent_generation_byte_identity()
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        generate(output_dir=root)
+        ensure_golden_fixtures_stable(fixtures_dir=root)
+        (root / "sample_scanned.pdf").write_bytes(b"%PDF-1.4 drifted")
+        with pytest.raises(ValueError, match="sample_scanned.pdf"):
+            ensure_golden_fixtures_stable(fixtures_dir=root)
+
+
 def test_handoff_pass_activates_queued_next_task_once(infra_env, _mock_github_client):
     from autonomous_dev.state import HandoffStatus
     from autonomous_dev.task_handoff import TaskHandoffEngine
