@@ -56,11 +56,11 @@ def apply_harmless_marker_change(repo_root: Path, issue_number: int) -> Path:
     return write_marker(repo_root, issue_number=issue_number)
 
 
-def ensure_golden_fixtures_stable() -> None:
-    """Validate committed golden fixtures match the deterministic generator."""
-    from backend.fixtures import ensure_fixtures
+def ensure_golden_fixtures_stable(*, fixtures_dir: Path | None = None) -> None:
+    """Validate golden fixtures byte-match fresh deterministic generation."""
+    from backend.fixtures.deterministic import DEFAULT_FIXTURES_DIR, validate_fixtures
 
-    ensure_fixtures()
+    validate_fixtures(fixtures_dir if fixtures_dir is not None else DEFAULT_FIXTURES_DIR)
 
 
 def acceptance_gate_pytest_argv() -> list[str]:

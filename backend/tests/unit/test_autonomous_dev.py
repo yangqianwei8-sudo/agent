@@ -3132,37 +3132,48 @@ def test_p0_acceptance_gate_includes_fixture_determinism_tests():
     ]
 
 
-def test_issue75_repair_ensure_golden_fixtures_blocks_marker_on_drift(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+def test_issue75_repair_ensure_golden_fixtures_blocks_marker_on_drift() -> None:
     """Issue #38 repair: fixture drift must fail before marker-only commit proceeds."""
     import tempfile
 
     from autonomous_dev.p0_acceptance import ensure_golden_fixtures_stable
 
-    from backend.fixtures.deterministic import generate
+    from backend.fixtures.deterministic import FIXTURE_NAMES, generate
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         generate(output_dir=root)
-        monkeypatch.setattr(
-            "backend.fixtures.deterministic.DEFAULT_FIXTURES_DIR",
-            root,
-        )
-        ensure_golden_fixtures_stable()
+        ensure_golden_fixtures_stable(fixtures_dir=root)
         fixture = root / "sample_text.pdf"
         original = fixture.read_bytes()
         try:
             fixture.write_bytes(b"%PDF-1.4 corrupt fixture for drift test")
             try:
-                ensure_golden_fixtures_stable()
+                ensure_golden_fixtures_stable(fixtures_dir=root)
             except ValueError as exc:
                 assert "sample_text.pdf" in str(exc)
             else:
                 raise AssertionError("expected drift validation to fail before marker commit")
         finally:
             fixture.write_bytes(original)
-            ensure_golden_fixtures_stable()
+            ensure_golden_fixtures_stable(fixtures_dir=root)
+
+
+def test_ensure_golden_fixtures_stable_compares_against_fresh_generation() -> None:
+    """Production guard must validate bytes against freshly generated golden fixtures."""
+    import tempfile
+
+    from autonomous_dev.p0_acceptance import ensure_golden_fixtures_stable
+
+    from backend.fixtures.deterministic import FIXTURE_NAMES, generate
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        generate(output_dir=root)
+        expected = {name: (root / name).read_bytes() for name in FIXTURE_NAMES}
+        ensure_golden_fixtures_stable(fixtures_dir=root)
+        for name in FIXTURE_NAMES:
+            assert (root / name).read_bytes() == expected[name]
 
 
 def test_handoff_pass_activates_queued_next_task_once(infra_env, _mock_github_client):
