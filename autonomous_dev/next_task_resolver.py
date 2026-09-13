@@ -16,6 +16,7 @@ from autonomous_dev.github_client import (
     LABEL_PRODUCT_DECISION,
     GitHubClient,
 )
+from autonomous_dev.reviewer_service import REVIEWER_ACCEPTANCE_MARKER
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,28 @@ def _stable_idempotency_key(*, source_issue: int, title: str) -> str:
     return f"roadmap-issue:{source_issue}:{digest}"
 
 
+def _build_roadmap_issue_body(
+    *,
+    source_issue_number: int,
+    stable_key: str,
+    next_title: str,
+    source_body: str,
+) -> str:
+    footer = (
+        f"Auto-materialized from roadmap after PASS on issue #{source_issue_number}.\n\n"
+        f"Idempotency-Key: `{stable_key}`"
+    )
+    if next_title.startswith("[ACCEPT]") or REVIEWER_ACCEPTANCE_MARKER in source_body:
+        return (
+            f"{REVIEWER_ACCEPTANCE_MARKER}\n"
+            "[P0-LIVE-ACCEPTANCE]\n"
+            f"Harmless marker-only change for {next_title}.\n"
+            "Update autonomous_dev/acceptance_marker.txt only.\n\n"
+            f"{footer}"
+        )
+    return footer
+
+
 class NextTaskResolver:
     """Prefer queued cursor-task issues; materialize roadmap items exactly once."""
 
@@ -106,9 +129,11 @@ class NextTaskResolver:
             return NextTaskResolution(
                 outcome=NextTaskOutcome.CREATE_NEW,
                 title=next_title,
-                body=(
-                    f"Auto-materialized from roadmap after PASS on issue #{source_issue_number}.\n\n"
-                    f"Idempotency-Key: `{stable_key}`"
+                body=_build_roadmap_issue_body(
+                    source_issue_number=source_issue_number,
+                    stable_key=stable_key,
+                    next_title=next_title,
+                    source_body=source_body,
                 ),
                 idempotency_key=stable_key,
                 reason="roadmap marker requires new issue",

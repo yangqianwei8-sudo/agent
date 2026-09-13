@@ -2766,6 +2766,29 @@ def test_runtime_version_module(infra_env, monkeypatch):
     assert v["image_tag"] == "sha999"
 
 
+def test_roadmap_materialize_accept_includes_reviewer_markers(infra_env, _mock_github_client):
+    from autonomous_dev.next_task_resolver import NextTaskOutcome, NextTaskResolver
+
+    resolver = NextTaskResolver(_mock_github_client)
+    source_body = (
+        f"{REVIEWER_ACCEPTANCE_MARKER}\n"
+        "[P0-LIVE-ACCEPTANCE]\n"
+        "A\n"
+        "NEXT_TASK: [ACCEPT] Restart B 747cb2ef"
+    )
+    resolution = resolver.resolve(
+        source_issue_number=37,
+        source_body=source_body,
+        idempotency_key="handoff:1:abc",
+    )
+    assert resolution.outcome == NextTaskOutcome.CREATE_NEW
+    assert resolution.title == "[ACCEPT] Restart B 747cb2ef"
+    assert REVIEWER_ACCEPTANCE_MARKER in (resolution.body or "")
+    assert "[P0-LIVE-ACCEPTANCE]" in (resolution.body or "")
+    assert "Update autonomous_dev/acceptance_marker.txt only." in (resolution.body or "")
+    assert "roadmap-issue:37:" in (resolution.body or "")
+
+
 def test_handoff_pass_activates_queued_next_task_once(infra_env, _mock_github_client):
     from autonomous_dev.state import HandoffStatus
     from autonomous_dev.task_handoff import TaskHandoffEngine
