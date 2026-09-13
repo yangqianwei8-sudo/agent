@@ -1,8 +1,8 @@
 # Issue #83 Repair Evidence — Issue-Centered V2 (#80)
 
-Generated: 2026-09-13T09:27:31.972662Z
+Generated: 2026-09-13T09:29:18.363251Z
 Base commit: `f84972a213c44ba602b07ae3801637dc5c045f16` (pre issue-centered v2; parent of c19379b)
-Repair commit: `e605367`
+Repair commit: `757f83d`
 
 **This directory is the sole SSOT for Issue #83 repair submission.**
 
@@ -2105,7 +2105,7 @@ class IssueWorkProductService:
 Production: `backend/tests/integration/test_issue_centered_v2_invariants.py` (223 lines) | SSOT: `sources/test_issue_centered_v2_invariants.py`
 
 ```python
-"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #80 SSOT)."""
+"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #60 / #83 SSOT)."""
 
 from __future__ import annotations
 
@@ -2338,7 +2338,7 @@ Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/
 Also saved to: `test_issue_centered_v2_output.txt`
 
 ```
-# Issue #83 repair capture | commit=e605367a0273a3f0ade32fc77a81919a02b0b6a5 | timestamp=2026-09-13T09:27:31.972662+00:00
+# Issue #83 repair capture | commit=757f83d3436e2b163093b739006bc1d57e573f09 | timestamp=2026-09-13T09:29:18.363251+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -2379,7 +2379,7 @@ backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_f
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 20 passed, 2 warnings in 1.85s ========================
+======================== 20 passed, 2 warnings in 1.47s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py
@@ -2389,7 +2389,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Also saved to: `live_issue_centered_v2_acceptance_output.txt`
 
 ```
-# Issue #83 repair capture | commit=e605367a0273a3f0ade32fc77a81919a02b0b6a5 | timestamp=2026-09-13T09:27:31.972662+00:00
+# Issue #83 repair capture | commit=757f83d3436e2b163093b739006bc1d57e573f09 | timestamp=2026-09-13T09:29:18.363251+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -4517,11 +4517,11 @@ index 0000000..b57f649
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..6e5047d
+index 0000000..e716aef
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
 @@ -0,0 +1,222 @@
-+"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #80 SSOT)."""
++"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #60 / #83 SSOT)."""
 +
 +from __future__ import annotations
 +
