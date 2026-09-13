@@ -1,36 +1,57 @@
 # Issue #60 Resubmit — Issue-Centered V2 (#57 repair)
 
-Generated: 2026-09-13T06:22:24Z | Base: 1cb66f6 | Implementation: c19379b (on main)
-Full untruncated copies: docs/issue60_repair_evidence/sources/{migration_h9b0c1d2e3f4.py,domain_issue_centered.py,application_issue_work_product.py}
-Production paths: alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py (394L), backend/domain/issue_centered.py (1062L), backend/application/issue_work_product.py (501L)
+Generated: 2026-09-13T07:11:56Z | Base: 9c3247f | Implementation: c19379b (on main)
+
+Full untruncated copies: `docs/issue60_repair_evidence/sources/{migration_h9b0c1d2e3f4.py,domain_issue_centered.py,application_issue_work_product.py}`
+
+Production paths: `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` (394L), `backend/domain/issue_centered.py` (1062L), `backend/application/issue_work_product.py` (501L)
+
+Git patch: `docs/issue60_repair_evidence/issue60_c19379b_key_files.patch` (1975L, untruncated)
 
 ## (A) Four required invariants — explicit verification
 
 ### A1. No production mutation path creates ClaimDirection
-backend/domain/services.py create_claim_direction() raises ValidationError unless _legacy_compat=True.
-Production backend/application/claim_direction.py calls without _legacy_compat — blocked.
-TEST: test_claim_direction_production_disabled — PASSED (pytest.raises ValidationError match "ClaimDirection production")
+
+`backend/domain/services.py` `create_claim_direction()` raises `ValidationError` unless `_legacy_compat=True`.
+
+Production `backend/application/claim_direction.py` calls without `_legacy_compat` — blocked.
+
+**TEST:** `test_claim_direction_production_disabled` — PASSED (`pytest.raises ValidationError match "ClaimDirection production"`)
 
 ### A2. ProofTaskFactLink rejects implicit current/latest and cross-case links
-backend/domain/issue_centered.py link_fact_to_proof_task() requires explicit proof_task_version + fact_version via get_proof_task_version/get_fact_version (NOT get_current_*).
-Nonexistent version → NotFoundError; cross-case → ValidationError("cross-case proof task link rejected"/"cross-case fact link rejected").
-TESTS: test_proof_task_fact_link_rejects_implicit_version PASSED; test_proof_task_fact_link_cross_case_rejected PASSED; test_proof_task_adopt_and_fact_link PASSED.
+
+`backend/domain/issue_centered.py` `link_fact_to_proof_task()` requires explicit `proof_task_version` + `fact_version` via `get_proof_task_version`/`get_fact_version` (NOT `get_current_*`).
+
+Nonexistent version → `NotFoundError`; cross-case → `ValidationError("cross-case proof task link rejected"/"cross-case fact link rejected")`.
+
+**TESTS:** `test_proof_task_fact_link_rejects_implicit_version` PASSED; `test_proof_task_fact_link_cross_case_rejected` PASSED; `test_proof_task_adopt_and_fact_link` PASSED.
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
-backend/domain/issue_centered.py create_lawyer_position() lines 135-137:
-  if position_type == FORMAL_DEFENSE and not opponent_material_ref: raise ValidationError("FORMAL_DEFENSE requires opponent material reference")
-TEST: test_position_formal_defense_requires_material PASSED.
+
+`backend/domain/issue_centered.py` `create_lawyer_position()` lines 135-137:
+
+```python
+if position_type == PositionType.FORMAL_DEFENSE.value:
+    if not opponent_material_ref:
+        raise ValidationError("FORMAL_DEFENSE requires opponent material reference")
+```
+
+**TEST:** `test_position_formal_defense_requires_material` PASSED.
 
 ### A4. merge/split emit HumanDecision + AuditLog
-merge_issues() creates HumanDecision decision_type="MERGE_ISSUES" before mutation, then _audit(...,"merge_issues",...).
-split_issue() creates HumanDecision decision_type="SPLIT_ISSUE" before mutation, then _audit(...,"split_issue",...).
-TEST: test_issue_merge_and_split asserts len(merge_decisions)==1, merge_audits present, len(split_decisions)==1, split_audits present — PASSED.
 
-## (B) Test output — actual run 2026-09-13T06:22:24Z
+`merge_issues()` creates `HumanDecision` `decision_type="MERGE_ISSUES"` before mutation, then `_audit(...,"merge_issues",...)`.
+
+`split_issue()` creates `HumanDecision` `decision_type="SPLIT_ISSUE"` before mutation, then `_audit(...,"split_issue",...)`.
+
+**TEST:** `test_issue_merge_and_split` asserts `len(merge_decisions)==1`, `merge_audits` present, `len(split_decisions)==1`, `split_audits` present — PASSED.
+
+## (B) Test output — actual run 2026-09-13T07:11:56Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py -v`
 
-pytest backend/tests/integration/test_issue_centered_v2.py -v → 15 passed, 2 warnings in 3.26s
+```
+======================== 15 passed, 2 warnings in 3.03s ========================
   test_position_ai_candidate_lawyer_confirm PASSED
   test_position_formal_defense_requires_material PASSED
   test_proof_task_adopt_and_fact_link PASSED
@@ -46,8 +67,16 @@ pytest backend/tests/integration/test_issue_centered_v2.py -v → 15 passed, 2 w
   test_workspace_includes_issue_work_product PASSED
   test_agent_issue_object_context PASSED
   test_structural_gap_renamed PASSED
+```
 
-live_issue_centered_v2_acceptance.py → ISSUE-CENTERED CASE WORKSPACE V2: PASS (30 steps)
+Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py`
+
+```
+ISSUE-CENTERED CASE WORKSPACE V2: PASS
+Steps completed: 30
+```
+
+Full captured output: `test_issue_centered_v2_output.txt`, `live_issue_centered_v2_acceptance_output.txt`.
 
 ## (C) Migration — proof_gaps + lawyer_assessments + check constraints (complete, untruncated)
 
@@ -106,9 +135,11 @@ live_issue_centered_v2_acceptance.py → ISSUE-CENTERED CASE WORKSPACE V2: PASS 
     )
 ```
 
-Also in migration: proof_task_fact_links ck_proof_task_fact_link_role/status; issue_conflicts ck_issue_conflicts_status/source; conflict_fact_links ck_conflict_fact_link_role; issue_positions/issue_positions side/type/source/status constraints.
+Also in migration: `proof_task_fact_links` `ck_proof_task_fact_link_role`/`status`; `issue_conflicts` `ck_issue_conflicts_status`/`source`; `conflict_fact_links` `ck_conflict_fact_link_role`; `issue_positions` side/type/source/status constraints; `proof_tasks` status/source constraints; `issue_legal_theory_links` role/status constraints.
 
-## (D) Domain excerpts — backend/domain/issue_centered.py
+Full migration (394 lines): `sources/migration_h9b0c1d2e3f4.py`.
+
+## (D) Domain — backend/domain/issue_centered.py (1062 lines, full copy in sources/)
 
 ```python
 def create_lawyer_position(...):
@@ -138,4 +169,5 @@ def split_issue(...):
 ```
 
 ## (E) Application — backend/application/issue_work_product.py (501 lines, full copy in sources/)
-IssueWorkProductService builds canonical read projection: positions, proof_tasks, conflicts, proof_gaps, lawyer_assessment, proof_state (RED/YELLOW/GREEN), litigation plan. Verified by test_issue_work_product_api, test_workspace_includes_issue_work_product PASSED.
+
+`IssueWorkProductService` builds canonical read projection: positions, proof_tasks, conflicts, proof_gaps, lawyer_assessment, proof_state (RED/YELLOW/GREEN), litigation plan. Verified by `test_issue_work_product_api`, `test_workspace_includes_issue_work_product` PASSED.

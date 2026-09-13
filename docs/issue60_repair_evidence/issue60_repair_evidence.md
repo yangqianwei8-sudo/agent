@@ -1,9 +1,11 @@
 # Issue #60 Repair Evidence — Issue-Centered V2 (#57)
 
-Generated: 2026-09-13T06:22:24Z  
-Base commit: `1cb66f6`  
+Generated: 2026-09-13T07:11:56Z  
+Base commit: `9c3247f`  
 Implementation commit: `c19379b` (on main)  
 Repair commit: (this commit)
+
+**This directory is the sole SSOT for Issue #60 repair submission.**
 
 ## Reviewer bundle (priority — fits 12k diff window)
 
@@ -19,13 +21,15 @@ See `docs/issue60_repair_evidence/00_reviewer_bundle.md` for compact submission 
 
 Production paths (identical content): `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py`, `backend/domain/issue_centered.py`, `backend/application/issue_work_product.py`.
 
-## Test output (actual run 2026-09-13T06:22:24Z)
+Git patch (untruncated): `docs/issue60_repair_evidence/issue60_c19379b_key_files.patch` (1975 lines).
+
+## Test output (actual run 2026-09-13T07:11:56Z)
 
 See `test_issue_centered_v2_output.txt` and `live_issue_centered_v2_acceptance_output.txt`.
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py -v`
 
-**pytest:** 15 passed, 2 warnings in 3.26s  
+**pytest:** 15 passed, 2 warnings in 3.03s  
 **live acceptance:** ISSUE-CENTERED CASE WORKSPACE V2: PASS (30 steps)
 
 ## Four required invariants
