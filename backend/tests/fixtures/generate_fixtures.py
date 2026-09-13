@@ -1,10 +1,18 @@
-"""Generate Phase 4 golden fixtures (run once / on demand)."""
+"""Generate Phase 4 golden fixtures (run once / on demand).
+
+PDF output uses ReportLab ``invariant=1`` so CreationDate/ModDate and /ID
+digests are stable across runs — integration tests regenerate fixtures each
+session and marker-only worker commits must not pick up timestamp churn.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 FIXTURES = Path(__file__).resolve().parent
+
+# Fixed epoch used by ReportLab invariant mode (CreationDate/ModDate in PDF Info).
+DETERMINISTIC_PDF_EPOCH = "20000101000000+00'00'"
 
 
 def generate() -> None:
@@ -19,7 +27,7 @@ def _write_text_pdf(path: Path) -> None:
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
 
-    c = canvas.Canvas(str(path), pagesize=A4)
+    c = canvas.Canvas(str(path), pagesize=A4, invariant=1)
     lines_p1 = [
         "Page 1: Design contract signed by parties.",
         "The plaintiff provided construction drawing review services.",
@@ -51,7 +59,7 @@ def _write_blank_pdf(path: Path) -> None:
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
 
-    c = canvas.Canvas(str(path), pagesize=A4)
+    c = canvas.Canvas(str(path), pagesize=A4, invariant=1)
     # Draw only a thin line — extract_text typically yields empty/near-empty
     c.setStrokeColorRGB(0.9, 0.9, 0.9)
     c.line(72, 72, 200, 72)
