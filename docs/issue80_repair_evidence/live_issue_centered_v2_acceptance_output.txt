@@ -1,4 +1,4 @@
-# Issue #80 repair capture | commit=984f39696f3e8545f6e7bc9ebb14a841b06815da | timestamp=2026-09-13T10:47:09.804035+00:00
+# Issue #80 repair capture | commit=dc01e47caba0ee6fdcd3f2a2ba2f312990a8a814 | timestamp=2026-09-13T10:58:04.458785+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa

@@ -1,6 +1,6 @@
 """phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 
-Issue #80 repair SSOT (#73 / #60 / #83 / #86 / #84): four invariants enforced at DB + domain layers:
+Issue #80/#73/#60/#83/#86/#84 repair SSOT: four invariants enforced at DB + domain layers:
 - INV-1: ClaimDirection production mutation blocked in domain/application (not this migration)
 - INV-2: proof_task_fact_links version positivity (ck_*_version_pos) rejects implicit 0/latest
 - INV-3: issue_positions FORMAL_DEFENSE ref + side constraints (ck_*_formal_defense_*)

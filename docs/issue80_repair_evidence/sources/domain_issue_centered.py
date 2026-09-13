@@ -1,6 +1,6 @@
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #80 repair SSOT / #73 / #60 / #83 / #86 / #85 / #84):
+Explicit invariants enforced in this module (Issue #80/#73/#60/#83/#86/#87/#85/#84 repair SSOT):
   INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
   INV-2: link_fact_to_proof_task resolves via get_proof_task_version/get_fact_version
          only (never get_current_*); rejects non-positive versions and cross-case links.
@@ -61,6 +61,7 @@ __all__ = [
     "IssueCenteredDomainMixin",
     "_guard_cross_case_proof_task_fact_pair",
     "_guard_explicit_proof_task_fact_versions",
+    "_guard_resolved_explicit_versions",
     "_guard_formal_defense_opponent_material_ref",
     "_guard_formal_defense_side",
     "_normalize_opponent_material_ref",
@@ -97,6 +98,26 @@ def _guard_explicit_proof_task_fact_versions(
     if proof_task_version < 1 or fact_version < 1:
         raise ValidationError(
             "ProofTaskFactLink requires explicit positive proof_task_version and fact_version"
+        )
+
+
+def _guard_resolved_explicit_versions(
+    *,
+    proof_task_version: int,
+    fact_version: int,
+    task: ProofTask,
+    fact: Any,
+) -> None:
+    """INV-2: resolved rows must match requested versions (no implicit current/latest)."""
+    if task.version != proof_task_version:
+        raise ValidationError(
+            "ProofTaskFactLink requires explicit proof_task_version; "
+            "implicit current/latest rejected"
+        )
+    if fact.version != fact_version:
+        raise ValidationError(
+            "ProofTaskFactLink requires explicit fact_version; "
+            "implicit current/latest rejected"
         )
 
 
@@ -143,6 +164,12 @@ def _resolve_proof_task_and_fact_for_link(
         raise NotFoundError("fact version not found")
     if fact.case_id != case_id:
         raise ValidationError("cross-case fact link rejected")
+    _guard_resolved_explicit_versions(
+        proof_task_version=proof_task_version,
+        fact_version=fact_version,
+        task=task,
+        fact=fact,
+    )
     return task, fact
 
 

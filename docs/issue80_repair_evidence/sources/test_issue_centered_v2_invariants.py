@@ -1,4 +1,4 @@
-"""Issue-centered V2 — four invariant assertions (Issue #80 SSOT repair / #73 / #60 / #83 / #86 / #85 / #84)."""
+"""Issue-centered V2 — four invariant assertions (Issue #80/#73/#60/#83/#86/#87/#85/#84)."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
     _guard_formal_defense_side,
+    _guard_resolved_explicit_versions,
     _normalize_opponent_material_ref,
     _reject_claim_direction_production_mutation,
     _require_structure_mutation_audit,
@@ -42,6 +43,17 @@ def test_invariant_guard_functions_reject_invalid_inputs() -> None:
         _guard_explicit_proof_task_fact_versions(0, 1)
     with pytest.raises(ValidationError, match="explicit positive"):
         _guard_explicit_proof_task_fact_versions(1, -1)
+    from types import SimpleNamespace
+
+    task = SimpleNamespace(version=2)
+    fact = SimpleNamespace(version=1)
+    with pytest.raises(ValidationError, match="implicit current/latest rejected"):
+        _guard_resolved_explicit_versions(
+            proof_task_version=1,
+            fact_version=1,
+            task=task,
+            fact=fact,
+        )
 
     with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
         _guard_formal_defense_opponent_material_ref("FORMAL_DEFENSE", None)
@@ -93,6 +105,53 @@ def test_invariant_1_no_production_claim_direction_creation(
         )
     )
     assert rows == []
+
+
+def test_invariant_1_amend_claim_direction_blocked_without_legacy_compat(
+    db_session, owner_id, actor_id
+) -> None:
+    """INV-1: amend_claim_direction creates ClaimDirection rows and must honor the guard."""
+    svc = DomainService(db_session)
+    case = svc.create_case(title="INV1-amend", owner_user_id=owner_id)
+    *_, item = _seed_accepted_evidence(
+        db_session, owner_id=owner_id, actor_id=actor_id, case=case
+    )
+    fact = _seed_fact(svc, case.id, actor_id, item)
+    payload = {
+        "overall_strategy": "主张价款",
+        "claims": [
+            {
+                "claim_type": "PAYMENT",
+                "description": "支付设计费",
+                "amount": 100,
+                "currency": "CNY",
+                "supporting_fact_ids": [str(fact.fact_key)],
+            }
+        ],
+    }
+    claim = svc.create_claim_direction(
+        _legacy_compat=True,
+        case_id=case.id,
+        payload=payload,
+        actor_id=actor_id,
+    )
+    claim = svc.confirm_claim_direction(claim.claim_direction_key, actor_id=actor_id)
+    new_payload = {
+        **payload,
+        "overall_strategy": "修订策略",
+        "claims": [{**payload["claims"][0], "amount": 200}],
+    }
+    with patch(
+        "backend.domain.services._reject_claim_direction_production_mutation",
+        wraps=_reject_claim_direction_production_mutation,
+    ) as guard:
+        with pytest.raises(ValidationError, match="ClaimDirection production"):
+            svc.amend_claim_direction(
+                claim.claim_direction_key,
+                payload=new_payload,
+                actor_id=actor_id,
+            )
+        guard.assert_called_once_with(_legacy_compat=False)
 
 
 def test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case(
