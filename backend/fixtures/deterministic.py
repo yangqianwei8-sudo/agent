@@ -83,6 +83,13 @@ def ensure_fixtures(*, output_dir: Path | None = None) -> Path:
     return generate(output_dir=output_dir)
 
 
+def sync_golden_fixtures(*, output_dir: Path | None = None) -> Path:
+    """Regenerate golden fixtures with pinned PDF metadata and validate byte identity."""
+    root = generate(output_dir=output_dir)
+    validate_fixtures(root)
+    return root
+
+
 def generate(*, output_dir: Path | None = None) -> Path:
     """Write golden fixtures. Returns the output directory (committed or temp)."""
     root = output_dir if output_dir is not None else DEFAULT_FIXTURES_DIR

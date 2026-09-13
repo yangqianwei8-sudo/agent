@@ -90,9 +90,10 @@ def execute_marker_only_acceptance(
     *,
     run_gate_tests: Callable[[], None],
     commit_paths: Callable[[list[str]], str],
+    fixtures_dir: Path | None = None,
 ) -> tuple[Path, str]:
     """Production worker flow: stable fixtures, marker write, gate tests, path-scoped commit."""
-    ensure_golden_fixtures_stable()
+    ensure_golden_fixtures_stable(fixtures_dir=fixtures_dir)
     marker_path = apply_harmless_marker_change(repo_root, issue_number)
     run_gate_tests()
     commit_sha = commit_paths(marker_commit_paths())

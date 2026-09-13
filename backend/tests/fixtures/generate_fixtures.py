@@ -8,10 +8,11 @@ from backend.fixtures.deterministic import (
 from backend.fixtures.deterministic import (
     DETERMINISTIC_PDF_EPOCH,
     generate,
+    sync_golden_fixtures,
 )
 
-__all__ = ["DETERMINISTIC_PDF_EPOCH", "FIXTURES", "generate"]
+__all__ = ["DETERMINISTIC_PDF_EPOCH", "FIXTURES", "generate", "sync_golden_fixtures"]
 
 if __name__ == "__main__":
-    generate()
+    sync_golden_fixtures()
     print("fixtures written to", FIXTURES)
