@@ -72,7 +72,7 @@ python3.11 -m venv .venv
 | `GITHUB_SSH_KEY_PATH` | SSH deploy key path (Option C) |
 | `GITHUB_AUTH_MODE` | `auto` (default), `pat`, `app`, or `ssh` |
 | `CURSOR_API_KEY` | Cursor API key for `cursor_sdk` worker mode |
-| `CURSOR_MODEL` | Cursor agent model (default `composer-2`) |
+| `CURSOR_MODEL` | Cursor agent model (default `composer-2.5`) |
 | `AUTONOMOUS_WORKER_MODE` | `deterministic` (tests), `live`, or `cursor_sdk` |
 | `AUTONOMOUS_REPO_ROOT` | Repository root path |
 | `AUTONOMOUS_STATE_DB_PATH` | SQLite state DB (default `data/autonomous_dev.db`) |

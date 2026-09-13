@@ -417,7 +417,7 @@ def test_cursor_model_from_env(monkeypatch: pytest.MonkeyPatch):
 def test_cursor_sdk_config_validation_missing_api_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
     monkeypatch.setenv("CURSOR_API_KEY", "")
-    monkeypatch.setenv("CURSOR_MODEL", "composer-2")
+    monkeypatch.setenv("CURSOR_MODEL", "composer-2.5")
     clear_autonomous_settings_cache()
     settings = AutonomousDevSettings()
     with pytest.raises(RuntimeError, match="CURSOR_API_KEY"):
@@ -497,7 +497,7 @@ def test_cursor_sdk_missing_api_key_fail_closed(infra_env, monkeypatch: pytest.M
     repo, db = infra_env
     monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
     monkeypatch.setenv("CURSOR_API_KEY", "")
-    monkeypatch.setenv("CURSOR_MODEL", "composer-2")
+    monkeypatch.setenv("CURSOR_MODEL", "composer-2.5")
     clear_autonomous_settings_cache()
     settings = AutonomousDevSettings()
     store = StateStore(db)
@@ -532,7 +532,7 @@ def test_cursor_sdk_secrets_not_in_error(infra_env, monkeypatch: pytest.MonkeyPa
     secret = "super-secret-cursor-key-xyz"
     monkeypatch.setenv("AUTONOMOUS_WORKER_MODE", "cursor_sdk")
     monkeypatch.setenv("CURSOR_API_KEY", secret)
-    monkeypatch.setenv("CURSOR_MODEL", "composer-2")
+    monkeypatch.setenv("CURSOR_MODEL", "composer-2.5")
     clear_autonomous_settings_cache()
     settings = AutonomousDevSettings()
     store = StateStore(db)
