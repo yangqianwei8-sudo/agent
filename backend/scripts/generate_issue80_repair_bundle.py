@@ -133,7 +133,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A2. ProofTaskFactLink rejects implicit current/latest and cross-case links
 
-**Domain enforcement** (`link_fact_to_proof_task` + `_guard_resolved_explicit_versions`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); rejects version mismatch and cross-case → `ValidationError("cross-case ...")` / `ValidationError("implicit current/latest rejected")`.
+**Domain enforcement** (`link_fact_to_proof_task` + `_resolve_proof_task_and_fact_for_link`): uses `get_proof_task_version` / `get_fact_version` only (never `get_current_*`); rejects non-positive versions and cross-case → `ValidationError("cross-case ...")` / `NotFoundError("... version not found")`.
 
 **Read projection guard** (`IssueWorkProductService._proof_task_facts`): skips links where `link.case_id != task.case_id` or `fact.case_id != task.case_id`.
 
@@ -165,7 +165,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A4. merge/split emit HumanDecision + AuditLog
 
-**Domain enforcement:** `_persist_issue_structure_decision` flushes HumanDecision before mutation; `_require_structure_mutation_audit` verifies AuditLog(entity_type="issues") and `after_json.decision_id == str(decision.id)` before return.
+**Domain enforcement:** `_persist_issue_structure_decision` flushes HumanDecision before mutation; `_persist_structure_mutation_audit` flushes AuditLog(entity_type="issues", `after_json.decision_id`) before mutation; `_require_structure_mutation_audit` fail-closes before return.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
 - `assert len(merge_decisions) == 1` and `assert merge_decisions[0].id is not None`

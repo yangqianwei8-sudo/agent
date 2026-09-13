@@ -1,8 +1,8 @@
 # Issue #80 Repair Evidence — Issue-Centered V2 (#73 / #86)
 
-Generated: 2026-09-13T10:44:44.294171Z
+Generated: 2026-09-13T10:46:57.909511Z
 Base commit: `f84972a213c44ba602b07ae3801637dc5c045f16` (pre issue-centered v2; parent of c19379b)
-Repair commit: `51195a3`
+Repair commit: `b11ff94`
 
 **This directory is the sole SSOT for Issue #80 repair submission.**
 
@@ -16,7 +16,7 @@ See `docs/issue80_repair_evidence/00_reviewer_bundle.md` for compact submission 
 |----------|-------|
 | Production | `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` (439) |
 | SSOT copy | `sources/migration_h9b0c1d2e3f4.py` |
-| Repair patch | `issue80_repair_production.patch` (2841 lines, untruncated) |
+| Repair patch | `issue80_repair_production.patch` (2915 lines, untruncated) |
 
 **proof_gaps** table with check constraints:
 - `ck_proof_gaps_type`: `gap_type IN ('FACT','EVIDENCE','SOURCE','LEGAL_RESEARCH')`
@@ -2624,15 +2624,15 @@ def ensure_material_bytes_immutable(material: CaseMaterial, updates: dict[str, A
 
 ## (3) Full backend/domain/issue_centered.py — untruncated (production path modified, inlined below)
 
-Production: `backend/domain/issue_centered.py` (1260 lines) | SSOT: `sources/domain_issue_centered.py`
+Production: `backend/domain/issue_centered.py` (1257 lines) | SSOT: `sources/domain_issue_centered.py`
 
 ```python
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
 Explicit invariants enforced in this module (Issue #80 repair SSOT / #73 / #60 / #83 / #86 / #85 / #84):
   INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
-  INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
-         (no get_current_*); rejects implicit current/latest and cross-case links.
+  INV-2: link_fact_to_proof_task resolves via get_proof_task_version/get_fact_version
+         only (never get_current_*); rejects non-positive versions and cross-case links.
   INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
   INV-4: merge_issues and split_issue persist HumanDecision + AuditLog before mutation.
 """
@@ -2692,7 +2692,6 @@ __all__ = [
     "_guard_explicit_proof_task_fact_versions",
     "_guard_formal_defense_opponent_material_ref",
     "_guard_formal_defense_side",
-    "_guard_resolved_explicit_versions",
     "_normalize_opponent_material_ref",
     "_reject_claim_direction_production_mutation",
     "_require_structure_mutation_audit",
@@ -2752,25 +2751,6 @@ def _guard_cross_case_proof_task_fact_pair(task: ProofTask, fact: Any) -> None:
         raise ValidationError("cross-case proof task fact link rejected")
 
 
-def _guard_resolved_explicit_versions(
-    *,
-    proof_task_version: int,
-    fact_version: int,
-    task: ProofTask,
-    fact: Any,
-) -> None:
-    """INV-2: resolved rows must match requested versions (no implicit current/latest)."""
-    if task.version != proof_task_version:
-        raise ValidationError(
-            "ProofTaskFactLink requires explicit proof_task_version; "
-            "implicit current/latest rejected"
-        )
-    if fact.version != fact_version:
-        raise ValidationError(
-            "ProofTaskFactLink requires explicit fact_version; implicit current/latest rejected"
-        )
-
-
 def _resolve_proof_task_and_fact_for_link(
     svc: DomainService,
     *,
@@ -2780,7 +2760,7 @@ def _resolve_proof_task_and_fact_for_link(
     fact_key: UUID,
     fact_version: int,
 ) -> tuple[ProofTask, Any]:
-    """INV-2: resolve explicit proof-task/fact versions; reject cross-case links."""
+    """INV-2: resolve only via explicit version lookups (never get_current_*)."""
     _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
     task = svc.repo.get_proof_task_version(proof_task_key, proof_task_version)
     if task is None:
@@ -2792,12 +2772,6 @@ def _resolve_proof_task_and_fact_for_link(
         raise NotFoundError("fact version not found")
     if fact.case_id != case_id:
         raise ValidationError("cross-case fact link rejected")
-    _guard_resolved_explicit_versions(
-        proof_task_version=proof_task_version,
-        fact_version=fact_version,
-        task=task,
-        fact=fact,
-    )
     return task, fact
 
 
@@ -2825,6 +2799,29 @@ def _persist_issue_structure_decision(
     if decision.id is None:
         raise ConflictError(f"{decision_type} decision failed to persist")
     return decision
+
+
+def _persist_structure_mutation_audit(
+    svc: DomainService,
+    *,
+    case_id: UUID,
+    actor_id: UUID,
+    action: str,
+    entity_id: UUID,
+    decision: Any,
+    after: dict[str, Any],
+) -> None:
+    """INV-4: AuditLog must be flushed before merge/split mutations proceed."""
+    payload = {**after, "decision_id": str(decision.id)}
+    svc._audit(
+        actor_id,
+        action,
+        "issues",
+        entity_id,
+        case_id=case_id,
+        after=payload,
+    )
+    svc.repo.flush()
 
 
 def _require_structure_mutation_audit(
@@ -3706,6 +3703,18 @@ class IssueCenteredDomainMixin:
                 "merged_statement": merged_statement,
             },
         )
+        _persist_structure_mutation_audit(
+            self,
+            case_id=case_id,
+            actor_id=actor_id,
+            action="merge_issues",
+            entity_id=decision.target_id,
+            decision=decision,
+            after={
+                "source_keys": [str(k) for k in source_issue_keys],
+                "merged_statement": merged_statement,
+            },
+        )
 
         new_key = uuid.uuid4()
         merged = Issue(
@@ -3750,18 +3759,6 @@ class IssueCenteredDomainMixin:
             src.updated_at = _now()
             _sync_issue_layer(src)
         self.repo.flush()
-        self._audit(
-            actor_id,
-            "merge_issues",
-            "issues",
-            merged.id,
-            case_id=case_id,
-            after={
-                "issue_key": str(merged.issue_key),
-                "merged_from": [str(k) for k in source_issue_keys],
-                "decision_id": str(decision.id),
-            },
-        )
         _require_structure_mutation_audit(
             self,
             case_id=case_id,
@@ -3794,6 +3791,18 @@ class IssueCenteredDomainMixin:
             decision_type="SPLIT_ISSUE",
             target_id=source.issue_key,
             payload={"source_key": str(source_issue_key), "target_count": len(targets)},
+        )
+        _persist_structure_mutation_audit(
+            self,
+            case_id=case_id,
+            actor_id=actor_id,
+            action="split_issue",
+            entity_id=source.issue_key,
+            decision=decision,
+            after={
+                "source_key": str(source_issue_key),
+                "target_count": len(targets),
+            },
         )
 
         from backend.domain.services import _sync_issue_layer
@@ -3833,18 +3842,6 @@ class IssueCenteredDomainMixin:
         source.updated_at = _now()
         _sync_issue_layer(source)
         self.repo.flush()
-        self._audit(
-            actor_id,
-            "split_issue",
-            "issues",
-            source.id,
-            case_id=case_id,
-            after={
-                "source_key": str(source_issue_key),
-                "new_keys": [str(i.issue_key) for i in created],
-                "decision_id": str(decision.id),
-            },
-        )
         _require_structure_mutation_audit(
             self,
             case_id=case_id,
@@ -4461,7 +4458,7 @@ class IssueWorkProductService:
 
 ## (5) Full backend/tests/integration/test_issue_centered_v2_invariants.py — untruncated (inlined below)
 
-Production: `backend/tests/integration/test_issue_centered_v2_invariants.py` (523 lines) | SSOT: `sources/test_issue_centered_v2_invariants.py`
+Production: `backend/tests/integration/test_issue_centered_v2_invariants.py` (600 lines) | SSOT: `sources/test_issue_centered_v2_invariants.py`
 
 ```python
 """Issue-centered V2 — four invariant assertions (Issue #80 SSOT repair / #73 / #60 / #83 / #86 / #85 / #84)."""
@@ -4469,6 +4466,7 @@ Production: `backend/tests/integration/test_issue_centered_v2_invariants.py` (52
 from __future__ import annotations
 
 import uuid
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
@@ -4488,13 +4486,12 @@ from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
     _guard_formal_defense_side,
-    _guard_resolved_explicit_versions,
     _normalize_opponent_material_ref,
     _reject_claim_direction_production_mutation,
     _require_structure_mutation_audit,
 )
 from backend.domain.services import DomainService
-from backend.models import AuditLog, HumanDecision
+from backend.models import AuditLog, HumanDecision, Issue
 from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 from backend.tests.integration.test_issue_centered_v2 import _seed_fact
 
@@ -4508,31 +4505,6 @@ def test_invariant_guard_functions_reject_invalid_inputs() -> None:
         _guard_explicit_proof_task_fact_versions(0, 1)
     with pytest.raises(ValidationError, match="explicit positive"):
         _guard_explicit_proof_task_fact_versions(1, -1)
-
-    class _FakeVersioned:
-        def __init__(self, version: int) -> None:
-            self.version = version
-
-    with pytest.raises(ValidationError, match="explicit proof_task_version"):
-        _guard_resolved_explicit_versions(
-            proof_task_version=2,
-            fact_version=1,
-            task=_FakeVersioned(1),
-            fact=_FakeVersioned(1),
-        )
-    with pytest.raises(ValidationError, match="explicit fact_version"):
-        _guard_resolved_explicit_versions(
-            proof_task_version=1,
-            fact_version=2,
-            task=_FakeVersioned(1),
-            fact=_FakeVersioned(1),
-        )
-    _guard_resolved_explicit_versions(
-        proof_task_version=1,
-        fact_version=1,
-        task=_FakeVersioned(1),
-        fact=_FakeVersioned(1),
-    )
 
     with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
         _guard_formal_defense_opponent_material_ref("FORMAL_DEFENSE", None)
@@ -4564,12 +4536,17 @@ def test_invariant_1_no_production_claim_direction_creation(
     """INV-1: production path must not create ClaimDirection without _legacy_compat."""
     svc = DomainService(db_session)
     case = svc.create_case(title="INV1", owner_user_id=owner_id)
-    with pytest.raises(ValidationError, match="ClaimDirection production"):
-        svc.create_claim_direction(
-            case_id=case.id,
-            payload={"claims": [], "parties": {}},
-            actor_id=actor_id,
-        )
+    with patch(
+        "backend.domain.services._reject_claim_direction_production_mutation",
+        wraps=_reject_claim_direction_production_mutation,
+    ) as guard:
+        with pytest.raises(ValidationError, match="ClaimDirection production"):
+            svc.create_claim_direction(
+                case_id=case.id,
+                payload={"claims": [], "parties": {}},
+                actor_id=actor_id,
+            )
+        guard.assert_called_once_with(_legacy_compat=False)
     # Explicit: no ClaimDirection row created
     from backend.models import ClaimDirection
 
@@ -4670,6 +4647,46 @@ def test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case(
             role="SUPPORT",
             actor_id=actor_id,
         )
+
+
+def test_invariant_2_link_fact_to_proof_task_never_uses_current_resolution(
+    db_session, owner_id, actor_id
+) -> None:
+    """INV-2: link_fact_to_proof_task must resolve via explicit version lookups only."""
+    svc = DomainService(db_session)
+    case = svc.create_case(title="INV2-explicit", owner_user_id=owner_id)
+    *_, item = _seed_accepted_evidence(
+        db_session, owner_id=owner_id, actor_id=actor_id, case=case
+    )
+    fact = _seed_fact(svc, case.id, actor_id, item)
+    issue = svc.confirm_issue(
+        svc.propose_issue(case_id=case.id, statement="显式版本焦点").issue_key,
+        actor_id=actor_id,
+    )
+    task = svc.create_lawyer_proof_task(
+        case_id=case.id,
+        issue_key=issue.issue_key,
+        issue_version=issue.version,
+        description="显式版本任务",
+        actor_id=actor_id,
+    )
+
+    def _reject_current(*_args, **_kwargs):
+        raise AssertionError("implicit current/latest resolution rejected")
+
+    with patch.object(svc.repo, "get_current_proof_task", side_effect=_reject_current):
+        with patch.object(svc.repo, "get_current_fact", side_effect=_reject_current):
+            link = svc.link_fact_to_proof_task(
+                case_id=case.id,
+                proof_task_key=task.proof_task_key,
+                proof_task_version=task.version,
+                fact_key=fact.fact_key,
+                fact_version=fact.version,
+                role="SUPPORT",
+                actor_id=actor_id,
+            )
+    assert link.proof_task_version == task.version
+    assert link.fact_version == fact.version
 
 
 def test_invariant_3_formal_defense_requires_opponent_material_ref(
@@ -4775,6 +4792,7 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     assert merge_audits[0].entity_type == "issues"
     assert merge_audits[0].after_json is not None
     assert merge_audits[0].after_json.get("decision_id") == str(merge_decisions[0].id)
+    assert merge_audits[0].after_json.get("merged_statement") == "合并焦点"
 
     split = svc.split_issue(
         case_id=case.id,
@@ -4810,6 +4828,62 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     assert split_audits[0].entity_type == "issues"
     assert split_audits[0].after_json is not None
     assert split_audits[0].after_json.get("decision_id") == str(split_decisions[0].id)
+    assert split_audits[0].after_json.get("target_count") == 2
+
+
+def test_invariant_4_merge_persists_decision_and_audit_before_issue_mutation(
+    db_session, owner_id, actor_id
+) -> None:
+    """INV-4: HumanDecision + AuditLog exist before merge mutates issue rows."""
+    svc = DomainService(db_session)
+    case = svc.create_case(title="INV4-order", owner_user_id=owner_id)
+    i1 = svc.confirm_issue(
+        svc.propose_issue(case_id=case.id, statement="顺序甲").issue_key,
+        actor_id=actor_id,
+    )
+    i2 = svc.confirm_issue(
+        svc.propose_issue(case_id=case.id, statement="顺序乙").issue_key,
+        actor_id=actor_id,
+    )
+    observed: list[str] = []
+    original_add = svc.repo.add
+
+    def _tracking_add(entity):
+        if isinstance(entity, Issue) and entity.statement == "顺序合并":
+            merge_decisions = list(
+                db_session.scalars(
+                    select(HumanDecision).where(
+                        HumanDecision.case_id == case.id,
+                        HumanDecision.decision_type == "MERGE_ISSUES",
+                    )
+                )
+            )
+            merge_audits = list(
+                db_session.scalars(
+                    select(AuditLog).where(
+                        AuditLog.case_id == case.id,
+                        AuditLog.action == "merge_issues",
+                    )
+                )
+            )
+            assert len(merge_decisions) == 1
+            assert merge_decisions[0].id is not None
+            assert len(merge_audits) == 1
+            assert merge_audits[0].after_json is not None
+            assert merge_audits[0].after_json.get("decision_id") == str(
+                merge_decisions[0].id
+            )
+            observed.append("preflight")
+        return original_add(entity)
+
+    with patch.object(svc.repo, "add", side_effect=_tracking_add):
+        svc.merge_issues(
+            case_id=case.id,
+            source_issue_keys=[i1.issue_key, i2.issue_key],
+            merged_statement="顺序合并",
+            actor_id=actor_id,
+        )
+    assert observed == ["preflight"]
 
 
 def test_invariant_2_cross_case_pair_guard_rejects_mismatched_cases() -> None:
@@ -4997,7 +5071,7 @@ Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/
 Also saved to: `test_issue_centered_v2_output.txt`
 
 ```
-# Issue #80 repair capture | commit=51195a32c5a59272401c29fd1320f021a932c8c0 | timestamp=2026-09-13T10:44:44.294171+00:00
+# Issue #80 repair capture | commit=b11ff94eee81307808e66726ebcbd689bdc038ec | timestamp=2026-09-13T10:46:57.909511+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -5005,33 +5079,35 @@ cachedir: .pytest_cache
 rootdir: /home/devbox/project
 configfile: pyproject.toml
 plugins: anyio-4.15.1
-collecting ... collected 27 items
+collecting ... collected 29 items
 
 backend/tests/integration/test_issue_centered_v2.py::test_position_ai_candidate_lawyer_confirm PASSED [  3%]
-backend/tests/integration/test_issue_centered_v2.py::test_position_formal_defense_requires_material PASSED [  7%]
-backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_fact_link PASSED [ 11%]
-backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_rejects_implicit_version PASSED [ 14%]
-backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_cross_case_rejected PASSED [ 18%]
-backend/tests/integration/test_issue_centered_v2.py::test_conflict_and_gap_lawyer_actions PASSED [ 22%]
-backend/tests/integration/test_issue_centered_v2.py::test_lawyer_assessment_ai_blocked PASSED [ 25%]
-backend/tests/integration/test_issue_centered_v2.py::test_issue_merge_and_split PASSED [ 29%]
-backend/tests/integration/test_issue_centered_v2.py::test_claim_direction_production_disabled PASSED [ 33%]
-backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_proof_state PASSED [ 37%]
-backend/tests/integration/test_issue_centered_v2.py::test_green_issue_not_auto_ready PASSED [ 40%]
-backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_api PASSED [ 44%]
-backend/tests/integration/test_issue_centered_v2.py::test_workspace_includes_issue_work_product PASSED [ 48%]
-backend/tests/integration/test_issue_centered_v2.py::test_agent_issue_object_context PASSED [ 51%]
-backend/tests/integration/test_issue_centered_v2.py::test_structural_gap_renamed PASSED [ 55%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_guard_functions_reject_invalid_inputs PASSED [ 59%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_1_no_production_claim_direction_creation PASSED [ 62%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case PASSED [ 66%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_requires_opponent_material_ref PASSED [ 70%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_rejects_whitespace_only_material_ref PASSED [ 74%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_merge_split_emit_human_decision_and_audit_log PASSED [ 77%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_cross_case_pair_guard_rejects_mismatched_cases PASSED [ 81%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_rejects_wrong_side PASSED [ 85%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_guard_rejects_missing_human_decision_or_audit PASSED [ 88%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_guard_rejects_audit_without_decision_id_linkage PASSED [ 92%]
+backend/tests/integration/test_issue_centered_v2.py::test_position_formal_defense_requires_material PASSED [  6%]
+backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_fact_link PASSED [ 10%]
+backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_rejects_implicit_version PASSED [ 13%]
+backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_cross_case_rejected PASSED [ 17%]
+backend/tests/integration/test_issue_centered_v2.py::test_conflict_and_gap_lawyer_actions PASSED [ 20%]
+backend/tests/integration/test_issue_centered_v2.py::test_lawyer_assessment_ai_blocked PASSED [ 24%]
+backend/tests/integration/test_issue_centered_v2.py::test_issue_merge_and_split PASSED [ 27%]
+backend/tests/integration/test_issue_centered_v2.py::test_claim_direction_production_disabled PASSED [ 31%]
+backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_proof_state PASSED [ 34%]
+backend/tests/integration/test_issue_centered_v2.py::test_green_issue_not_auto_ready PASSED [ 37%]
+backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_api PASSED [ 41%]
+backend/tests/integration/test_issue_centered_v2.py::test_workspace_includes_issue_work_product PASSED [ 44%]
+backend/tests/integration/test_issue_centered_v2.py::test_agent_issue_object_context PASSED [ 48%]
+backend/tests/integration/test_issue_centered_v2.py::test_structural_gap_renamed PASSED [ 51%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_guard_functions_reject_invalid_inputs PASSED [ 55%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_1_no_production_claim_direction_creation PASSED [ 58%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case PASSED [ 62%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_link_fact_to_proof_task_never_uses_current_resolution PASSED [ 65%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_requires_opponent_material_ref PASSED [ 68%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_rejects_whitespace_only_material_ref PASSED [ 72%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_merge_split_emit_human_decision_and_audit_log PASSED [ 75%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_merge_persists_decision_and_audit_before_issue_mutation PASSED [ 79%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_cross_case_pair_guard_rejects_mismatched_cases PASSED [ 82%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_rejects_wrong_side PASSED [ 86%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_guard_rejects_missing_human_decision_or_audit PASSED [ 89%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_guard_rejects_audit_without_decision_id_linkage PASSED [ 93%]
 backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions PASSED [ 96%]
 backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_db_rejects_formal_defense_without_material_ref PASSED [100%]
 
@@ -5047,7 +5123,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 27 passed, 4 warnings in 2.18s ========================
+======================== 29 passed, 4 warnings in 1.68s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py
@@ -5057,7 +5133,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Also saved to: `live_issue_centered_v2_acceptance_output.txt`
 
 ```
-# Issue #80 repair capture | commit=51195a32c5a59272401c29fd1320f021a932c8c0 | timestamp=2026-09-13T10:44:44.294171+00:00
+# Issue #80 repair capture | commit=b11ff94eee81307808e66726ebcbd689bdc038ec | timestamp=2026-09-13T10:46:57.909511+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -5101,7 +5177,7 @@ Dedicated module: `backend/tests/integration/test_issue_centered_v2_invariants.p
 
 All four invariant tests **PASSED** — see section (A) in `docs/issue80_repair_evidence/00_reviewer_bundle.md`.
 
-## (8) Untruncated production diff — all five files (2841 lines)
+## (8) Untruncated production diff — all five files (2915 lines)
 
 File: `issue80_repair_production.patch`
 
@@ -6124,16 +6200,16 @@ index 0000000..d3bdd0c
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..283f5d4
+index 0000000..b0b9120
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
-@@ -0,0 +1,1259 @@
+@@ -0,0 +1,1256 @@
 +"""Issue-centered V2 domain mutations — mixed into DomainService.
 +
 +Explicit invariants enforced in this module (Issue #80 repair SSOT / #73 / #60 / #83 / #86 / #85 / #84):
 +  INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
-+  INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
-+         (no get_current_*); rejects implicit current/latest and cross-case links.
++  INV-2: link_fact_to_proof_task resolves via get_proof_task_version/get_fact_version
++         only (never get_current_*); rejects non-positive versions and cross-case links.
 +  INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
 +  INV-4: merge_issues and split_issue persist HumanDecision + AuditLog before mutation.
 +"""
@@ -6193,7 +6269,6 @@ index 0000000..283f5d4
 +    "_guard_explicit_proof_task_fact_versions",
 +    "_guard_formal_defense_opponent_material_ref",
 +    "_guard_formal_defense_side",
-+    "_guard_resolved_explicit_versions",
 +    "_normalize_opponent_material_ref",
 +    "_reject_claim_direction_production_mutation",
 +    "_require_structure_mutation_audit",
@@ -6253,25 +6328,6 @@ index 0000000..283f5d4
 +        raise ValidationError("cross-case proof task fact link rejected")
 +
 +
-+def _guard_resolved_explicit_versions(
-+    *,
-+    proof_task_version: int,
-+    fact_version: int,
-+    task: ProofTask,
-+    fact: Any,
-+) -> None:
-+    """INV-2: resolved rows must match requested versions (no implicit current/latest)."""
-+    if task.version != proof_task_version:
-+        raise ValidationError(
-+            "ProofTaskFactLink requires explicit proof_task_version; "
-+            "implicit current/latest rejected"
-+        )
-+    if fact.version != fact_version:
-+        raise ValidationError(
-+            "ProofTaskFactLink requires explicit fact_version; implicit current/latest rejected"
-+        )
-+
-+
 +def _resolve_proof_task_and_fact_for_link(
 +    svc: DomainService,
 +    *,
@@ -6281,7 +6337,7 @@ index 0000000..283f5d4
 +    fact_key: UUID,
 +    fact_version: int,
 +) -> tuple[ProofTask, Any]:
-+    """INV-2: resolve explicit proof-task/fact versions; reject cross-case links."""
++    """INV-2: resolve only via explicit version lookups (never get_current_*)."""
 +    _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
 +    task = svc.repo.get_proof_task_version(proof_task_key, proof_task_version)
 +    if task is None:
@@ -6293,12 +6349,6 @@ index 0000000..283f5d4
 +        raise NotFoundError("fact version not found")
 +    if fact.case_id != case_id:
 +        raise ValidationError("cross-case fact link rejected")
-+    _guard_resolved_explicit_versions(
-+        proof_task_version=proof_task_version,
-+        fact_version=fact_version,
-+        task=task,
-+        fact=fact,
-+    )
 +    return task, fact
 +
 +
@@ -6326,6 +6376,29 @@ index 0000000..283f5d4
 +    if decision.id is None:
 +        raise ConflictError(f"{decision_type} decision failed to persist")
 +    return decision
++
++
++def _persist_structure_mutation_audit(
++    svc: DomainService,
++    *,
++    case_id: UUID,
++    actor_id: UUID,
++    action: str,
++    entity_id: UUID,
++    decision: Any,
++    after: dict[str, Any],
++) -> None:
++    """INV-4: AuditLog must be flushed before merge/split mutations proceed."""
++    payload = {**after, "decision_id": str(decision.id)}
++    svc._audit(
++        actor_id,
++        action,
++        "issues",
++        entity_id,
++        case_id=case_id,
++        after=payload,
++    )
++    svc.repo.flush()
 +
 +
 +def _require_structure_mutation_audit(
@@ -7207,6 +7280,18 @@ index 0000000..283f5d4
 +                "merged_statement": merged_statement,
 +            },
 +        )
++        _persist_structure_mutation_audit(
++            self,
++            case_id=case_id,
++            actor_id=actor_id,
++            action="merge_issues",
++            entity_id=decision.target_id,
++            decision=decision,
++            after={
++                "source_keys": [str(k) for k in source_issue_keys],
++                "merged_statement": merged_statement,
++            },
++        )
 +
 +        new_key = uuid.uuid4()
 +        merged = Issue(
@@ -7251,18 +7336,6 @@ index 0000000..283f5d4
 +            src.updated_at = _now()
 +            _sync_issue_layer(src)
 +        self.repo.flush()
-+        self._audit(
-+            actor_id,
-+            "merge_issues",
-+            "issues",
-+            merged.id,
-+            case_id=case_id,
-+            after={
-+                "issue_key": str(merged.issue_key),
-+                "merged_from": [str(k) for k in source_issue_keys],
-+                "decision_id": str(decision.id),
-+            },
-+        )
 +        _require_structure_mutation_audit(
 +            self,
 +            case_id=case_id,
@@ -7295,6 +7368,18 @@ index 0000000..283f5d4
 +            decision_type="SPLIT_ISSUE",
 +            target_id=source.issue_key,
 +            payload={"source_key": str(source_issue_key), "target_count": len(targets)},
++        )
++        _persist_structure_mutation_audit(
++            self,
++            case_id=case_id,
++            actor_id=actor_id,
++            action="split_issue",
++            entity_id=source.issue_key,
++            decision=decision,
++            after={
++                "source_key": str(source_issue_key),
++                "target_count": len(targets),
++            },
 +        )
 +
 +        from backend.domain.services import _sync_issue_layer
@@ -7334,18 +7419,6 @@ index 0000000..283f5d4
 +        source.updated_at = _now()
 +        _sync_issue_layer(source)
 +        self.repo.flush()
-+        self._audit(
-+            actor_id,
-+            "split_issue",
-+            "issues",
-+            source.id,
-+            case_id=case_id,
-+            after={
-+                "source_key": str(source_issue_key),
-+                "new_keys": [str(i.issue_key) for i in created],
-+                "decision_id": str(decision.id),
-+            },
-+        )
 +        _require_structure_mutation_audit(
 +            self,
 +            case_id=case_id,
@@ -7423,15 +7496,16 @@ index 0956471..2d4c5e9 100644
          claim = ClaimDirection(
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..186e702
+index 0000000..7d18a73
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
-@@ -0,0 +1,522 @@
+@@ -0,0 +1,599 @@
 +"""Issue-centered V2 — four invariant assertions (Issue #80 SSOT repair / #73 / #60 / #83 / #86 / #85 / #84)."""
 +
 +from __future__ import annotations
 +
 +import uuid
++from unittest.mock import patch
 +
 +import pytest
 +from sqlalchemy import select
@@ -7451,13 +7525,12 @@ index 0000000..186e702
 +    _guard_explicit_proof_task_fact_versions,
 +    _guard_formal_defense_opponent_material_ref,
 +    _guard_formal_defense_side,
-+    _guard_resolved_explicit_versions,
 +    _normalize_opponent_material_ref,
 +    _reject_claim_direction_production_mutation,
 +    _require_structure_mutation_audit,
 +)
 +from backend.domain.services import DomainService
-+from backend.models import AuditLog, HumanDecision
++from backend.models import AuditLog, HumanDecision, Issue
 +from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 +from backend.tests.integration.test_issue_centered_v2 import _seed_fact
 +
@@ -7471,31 +7544,6 @@ index 0000000..186e702
 +        _guard_explicit_proof_task_fact_versions(0, 1)
 +    with pytest.raises(ValidationError, match="explicit positive"):
 +        _guard_explicit_proof_task_fact_versions(1, -1)
-+
-+    class _FakeVersioned:
-+        def __init__(self, version: int) -> None:
-+            self.version = version
-+
-+    with pytest.raises(ValidationError, match="explicit proof_task_version"):
-+        _guard_resolved_explicit_versions(
-+            proof_task_version=2,
-+            fact_version=1,
-+            task=_FakeVersioned(1),
-+            fact=_FakeVersioned(1),
-+        )
-+    with pytest.raises(ValidationError, match="explicit fact_version"):
-+        _guard_resolved_explicit_versions(
-+            proof_task_version=1,
-+            fact_version=2,
-+            task=_FakeVersioned(1),
-+            fact=_FakeVersioned(1),
-+        )
-+    _guard_resolved_explicit_versions(
-+        proof_task_version=1,
-+        fact_version=1,
-+        task=_FakeVersioned(1),
-+        fact=_FakeVersioned(1),
-+    )
 +
 +    with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
 +        _guard_formal_defense_opponent_material_ref("FORMAL_DEFENSE", None)
@@ -7527,12 +7575,17 @@ index 0000000..186e702
 +    """INV-1: production path must not create ClaimDirection without _legacy_compat."""
 +    svc = DomainService(db_session)
 +    case = svc.create_case(title="INV1", owner_user_id=owner_id)
-+    with pytest.raises(ValidationError, match="ClaimDirection production"):
-+        svc.create_claim_direction(
-+            case_id=case.id,
-+            payload={"claims": [], "parties": {}},
-+            actor_id=actor_id,
-+        )
++    with patch(
++        "backend.domain.services._reject_claim_direction_production_mutation",
++        wraps=_reject_claim_direction_production_mutation,
++    ) as guard:
++        with pytest.raises(ValidationError, match="ClaimDirection production"):
++            svc.create_claim_direction(
++                case_id=case.id,
++                payload={"claims": [], "parties": {}},
++                actor_id=actor_id,
++            )
++        guard.assert_called_once_with(_legacy_compat=False)
 +    # Explicit: no ClaimDirection row created
 +    from backend.models import ClaimDirection
 +
@@ -7633,6 +7686,46 @@ index 0000000..186e702
 +            role="SUPPORT",
 +            actor_id=actor_id,
 +        )
++
++
++def test_invariant_2_link_fact_to_proof_task_never_uses_current_resolution(
++    db_session, owner_id, actor_id
++) -> None:
++    """INV-2: link_fact_to_proof_task must resolve via explicit version lookups only."""
++    svc = DomainService(db_session)
++    case = svc.create_case(title="INV2-explicit", owner_user_id=owner_id)
++    *_, item = _seed_accepted_evidence(
++        db_session, owner_id=owner_id, actor_id=actor_id, case=case
++    )
++    fact = _seed_fact(svc, case.id, actor_id, item)
++    issue = svc.confirm_issue(
++        svc.propose_issue(case_id=case.id, statement="显式版本焦点").issue_key,
++        actor_id=actor_id,
++    )
++    task = svc.create_lawyer_proof_task(
++        case_id=case.id,
++        issue_key=issue.issue_key,
++        issue_version=issue.version,
++        description="显式版本任务",
++        actor_id=actor_id,
++    )
++
++    def _reject_current(*_args, **_kwargs):
++        raise AssertionError("implicit current/latest resolution rejected")
++
++    with patch.object(svc.repo, "get_current_proof_task", side_effect=_reject_current):
++        with patch.object(svc.repo, "get_current_fact", side_effect=_reject_current):
++            link = svc.link_fact_to_proof_task(
++                case_id=case.id,
++                proof_task_key=task.proof_task_key,
++                proof_task_version=task.version,
++                fact_key=fact.fact_key,
++                fact_version=fact.version,
++                role="SUPPORT",
++                actor_id=actor_id,
++            )
++    assert link.proof_task_version == task.version
++    assert link.fact_version == fact.version
 +
 +
 +def test_invariant_3_formal_defense_requires_opponent_material_ref(
@@ -7738,6 +7831,7 @@ index 0000000..186e702
 +    assert merge_audits[0].entity_type == "issues"
 +    assert merge_audits[0].after_json is not None
 +    assert merge_audits[0].after_json.get("decision_id") == str(merge_decisions[0].id)
++    assert merge_audits[0].after_json.get("merged_statement") == "合并焦点"
 +
 +    split = svc.split_issue(
 +        case_id=case.id,
@@ -7773,6 +7867,62 @@ index 0000000..186e702
 +    assert split_audits[0].entity_type == "issues"
 +    assert split_audits[0].after_json is not None
 +    assert split_audits[0].after_json.get("decision_id") == str(split_decisions[0].id)
++    assert split_audits[0].after_json.get("target_count") == 2
++
++
++def test_invariant_4_merge_persists_decision_and_audit_before_issue_mutation(
++    db_session, owner_id, actor_id
++) -> None:
++    """INV-4: HumanDecision + AuditLog exist before merge mutates issue rows."""
++    svc = DomainService(db_session)
++    case = svc.create_case(title="INV4-order", owner_user_id=owner_id)
++    i1 = svc.confirm_issue(
++        svc.propose_issue(case_id=case.id, statement="顺序甲").issue_key,
++        actor_id=actor_id,
++    )
++    i2 = svc.confirm_issue(
++        svc.propose_issue(case_id=case.id, statement="顺序乙").issue_key,
++        actor_id=actor_id,
++    )
++    observed: list[str] = []
++    original_add = svc.repo.add
++
++    def _tracking_add(entity):
++        if isinstance(entity, Issue) and entity.statement == "顺序合并":
++            merge_decisions = list(
++                db_session.scalars(
++                    select(HumanDecision).where(
++                        HumanDecision.case_id == case.id,
++                        HumanDecision.decision_type == "MERGE_ISSUES",
++                    )
++                )
++            )
++            merge_audits = list(
++                db_session.scalars(
++                    select(AuditLog).where(
++                        AuditLog.case_id == case.id,
++                        AuditLog.action == "merge_issues",
++                    )
++                )
++            )
++            assert len(merge_decisions) == 1
++            assert merge_decisions[0].id is not None
++            assert len(merge_audits) == 1
++            assert merge_audits[0].after_json is not None
++            assert merge_audits[0].after_json.get("decision_id") == str(
++                merge_decisions[0].id
++            )
++            observed.append("preflight")
++        return original_add(entity)
++
++    with patch.object(svc.repo, "add", side_effect=_tracking_add):
++        svc.merge_issues(
++            case_id=case.id,
++            source_issue_keys=[i1.issue_key, i2.issue_key],
++            merged_statement="顺序合并",
++            actor_id=actor_id,
++        )
++    assert observed == ["preflight"]
 +
 +
 +def test_invariant_2_cross_case_pair_guard_rejects_mismatched_cases() -> None:
