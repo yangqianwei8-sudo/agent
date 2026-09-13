@@ -1,6 +1,6 @@
 """phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 
-Issue #83 SSOT: includes proof_gaps and lawyer_assessments with every CheckConstraint:
+Issue #83 repair SSOT / #80 / #73: includes proof_gaps and lawyer_assessments with every CheckConstraint:
 - proof_gaps: ck_proof_gaps_type, ck_proof_gaps_status, ck_proof_gaps_source
 - lawyer_assessments: ck_lawyer_assessments_status
 - issue_positions: ck_issue_positions_side/type/source/status/formal_defense_ref
