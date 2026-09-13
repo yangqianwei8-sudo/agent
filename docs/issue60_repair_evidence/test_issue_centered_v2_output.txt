@@ -1,4 +1,4 @@
-# Issue #60 repair capture | commit=594c2e2f74a69bcd7ea74a275f96049e63128a38 | timestamp=2026-09-13T09:17:17.798762+00:00
+# Issue #60 repair capture | commit=79a2ba68f3fd813643573269ec4c7511aea9deb2 | timestamp=2026-09-13T09:34:49.974500+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -39,4 +39,4 @@ backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_f
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 20 passed, 2 warnings in 2.58s ========================
+======================== 20 passed, 2 warnings in 1.73s ========================

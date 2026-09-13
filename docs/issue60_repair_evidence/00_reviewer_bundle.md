@@ -1,6 +1,6 @@
 # Issue #60 Resubmit — Issue-Centered V2 (#57 repair)
 
-Generated: 2026-09-13T09:17:17.798762Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `594c2e2`
+Generated: 2026-09-13T09:34:49.974500Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `79a2ba6`
 
 **SSOT:** `docs/issue60_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -9,10 +9,10 @@ Generated: 2026-09-13T09:17:17.798762Z | Base: `f84972a213c44ba602b07ae3801637dc
 | Artifact | Lines | Production path |
 |----------|-------|-----------------|
 | Full migration | 406 | `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` |
-| Full domain | 1112 | `backend/domain/issue_centered.py` |
+| Full domain | 1133 | `backend/domain/issue_centered.py` |
 | Full application | 521 | `backend/application/issue_work_product.py` |
-| Invariant tests | 220 | `backend/tests/integration/test_issue_centered_v2_invariants.py` |
-| Production patch | 2279 | `issue60_repair_production.patch` |
+| Invariant tests | 223 | `backend/tests/integration/test_issue_centered_v2_invariants.py` |
+| Production patch | 2303 | `issue60_repair_production.patch` |
 
 SSOT copies (identical to production): `sources/migration_h9b0c1d2e3f4.py`, `sources/domain_issue_centered.py`, `sources/application_issue_work_product.py`, `sources/test_issue_centered_v2_invariants.py`.
 
@@ -59,14 +59,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `assert len(split_audits) >= 1`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T09:17:17.798762Z
+## (B) Test output — actual run 2026-09-13T09:34:49.974500Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #60 repair capture | commit=594c2e2f74a69bcd7ea74a275f96049e63128a38 | timestamp=2026-09-13T09:17:17.798762+00:00
+# Issue #60 repair capture | commit=79a2ba68f3fd813643573269ec4c7511aea9deb2 | timestamp=2026-09-13T09:34:49.974500+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -107,7 +107,7 @@ backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_f
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 20 passed, 2 warnings in 2.58s ========================
+======================== 20 passed, 2 warnings in 1.73s ========================
 ```
 
 Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py`
@@ -115,7 +115,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #60 repair capture | commit=594c2e2f74a69bcd7ea74a275f96049e63128a38 | timestamp=2026-09-13T09:17:17.798762+00:00
+# Issue #60 repair capture | commit=79a2ba68f3fd813643573269ec4c7511aea9deb2 | timestamp=2026-09-13T09:34:49.974500+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -577,7 +577,7 @@ def downgrade() -> None:
 
 ## (D) Domain — backend/domain/issue_centered.py (complete, untruncated, inlined)
 
-Production path: `backend/domain/issue_centered.py` (1112 lines)
+Production path: `backend/domain/issue_centered.py` (1133 lines)
 
 ```python
 """Issue-centered V2 domain mutations — mixed into DomainService.
@@ -661,6 +661,30 @@ def _guard_formal_defense_opponent_material_ref(
     if position_type == PositionType.FORMAL_DEFENSE.value:
         if not opponent_material_ref or not str(opponent_material_ref).strip():
             raise ValidationError("FORMAL_DEFENSE requires opponent material reference")
+
+
+def _resolve_proof_task_and_fact_for_link(
+    svc: DomainService,
+    *,
+    case_id: UUID,
+    proof_task_key: UUID,
+    proof_task_version: int,
+    fact_key: UUID,
+    fact_version: int,
+) -> tuple[ProofTask, Any]:
+    """INV-2: resolve explicit proof-task/fact versions; reject cross-case links."""
+    _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
+    task = svc.repo.get_proof_task_version(proof_task_key, proof_task_version)
+    if task is None:
+        raise NotFoundError("proof task version not found")
+    if task.case_id != case_id:
+        raise ValidationError("cross-case proof task link rejected")
+    fact = svc.repo.get_fact_version(fact_key, fact_version)
+    if fact is None:
+        raise NotFoundError("fact version not found")
+    if fact.case_id != case_id:
+        raise ValidationError("cross-case fact link rejected")
+    return task, fact
 
 
 def _persist_issue_structure_decision(
@@ -1052,17 +1076,14 @@ class IssueCenteredDomainMixin:
         actor_id: UUID,
     ) -> ProofTaskFactLink:
         self._require_case(case_id)
-        _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
-        task = self.repo.get_proof_task_version(proof_task_key, proof_task_version)
-        if task is None:
-            raise NotFoundError("proof task version not found")
-        if task.case_id != case_id:
-            raise ValidationError("cross-case proof task link rejected")
-        fact = self.repo.get_fact_version(fact_key, fact_version)
-        if fact is None:
-            raise NotFoundError("fact version not found")
-        if fact.case_id != case_id:
-            raise ValidationError("cross-case fact link rejected")
+        _resolve_proof_task_and_fact_for_link(
+            self,
+            case_id=case_id,
+            proof_task_key=proof_task_key,
+            proof_task_version=proof_task_version,
+            fact_key=fact_key,
+            fact_version=fact_version,
+        )
         if role not in {r.value for r in ProofTaskFactLinkRole}:
             raise ValidationError(f"invalid proof task fact link role: {role}")
         link = ProofTaskFactLink(
@@ -2222,10 +2243,10 @@ class IssueWorkProductService:
 
 ## (F) Invariant tests — backend/tests/integration/test_issue_centered_v2_invariants.py (complete, untruncated, inlined)
 
-Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py` (220 lines)
+Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py` (223 lines)
 
 ```python
-"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #80 SSOT)."""
+"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #60 / #83 SSOT)."""
 
 from __future__ import annotations
 
@@ -2238,14 +2259,17 @@ from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
 )
-from backend.domain.services import DomainService
+from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
 from backend.models import AuditLog, HumanDecision
 from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 from backend.tests.integration.test_issue_centered_v2 import _seed_fact
 
 
 def test_invariant_guard_functions_reject_invalid_inputs() -> None:
-    """Direct unit checks on INV-2/INV-3 guard helpers (executed code, not prose)."""
+    """Direct unit checks on INV-1/2/3 guard helpers (executed code, not prose)."""
+    with pytest.raises(ValidationError, match="ClaimDirection production"):
+        _reject_claim_direction_production_mutation(_legacy_compat=False)
+    _reject_claim_direction_production_mutation(_legacy_compat=True)
     with pytest.raises(ValidationError, match="explicit positive"):
         _guard_explicit_proof_task_fact_versions(0, 1)
     with pytest.raises(ValidationError, match="explicit positive"):
@@ -2448,7 +2472,7 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
 
 Verified by: all 20 pytest tests + live acceptance 30 steps — **PASSED**.
 
-## (G) Untruncated production diff — all four files (2279 lines)
+## (G) Untruncated production diff — all four files (2303 lines)
 
 Generated: `git diff f84972a213c44ba602b07ae3801637dc5c045f16 -- <four production paths>`
 
@@ -3394,10 +3418,10 @@ index 0000000..5c4df87
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..5bc841d
+index 0000000..b57f649
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
-@@ -0,0 +1,1111 @@
+@@ -0,0 +1,1132 @@
 +"""Issue-centered V2 domain mutations — mixed into DomainService.
 +
 +Explicit invariants enforced in this module (Issue #60 / #73 / #80):
@@ -3479,6 +3503,30 @@ index 0000000..5bc841d
 +    if position_type == PositionType.FORMAL_DEFENSE.value:
 +        if not opponent_material_ref or not str(opponent_material_ref).strip():
 +            raise ValidationError("FORMAL_DEFENSE requires opponent material reference")
++
++
++def _resolve_proof_task_and_fact_for_link(
++    svc: DomainService,
++    *,
++    case_id: UUID,
++    proof_task_key: UUID,
++    proof_task_version: int,
++    fact_key: UUID,
++    fact_version: int,
++) -> tuple[ProofTask, Any]:
++    """INV-2: resolve explicit proof-task/fact versions; reject cross-case links."""
++    _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
++    task = svc.repo.get_proof_task_version(proof_task_key, proof_task_version)
++    if task is None:
++        raise NotFoundError("proof task version not found")
++    if task.case_id != case_id:
++        raise ValidationError("cross-case proof task link rejected")
++    fact = svc.repo.get_fact_version(fact_key, fact_version)
++    if fact is None:
++        raise NotFoundError("fact version not found")
++    if fact.case_id != case_id:
++        raise ValidationError("cross-case fact link rejected")
++    return task, fact
 +
 +
 +def _persist_issue_structure_decision(
@@ -3870,17 +3918,14 @@ index 0000000..5bc841d
 +        actor_id: UUID,
 +    ) -> ProofTaskFactLink:
 +        self._require_case(case_id)
-+        _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
-+        task = self.repo.get_proof_task_version(proof_task_key, proof_task_version)
-+        if task is None:
-+            raise NotFoundError("proof task version not found")
-+        if task.case_id != case_id:
-+            raise ValidationError("cross-case proof task link rejected")
-+        fact = self.repo.get_fact_version(fact_key, fact_version)
-+        if fact is None:
-+            raise NotFoundError("fact version not found")
-+        if fact.case_id != case_id:
-+            raise ValidationError("cross-case fact link rejected")
++        _resolve_proof_task_and_fact_for_link(
++            self,
++            case_id=case_id,
++            proof_task_key=proof_task_key,
++            proof_task_version=proof_task_version,
++            fact_key=fact_key,
++            fact_version=fact_version,
++        )
 +        if role not in {r.value for r in ProofTaskFactLinkRole}:
 +            raise ValidationError(f"invalid proof task fact link role: {role}")
 +        link = ProofTaskFactLink(
@@ -4511,11 +4556,11 @@ index 0000000..5bc841d
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..05419c9
+index 0000000..e716aef
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
-@@ -0,0 +1,219 @@
-+"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #80 SSOT)."""
+@@ -0,0 +1,222 @@
++"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #60 / #83 SSOT)."""
 +
 +from __future__ import annotations
 +
@@ -4528,14 +4573,17 @@ index 0000000..05419c9
 +    _guard_explicit_proof_task_fact_versions,
 +    _guard_formal_defense_opponent_material_ref,
 +)
-+from backend.domain.services import DomainService
++from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
 +from backend.models import AuditLog, HumanDecision
 +from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 +from backend.tests.integration.test_issue_centered_v2 import _seed_fact
 +
 +
 +def test_invariant_guard_functions_reject_invalid_inputs() -> None:
-+    """Direct unit checks on INV-2/INV-3 guard helpers (executed code, not prose)."""
++    """Direct unit checks on INV-1/2/3 guard helpers (executed code, not prose)."""
++    with pytest.raises(ValidationError, match="ClaimDirection production"):
++        _reject_claim_direction_production_mutation(_legacy_compat=False)
++    _reject_claim_direction_production_mutation(_legacy_compat=True)
 +    with pytest.raises(ValidationError, match="explicit positive"):
 +        _guard_explicit_proof_task_fact_versions(0, 1)
 +    with pytest.raises(ValidationError, match="explicit positive"):
