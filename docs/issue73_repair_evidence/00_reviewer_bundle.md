@@ -1,6 +1,6 @@
 # Issue #73 Resubmit — Issue-Centered V2 (#60 repair)
 
-Generated: 2026-09-13T08:34:08.573180Z | Base: `f84972a` | Repair: `03b4246`
+Generated: 2026-09-13T08:34:17.436344Z | Base: `f84972a` | Repair: `c16c8a4`
 
 **SSOT:** `docs/issue73_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -59,7 +59,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `assert len(split_audits) >= 1`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T08:34:08.573180Z
+## (B) Test output — actual run 2026-09-13T08:34:17.436344Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 

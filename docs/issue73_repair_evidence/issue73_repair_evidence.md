@@ -1,8 +1,8 @@
 # Issue #73 Repair Evidence — Issue-Centered V2 (#60)
 
-Generated: 2026-09-13T08:34:08.573180Z
+Generated: 2026-09-13T08:34:17.436344Z
 Base commit: `f84972a` (pre issue-centered v2; parent of c19379b)
-Repair commit: `03b4246`
+Repair commit: `c16c8a4`
 
 **This directory is the sole SSOT for Issue #73 repair submission.**
 
