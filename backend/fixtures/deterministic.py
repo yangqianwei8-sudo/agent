@@ -101,11 +101,22 @@ def generate(*, output_dir: Path | None = None) -> Path:
     return root
 
 
-def _write_text_pdf(path: Path) -> None:
+def _save_canvas_with_deterministic_metadata(canvas: object, path: Path) -> None:
+    """Save ReportLab canvas and pin CreationDate/ModDate plus trailer /ID in-place."""
+    canvas.save()  # type: ignore[union-attr]
+    path.write_bytes(pin_pdf_deterministic_metadata(path.read_bytes()))
+
+
+def _new_deterministic_canvas(path: Path) -> object:
+    """ReportLab canvas configured for invariant mode before metadata pinning."""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
 
-    c = canvas.Canvas(str(path), pagesize=A4, invariant=1)
+    return canvas.Canvas(str(path), pagesize=A4, invariant=1)
+
+
+def _write_text_pdf(path: Path) -> None:
+    c = _new_deterministic_canvas(path)
     lines_p1 = [
         "Page 1: Design contract signed by parties.",
         "The plaintiff provided construction drawing review services.",
@@ -115,9 +126,9 @@ def _write_text_pdf(path: Path) -> None:
     ]
     y = 800
     for line in lines_p1:
-        c.drawString(72, y, line)
+        c.drawString(72, y, line)  # type: ignore[union-attr]
         y -= 18
-    c.showPage()
+    c.showPage()  # type: ignore[union-attr]
     lines_p2 = [
         "Page 2: Payment schedule and delivery terms.",
         "First installment due upon signing. Second upon delivery.",
@@ -127,25 +138,20 @@ def _write_text_pdf(path: Path) -> None:
     ]
     y = 800
     for line in lines_p2:
-        c.drawString(72, y, line)
+        c.drawString(72, y, line)  # type: ignore[union-attr]
         y -= 18
-    c.save()
-    path.write_bytes(pin_pdf_deterministic_metadata(path.read_bytes()))
+    _save_canvas_with_deterministic_metadata(c, path)
 
 
 def _write_blank_pdf(path: Path) -> None:
     """PDF with pages but essentially no extractable text (scan stand-in)."""
-    from reportlab.lib.pagesizes import A4
-    from reportlab.pdfgen import canvas
-
-    c = canvas.Canvas(str(path), pagesize=A4, invariant=1)
+    c = _new_deterministic_canvas(path)
     # Draw only a thin line — extract_text typically yields empty/near-empty
-    c.setStrokeColorRGB(0.9, 0.9, 0.9)
-    c.line(72, 72, 200, 72)
-    c.showPage()
-    c.line(72, 72, 200, 72)
-    c.save()
-    path.write_bytes(pin_pdf_deterministic_metadata(path.read_bytes()))
+    c.setStrokeColorRGB(0.9, 0.9, 0.9)  # type: ignore[union-attr]
+    c.line(72, 72, 200, 72)  # type: ignore[union-attr]
+    c.showPage()  # type: ignore[union-attr]
+    c.line(72, 72, 200, 72)  # type: ignore[union-attr]
+    _save_canvas_with_deterministic_metadata(c, path)
 
 
 def _write_docx(path: Path) -> None:

@@ -161,3 +161,10 @@ def test_committed_golden_fixtures_match_sync_output() -> None:
         sync_golden_fixtures(output_dir=root)
         for name in FIXTURE_NAMES:
             assert (DEFAULT_FIXTURES_DIR / name).read_bytes() == (root / name).read_bytes()
+
+
+def test_issue75_repair_gate_includes_issue38_behavioral_tests() -> None:
+    """Issue #75 repair wires issue #38 P0 acceptance tests into the production gate."""
+    from autonomous_dev.p0_acceptance import ACCEPTANCE_GATE_PYTEST_TARGETS
+
+    assert "backend/tests/unit/test_issue38_p0_acceptance.py" in ACCEPTANCE_GATE_PYTEST_TARGETS

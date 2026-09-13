@@ -21,10 +21,11 @@ from autonomous_dev.reviewer_service import REVIEWER_ACCEPTANCE_MARKER
 P0_LIVE_ACCEPTANCE_MARKER = "[P0-LIVE-ACCEPTANCE]"
 _MARKER_ONLY_INSTRUCTION = "Update autonomous_dev/acceptance_marker.txt only."
 
-# Pytest targets run before marker-only commits — health plus fixture determinism.
+# Pytest targets run before marker-only commits — health, fixture determinism, issue #38 flow.
 ACCEPTANCE_GATE_PYTEST_TARGETS: tuple[str, ...] = (
     "backend/tests/test_health.py",
     "backend/tests/unit/test_generate_fixtures.py",
+    "backend/tests/unit/test_issue38_p0_acceptance.py",
 )
 
 

@@ -3124,6 +3124,7 @@ def test_p0_acceptance_gate_includes_fixture_determinism_tests():
     )
 
     assert "backend/tests/unit/test_generate_fixtures.py" in ACCEPTANCE_GATE_PYTEST_TARGETS
+    assert "backend/tests/unit/test_issue38_p0_acceptance.py" in ACCEPTANCE_GATE_PYTEST_TARGETS
     assert acceptance_gate_pytest_argv() == [
         "-m",
         "pytest",
