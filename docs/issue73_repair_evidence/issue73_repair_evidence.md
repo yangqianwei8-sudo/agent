@@ -1,7 +1,7 @@
 # Issue #73 Repair Evidence — Issue-Centered V2 (#60)
 
-Generated: 2026-09-13T08:16:27.312997Z
-Base commit: `8093799`
+Generated: 2026-09-13T08:26:39.270454Z
+Base commit: `1a66b14`
 Repair commit: (this commit)
 
 **This directory is the sole SSOT for Issue #73 repair submission.**
@@ -2275,7 +2275,7 @@ backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_f
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 19 passed, 2 warnings in 2.08s ========================
+======================== 19 passed, 2 warnings in 1.48s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py

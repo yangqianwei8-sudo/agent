@@ -1,6 +1,6 @@
 # Issue #73 Resubmit — Issue-Centered V2 (#60 repair)
 
-Generated: 2026-09-13T08:16:27.312997Z | Base: `8093799` | Repair: `HEAD`
+Generated: 2026-09-13T08:26:39.270454Z | Base: `1a66b14` | Repair: `HEAD`
 
 **SSOT:** `docs/issue73_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -59,7 +59,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `assert len(split_audits) >= 1`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T08:16:27.312997Z
+## (B) Test output — actual run 2026-09-13T08:26:39.270454Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
@@ -104,7 +104,7 @@ backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_f
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 19 passed, 2 warnings in 2.08s ========================
+======================== 19 passed, 2 warnings in 1.48s ========================
 ```
 
 Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py`
