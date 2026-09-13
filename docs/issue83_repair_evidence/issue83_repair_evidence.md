@@ -1,10 +1,11 @@
-# Issue #83 Repair Evidence — Issue-Centered V2 (#80)
+# Issue #83 Repair Evidence — Issue-Centered V2 (#80, #73/#60 lineage)
 
-Generated: 2026-09-13T10:54:16.089253Z
+Generated: 2026-09-13T11:00:20.216332Z
 Base commit: `f84972a213c44ba602b07ae3801637dc5c045f16` (pre issue-centered v2; parent of c19379b)
-Repair commit: `8357f82`
+Repair commit: `f7368ac`
 
 **This directory is the sole SSOT for Issue #83 repair submission.**
+Acceptance marker: `autonomous_dev/acceptance_marker.txt` (issue=73, lineage=60).
 
 ## Reviewer bundle (priority)
 
@@ -3004,7 +3005,7 @@ Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/
 Also saved to: `test_issue_centered_v2_output.txt`
 
 ```
-# Issue #83 repair capture | commit=8357f82e914aecf5b8b46f9d565e91539ac7056c | timestamp=2026-09-13T10:54:16.089253+00:00
+# Issue #83 repair capture | commit=f7368ac36d5e5da3c7edbd810c5fa91b9e1dee2f | timestamp=2026-09-13T11:00:20.216332+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -3057,7 +3058,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 30 passed, 4 warnings in 1.68s ========================
+======================== 30 passed, 4 warnings in 2.85s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py
@@ -3067,7 +3068,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Also saved to: `live_issue_centered_v2_acceptance_output.txt`
 
 ```
-# Issue #83 repair capture | commit=8357f82e914aecf5b8b46f9d565e91539ac7056c | timestamp=2026-09-13T10:54:16.089253+00:00
+# Issue #83 repair capture | commit=f7368ac36d5e5da3c7edbd810c5fa91b9e1dee2f | timestamp=2026-09-13T11:00:20.216332+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa

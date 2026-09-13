@@ -1,8 +1,8 @@
-# Issue #83 Resubmit — Issue-Centered V2 (#80 repair)
+# Issue #83 Resubmit — Issue-Centered V2 (#80 repair, #73/#60 lineage)
 
-Generated: 2026-09-13T10:54:16.089253Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `8357f82`
+Generated: 2026-09-13T11:00:20.216332Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `f7368ac`
 
-**SSOT:** `docs/issue83_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
+**SSOT:** `docs/issue83_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated). Acceptance marker tied to Issue #73 / Issue #60.
 
 ## Production artifacts (real diffs, NOT truncated)
 
@@ -16,6 +16,16 @@ Generated: 2026-09-13T10:54:16.089253Z | Base: `f84972a213c44ba602b07ae3801637dc
 
 SSOT copies (identical to production): `sources/migration_h9b0c1d2e3f4.py`, `sources/domain_issue_centered.py`, `sources/application_issue_work_product.py`, `sources/test_issue_centered_v2_invariants.py`.
 
+## Acceptance lineage — tied to Issue #73 / Issue #60
+
+| Marker | Value |
+|--------|-------|
+| `autonomous_dev/acceptance_marker.txt` | `worker-run issue=73 lineage=60 at=<timestamp>` |
+| Repair chain | #60 → #73 → #80 → #83 (issue-centered V2) |
+| Base commit | `f84972a213c44ba602b07ae3801637dc5c045f16` (pre issue-centered v2; parent of c19379b) |
+
+This bundle regenerates the #83 repair SSOT with untruncated production artifacts and live PASS evidence at 2026-09-13T11:00:20.216332Z.
+
 ## (A) Four required invariants — explicit code-level assertions
 
 Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invariants.py`
@@ -24,63 +34,83 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 **Domain guard** (`backend/domain/issue_centered.py` `_reject_claim_direction_production_mutation`, wired from `backend/domain/services.py` `create_claim_direction` and `amend_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
 
-**Application guard** (`IssueWorkProductService.__init__` + `guard_write_attempt`): read projection invokes guard on construction and blocks mutation attempts.
+**Application guard** (`IssueWorkProductService.__init__` invokes `_reject_claim_direction_production_mutation`; `guard_write_attempt("claim_directions")` raises `RuntimeError` on read-projection mutation attempts).
 
 **Test:** `test_invariant_1_no_production_claim_direction_creation`
-**Test:** `test_invariant_1_amend_claim_direction_blocked_without_legacy_compat`
 - `pytest.raises(ValidationError, match="ClaimDirection production")`
 - `assert rows == []` — no ClaimDirection row created
+- `assert mock_reject.call_count >= 1` — guard invoked on production path
+
+**Test:** `test_invariant_1_amend_claim_direction_blocked_without_legacy_compat`
+- `pytest.raises(ValidationError, match="ClaimDirection production")` on amend without `_legacy_compat`
 — **PASSED**
 
 ### A2. ProofTaskFactLink rejects implicit current/latest and cross-case links
 
-**Domain enforcement** (`link_fact_to_proof_task` + `_guard_resolved_explicit_versions`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); rejects version mismatch and cross-case → `ValidationError("cross-case ...")` / `ValidationError("implicit current/latest rejected")`.
+**Domain enforcement** (`link_fact_to_proof_task` + `_guard_resolved_explicit_versions`): resolves via `get_proof_task_version` / `get_fact_version` only (never `get_current_*`); rejects non-positive versions, version mismatch, and cross-case pairs → `ValidationError("cross-case ...")` / `ValidationError("implicit current/latest rejected")`.
+
+**Read projection guard** (`IssueWorkProductService._proof_task_facts`): skips links where `link.case_id != task.case_id` or `fact.case_id != task.case_id`.
 
 **Test:** `test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case`
 **Test:** `test_invariant_2_link_fact_to_proof_task_never_uses_current_resolution`
+- monkeypatch proves `get_current_proof_task` / `get_current_fact` are never called
+
 **Test:** `test_invariant_2_cross_case_pair_guard_rejects_mismatched_cases`
-**Test:** `test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions`
+- `_guard_resolved_explicit_versions` with mismatched `case_id` → `ValidationError(match="cross-case")`
+
+**DB constraint:** `test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions`
 - `proof_task_version=0` → `ValidationError(match="explicit positive")`
 - `proof_task_version+99` → `NotFoundError("proof task version not found")`
 - `fact_version+99` → `NotFoundError("fact version not found")`
 - cross-case fact → `ValidationError(match="cross-case fact link rejected")`
 - cross-case proof task → `ValidationError(match="cross-case proof task link rejected")`
+- direct insert with `proof_task_version=0` → `IntegrityError` (ck_proof_task_fact_link_task_version_pos)
 — **PASSED**
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
 
-**Domain enforcement** (`create_lawyer_position` + `_guard_formal_defense_opponent_material_ref`): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent or whitespace-only.
+**Domain enforcement** (`create_lawyer_position` + `_guard_formal_defense_opponent_material_ref` + `_guard_formal_defense_side`): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent or whitespace-only; rejects `side='OUR'` for FORMAL_DEFENSE.
+
+**DB constraint:** `ck_issue_positions_formal_defense_ref` — `(position_type <> 'FORMAL_DEFENSE') OR (opponent_material_ref IS NOT NULL AND btrim(opponent_material_ref) <> '')`
 
 **Test:** `test_invariant_3_formal_defense_requires_opponent_material_ref`
+- without ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
+- with ref → `assert pos.opponent_material_ref == "material:answer-001"`
+
 **Test:** `test_invariant_3_formal_defense_rejects_whitespace_only_material_ref`
 **Test:** `test_invariant_3_formal_defense_rejects_wrong_side`
 **Test:** `test_invariant_3_db_rejects_formal_defense_without_material_ref`
-- without ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
-- with ref → `assert pos.opponent_material_ref == "material:answer-001"`
+- direct insert without ref → `IntegrityError` (ck_issue_positions_formal_defense_ref)
 — **PASSED**
 
 ### A4. merge/split emit HumanDecision + AuditLog
 
-**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`. `_require_structure_mutation_audit` verifies both HumanDecision and AuditLog before return.
+**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`. `_require_structure_mutation_audit` verifies both HumanDecision and AuditLog (with `after_json.decision_id` linkage) before return.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
-**Test:** `test_invariant_4_merge_persists_decision_and_audit_before_issue_mutation`
-**Test:** `test_invariant_4_guard_rejects_missing_human_decision_or_audit`
-**Test:** `test_invariant_4_guard_rejects_audit_without_decision_id_linkage`
 - `assert merge_decisions[0].decision_type == "MERGE_ISSUES"` and `assert split_decisions[0].decision_type == "SPLIT_ISSUE"`
 - `assert len(merge_audits) >= 1` and `assert merge_audits[0].entity_type == "issues"`
+- `assert merge_audits[0].after_json.get("decision_id") == str(merge_decisions[0].id)`
 - `assert len(split_audits) >= 1` and `assert split_audits[0].entity_type == "issues"`
+
+**Test:** `test_invariant_4_merge_persists_decision_and_audit_before_issue_mutation`
+- HumanDecision and AuditLog flushed before issue row mutation
+
+**Test:** `test_invariant_4_guard_rejects_missing_human_decision_or_audit`
 - `_require_structure_mutation_audit(...)` without prior decision → `pytest.raises(ConflictError, match="HumanDecision")`
+
+**Test:** `test_invariant_4_guard_rejects_audit_without_decision_id_linkage`
+- AuditLog missing decision_id in after_json → `pytest.raises(ConflictError, match="decision_id")`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T10:54:16.089253Z
+## (B) Test output — actual run 2026-09-13T11:00:20.216332Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=8357f82e914aecf5b8b46f9d565e91539ac7056c | timestamp=2026-09-13T10:54:16.089253+00:00
+# Issue #83 repair capture | commit=f7368ac36d5e5da3c7edbd810c5fa91b9e1dee2f | timestamp=2026-09-13T11:00:20.216332+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -133,7 +163,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 30 passed, 4 warnings in 1.68s ========================
+======================== 30 passed, 4 warnings in 2.85s ========================
 ```
 
 Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py`
@@ -141,7 +171,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=8357f82e914aecf5b8b46f9d565e91539ac7056c | timestamp=2026-09-13T10:54:16.089253+00:00
+# Issue #83 repair capture | commit=f7368ac36d5e5da3c7edbd810c5fa91b9e1dee2f | timestamp=2026-09-13T11:00:20.216332+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa

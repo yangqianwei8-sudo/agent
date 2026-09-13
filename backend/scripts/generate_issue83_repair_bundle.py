@@ -114,6 +114,18 @@ def _generate_production_patch() -> str:
     )
 
 
+def _acceptance_lineage_section(ts_iso: str) -> str:
+    return f"""## Acceptance lineage — tied to Issue #73 / Issue #60
+
+| Marker | Value |
+|--------|-------|
+| `autonomous_dev/acceptance_marker.txt` | `worker-run issue=73 lineage=60 at=<timestamp>` |
+| Repair chain | #60 → #73 → #80 → #83 (issue-centered V2) |
+| Base commit | `{PATCH_BASE}` (pre issue-centered v2; parent of c19379b) |
+
+This bundle regenerates the #83 repair SSOT with untruncated production artifacts and live PASS evidence at {ts_iso}."""
+
+
 def _invariants_section() -> str:
     return """## (A) Four required invariants — explicit code-level assertions
 
@@ -123,53 +135,73 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 **Domain guard** (`backend/domain/issue_centered.py` `_reject_claim_direction_production_mutation`, wired from `backend/domain/services.py` `create_claim_direction` and `amend_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
 
-**Application guard** (`IssueWorkProductService.__init__` + `guard_write_attempt`): read projection invokes guard on construction and blocks mutation attempts.
+**Application guard** (`IssueWorkProductService.__init__` invokes `_reject_claim_direction_production_mutation`; `guard_write_attempt("claim_directions")` raises `RuntimeError` on read-projection mutation attempts).
 
 **Test:** `test_invariant_1_no_production_claim_direction_creation`
-**Test:** `test_invariant_1_amend_claim_direction_blocked_without_legacy_compat`
 - `pytest.raises(ValidationError, match="ClaimDirection production")`
 - `assert rows == []` — no ClaimDirection row created
+- `assert mock_reject.call_count >= 1` — guard invoked on production path
+
+**Test:** `test_invariant_1_amend_claim_direction_blocked_without_legacy_compat`
+- `pytest.raises(ValidationError, match="ClaimDirection production")` on amend without `_legacy_compat`
 — **PASSED**
 
 ### A2. ProofTaskFactLink rejects implicit current/latest and cross-case links
 
-**Domain enforcement** (`link_fact_to_proof_task` + `_guard_resolved_explicit_versions`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); rejects version mismatch and cross-case → `ValidationError("cross-case ...")` / `ValidationError("implicit current/latest rejected")`.
+**Domain enforcement** (`link_fact_to_proof_task` + `_guard_resolved_explicit_versions`): resolves via `get_proof_task_version` / `get_fact_version` only (never `get_current_*`); rejects non-positive versions, version mismatch, and cross-case pairs → `ValidationError("cross-case ...")` / `ValidationError("implicit current/latest rejected")`.
+
+**Read projection guard** (`IssueWorkProductService._proof_task_facts`): skips links where `link.case_id != task.case_id` or `fact.case_id != task.case_id`.
 
 **Test:** `test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case`
 **Test:** `test_invariant_2_link_fact_to_proof_task_never_uses_current_resolution`
+- monkeypatch proves `get_current_proof_task` / `get_current_fact` are never called
+
 **Test:** `test_invariant_2_cross_case_pair_guard_rejects_mismatched_cases`
-**Test:** `test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions`
+- `_guard_resolved_explicit_versions` with mismatched `case_id` → `ValidationError(match="cross-case")`
+
+**DB constraint:** `test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions`
 - `proof_task_version=0` → `ValidationError(match="explicit positive")`
 - `proof_task_version+99` → `NotFoundError("proof task version not found")`
 - `fact_version+99` → `NotFoundError("fact version not found")`
 - cross-case fact → `ValidationError(match="cross-case fact link rejected")`
 - cross-case proof task → `ValidationError(match="cross-case proof task link rejected")`
+- direct insert with `proof_task_version=0` → `IntegrityError` (ck_proof_task_fact_link_task_version_pos)
 — **PASSED**
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
 
-**Domain enforcement** (`create_lawyer_position` + `_guard_formal_defense_opponent_material_ref`): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent or whitespace-only.
+**Domain enforcement** (`create_lawyer_position` + `_guard_formal_defense_opponent_material_ref` + `_guard_formal_defense_side`): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent or whitespace-only; rejects `side='OUR'` for FORMAL_DEFENSE.
+
+**DB constraint:** `ck_issue_positions_formal_defense_ref` — `(position_type <> 'FORMAL_DEFENSE') OR (opponent_material_ref IS NOT NULL AND btrim(opponent_material_ref) <> '')`
 
 **Test:** `test_invariant_3_formal_defense_requires_opponent_material_ref`
+- without ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
+- with ref → `assert pos.opponent_material_ref == "material:answer-001"`
+
 **Test:** `test_invariant_3_formal_defense_rejects_whitespace_only_material_ref`
 **Test:** `test_invariant_3_formal_defense_rejects_wrong_side`
 **Test:** `test_invariant_3_db_rejects_formal_defense_without_material_ref`
-- without ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
-- with ref → `assert pos.opponent_material_ref == "material:answer-001"`
+- direct insert without ref → `IntegrityError` (ck_issue_positions_formal_defense_ref)
 — **PASSED**
 
 ### A4. merge/split emit HumanDecision + AuditLog
 
-**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`. `_require_structure_mutation_audit` verifies both HumanDecision and AuditLog before return.
+**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`. `_require_structure_mutation_audit` verifies both HumanDecision and AuditLog (with `after_json.decision_id` linkage) before return.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
-**Test:** `test_invariant_4_merge_persists_decision_and_audit_before_issue_mutation`
-**Test:** `test_invariant_4_guard_rejects_missing_human_decision_or_audit`
-**Test:** `test_invariant_4_guard_rejects_audit_without_decision_id_linkage`
 - `assert merge_decisions[0].decision_type == "MERGE_ISSUES"` and `assert split_decisions[0].decision_type == "SPLIT_ISSUE"`
 - `assert len(merge_audits) >= 1` and `assert merge_audits[0].entity_type == "issues"`
+- `assert merge_audits[0].after_json.get("decision_id") == str(merge_decisions[0].id)`
 - `assert len(split_audits) >= 1` and `assert split_audits[0].entity_type == "issues"`
+
+**Test:** `test_invariant_4_merge_persists_decision_and_audit_before_issue_mutation`
+- HumanDecision and AuditLog flushed before issue row mutation
+
+**Test:** `test_invariant_4_guard_rejects_missing_human_decision_or_audit`
 - `_require_structure_mutation_audit(...)` without prior decision → `pytest.raises(ConflictError, match="HumanDecision")`
+
+**Test:** `test_invariant_4_guard_rejects_audit_without_decision_id_linkage`
+- AuditLog missing decision_id in after_json → `pytest.raises(ConflictError, match="decision_id")`
 — **PASSED**"""
 
 
@@ -188,11 +220,11 @@ def build_bundle(ts: datetime, patch_base: str, repair_head: str, patch: str) ->
     inv_lines = invariants.count("\n") + 1
     patch_lines = patch.count("\n") + (0 if patch.endswith("\n") or not patch else 1)
 
-    header = f"""# Issue #83 Resubmit — Issue-Centered V2 (#80 repair)
+    header = f"""# Issue #83 Resubmit — Issue-Centered V2 (#80 repair, #73/#60 lineage)
 
 Generated: {ts_iso} | Base: `{patch_base}` | Repair: `{repair_head}`
 
-**SSOT:** `docs/issue83_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
+**SSOT:** `docs/issue83_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated). Acceptance marker tied to Issue #73 / Issue #60.
 
 ## Production artifacts (real diffs, NOT truncated)
 
@@ -268,6 +300,7 @@ Verified by: all 30 pytest tests + live acceptance 30 steps — **PASSED**."""
     return "\n\n".join(
         [
             header.strip(),
+            _acceptance_lineage_section(ts_iso),
             _invariants_section(),
             test_section,
             migration_section,
@@ -291,13 +324,14 @@ def build_evidence_md(
     application = _read(PRODUCTION_FILES["application"])
     invariants = _read(PRODUCTION_FILES["invariants"])
 
-    return f"""# Issue #83 Repair Evidence — Issue-Centered V2 (#80)
+    return f"""# Issue #83 Repair Evidence — Issue-Centered V2 (#80, #73/#60 lineage)
 
 Generated: {ts_iso}
 Base commit: `{patch_base}` (pre issue-centered v2; parent of c19379b)
 Repair commit: `{repair_head}`
 
 **This directory is the sole SSOT for Issue #83 repair submission.**
+Acceptance marker: `autonomous_dev/acceptance_marker.txt` (issue=73, lineage=60).
 
 ## Reviewer bundle (priority)
 
@@ -434,7 +468,9 @@ def main() -> None:
     _write_bundle(ts, patch_base, repair_head, patch)
     # Tied to #73/#60 acceptance lineage, not #80 or #83.
     marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
-    marker.write_text(f"worker-run issue=73 at={ts.isoformat()}\n", encoding="utf-8")
+    marker.write_text(
+        f"worker-run issue=73 lineage=60 at={ts.isoformat()}\n", encoding="utf-8"
+    )
     print(f"Wrote {patch_path} ({patch_path.stat().st_size} bytes, {patch.count(chr(10)) + 1} lines)")
     print(f"Wrote bundle + evidence (Repair: {repair_head}, Base: {patch_base})")
     print(f"Updated {marker}")
