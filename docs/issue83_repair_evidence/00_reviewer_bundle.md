@@ -1,6 +1,6 @@
 # Issue #83 Resubmit — Issue-Centered V2 (#80 repair)
 
-Generated: 2026-09-13T09:15:00.193224Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `7c5daf2`
+Generated: 2026-09-13T09:15:03.891883Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `cfe58b8`
 
 **SSOT:** `docs/issue83_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -59,14 +59,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `assert len(split_audits) >= 1`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T09:15:00.193224Z
+## (B) Test output — actual run 2026-09-13T09:15:03.891883Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=7c5daf260c87e7b8484726a4d0ee62a9d2d1ba05 | timestamp=2026-09-13T09:15:00.193224+00:00
+# Issue #83 repair capture | commit=cfe58b87c4cc19fe48a62d78d2cd88905800a9f7 | timestamp=2026-09-13T09:15:03.891883+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -115,7 +115,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=7c5daf260c87e7b8484726a4d0ee62a9d2d1ba05 | timestamp=2026-09-13T09:15:00.193224+00:00
+# Issue #83 repair capture | commit=cfe58b87c4cc19fe48a62d78d2cd88905800a9f7 | timestamp=2026-09-13T09:15:03.891883+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
