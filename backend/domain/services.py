@@ -986,7 +986,9 @@ class DomainService(IssueCenteredDomainMixin):
         payload: dict[str, Any],
         actor_id: UUID,
         decision: HumanDecision | None = None,
+        _legacy_compat: bool = False,
     ) -> ClaimDirection:
+        _reject_claim_direction_production_mutation(_legacy_compat=_legacy_compat)
         old = self._require_current_claim(claim_direction_key)
         if old.status != LayerStatus.CONFIRMED.value:
             raise ConflictError("only CONFIRMED claim direction can be amended")

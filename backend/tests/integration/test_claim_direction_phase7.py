@@ -655,7 +655,10 @@ def test_x_amend_keeps_old_version(
         ],
     }
     amended = domain.amend_claim_direction(
-        created.claim_direction_key, payload=new_payload, actor_id=actor_id
+        created.claim_direction_key,
+        payload=new_payload,
+        actor_id=actor_id,
+        _legacy_compat=True,
     )
     assert amended.version == 2
     assert amended.status == "CONFIRMED"

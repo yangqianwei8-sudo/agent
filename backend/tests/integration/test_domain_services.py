@@ -602,7 +602,12 @@ def test_claim_direction_changed_stales_theory_and_draft(
             }
         ],
     }
-    svc.amend_claim_direction(claim.claim_direction_key, payload=new_payload, actor_id=actor_id)
+    svc.amend_claim_direction(
+        claim.claim_direction_key,
+        payload=new_payload,
+        actor_id=actor_id,
+        _legacy_compat=True,
+    )
     db_session.refresh(theory)
     db_session.refresh(draft)
     assert theory.stale is True

@@ -722,6 +722,7 @@ def test_z_aa_ab_stale_on_fact_evidence_claim_change(
             ],
         },
         actor_id=actor_id,
+        _legacy_compat=True,
     )
     stale_claim = db_session.get(DocumentDraft, result3.draft.id)
     assert stale_claim is not None and stale_claim.status == "STALE"
