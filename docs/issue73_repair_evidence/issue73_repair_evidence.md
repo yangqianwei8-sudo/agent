@@ -1,6 +1,6 @@
 # Issue #73 Repair Evidence — Issue-Centered V2 (#60)
 
-Generated: 2026-09-13T06:26:28Z  
+Generated: 2026-09-13T07:15:30Z  
 Base commit: `e774f08`  
 Implementation commit: `c19379b` (on main)  
 Repair commit: (this commit)
@@ -58,7 +58,7 @@ Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/
 Full output: `test_issue_centered_v2_output.txt`
 
 ```
-======================== 15 passed, 2 warnings in 1.74s ========================
+======================== 15 passed, 2 warnings in 1.37s ========================
 ```
 
 All 15 tests PASSED including invariant tests:

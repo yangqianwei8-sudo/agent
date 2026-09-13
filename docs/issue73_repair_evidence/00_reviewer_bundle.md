@@ -1,6 +1,6 @@
 # Issue #73 Resubmit — Issue-Centered V2 (#60 repair)
 
-Generated: 2026-09-13T06:26:28Z | Base: `e774f08` | Implementation: `c19379b` (on main)
+Generated: 2026-09-13T07:15:30Z | Base: `e774f08` | Implementation: `c19379b` (on main) | Repair: `HEAD`
 
 **SSOT:** `docs/issue73_repair_evidence/` — complete untruncated artifacts below.
 
@@ -61,11 +61,11 @@ if position_type == PositionType.FORMAL_DEFENSE.value:
 - `split_audits` present where `action == "split_issue"`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T06:26:28Z
+## (B) Test output — actual run 2026-09-13T07:15:30Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py -v`
 
-**pytest:** 15 passed, 2 warnings in 1.74s — see `test_issue_centered_v2_output.txt`
+**pytest:** 15 passed, 2 warnings in 1.37s — see `test_issue_centered_v2_output.txt`
 
 **live acceptance:** `LLM_MODE=deterministic .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py` → **ISSUE-CENTERED CASE WORKSPACE V2: PASS** (30 steps) — see `live_issue_centered_v2_acceptance_output.txt`
 
