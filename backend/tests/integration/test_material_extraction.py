@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from backend.application.material_extraction import MaterialExtractionService
 from backend.domain.errors import ValidationError
 from backend.domain.services import DomainService
-from backend.fixtures import generate as generate_fixtures
+from backend.fixtures import ensure_fixtures
 from backend.models import ExtractedContent, SourceSpan
 from backend.tools.docx_parser import DocxParser
 from backend.tools.errors import UnsupportedFormatError
@@ -26,7 +26,7 @@ FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_fixtures() -> None:
-    generate_fixtures()
+    ensure_fixtures()
 
 
 @pytest.fixture

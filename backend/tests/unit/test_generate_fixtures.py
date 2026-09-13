@@ -11,6 +11,7 @@ from backend.fixtures.deterministic import (
 )
 from backend.fixtures.deterministic import (
     DETERMINISTIC_PDF_EPOCH,
+    ensure_fixtures,
     generate,
 )
 
@@ -78,6 +79,24 @@ def test_docx_fixture_regenerates_byte_identically() -> None:
         generate(output_dir=root)
         after_second = (root / "sample.docx").read_bytes()
         assert after_first == after_second
+
+
+def test_ensure_fixtures_generates_when_missing() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = ensure_fixtures(output_dir=Path(tmp))
+        for name in _ALL_FIXTURES:
+            assert (root / name).is_file(), f"missing fixture after ensure: {name}"
+
+
+def test_ensure_fixtures_does_not_overwrite_existing_files() -> None:
+    """Integration tests must not rewrite committed golden files each session."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        generate(output_dir=root)
+        before = {name: (root / name).read_bytes() for name in _ALL_FIXTURES}
+        ensure_fixtures(output_dir=root)
+        after = {name: (root / name).read_bytes() for name in _ALL_FIXTURES}
+        assert before == after
 
 
 def test_committed_fixtures_match_deterministic_generator() -> None:

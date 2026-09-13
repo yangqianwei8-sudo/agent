@@ -19,7 +19,7 @@ from backend.application.pleading_writer import PleadingWriterService
 from backend.application.workspace import WorkspaceQueryService
 from backend.domain.errors import ValidationError
 from backend.domain.services import DomainService
-from backend.fixtures import generate as generate_fixtures
+from backend.fixtures import ensure_fixtures
 from backend.models import CaseMaterial, EvidenceItem, ExtractedContent, SourceSpan
 from backend.schemas.evidence_proposal import EvidenceItemProposal
 from backend.skills.evidence_organizer import ScriptedOrganizerEngine
@@ -30,7 +30,7 @@ FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
 @pytest.fixture(scope="session", autouse=True)
 def _ensure_fixtures() -> None:
-    generate_fixtures()
+    ensure_fixtures()
 
 
 @pytest.fixture

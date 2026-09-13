@@ -1,8 +1,9 @@
 """Production deterministic fixture generator for Phase 4 golden files.
 
 PDF output uses ReportLab ``invariant=1`` so CreationDate/ModDate and /ID
-digests are stable across runs — integration tests regenerate fixtures each
-session and marker-only worker commits must not pick up timestamp churn.
+digests are stable across runs.  Integration tests call ``ensure_fixtures()``
+so committed golden files are not rewritten each session and marker-only
+worker commits do not pick up timestamp churn.
 """
 
 from __future__ import annotations
@@ -13,6 +14,16 @@ DEFAULT_FIXTURES_DIR = Path(__file__).resolve().parents[1] / "tests" / "fixtures
 
 # Fixed epoch used by ReportLab invariant mode (CreationDate/ModDate in PDF Info).
 DETERMINISTIC_PDF_EPOCH = "20000101000000+00'00'"
+
+FIXTURE_NAMES = ("sample_text.pdf", "sample_scanned.pdf", "sample.docx", "sample_image.png")
+
+
+def ensure_fixtures(*, output_dir: Path | None = None) -> Path:
+    """Return fixture directory, generating golden files only when any are missing."""
+    root = output_dir if output_dir is not None else DEFAULT_FIXTURES_DIR
+    if all((root / name).is_file() for name in FIXTURE_NAMES):
+        return root
+    return generate(output_dir=output_dir)
 
 
 def generate(*, output_dir: Path | None = None) -> Path:

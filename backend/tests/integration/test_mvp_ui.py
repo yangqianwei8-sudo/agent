@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from backend.application.material_upload import sanitize_filename
 from backend.domain.errors import ValidationError
-from backend.fixtures import generate as generate_fixtures
+from backend.fixtures import ensure_fixtures
 from backend.infrastructure.db import get_db_session
 from backend.main import app
 from backend.models import CaseMaterial
@@ -27,7 +27,7 @@ STATIC_JS = BACKEND_ROOT / "static" / "lawyer_agent" / "workspace.js"
 
 @pytest.fixture(scope="module", autouse=True)
 def _ensure_fixtures() -> None:
-    generate_fixtures()
+    ensure_fixtures()
 
 
 @pytest.fixture
