@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.application.issue_work_product import IssueWorkProductService
 from backend.application.pleading_readiness import PleadingReadinessService
-from backend.domain.errors import ConflictError, ValidationError
+from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.domain.services import DomainService
 from backend.infrastructure.db import get_db_session
 from backend.main import app
@@ -121,6 +121,47 @@ def test_proof_task_adopt_and_fact_link(db_session: Session, owner_id, actor_id)
             proof_task_version=adopted.version,
             fact_key=fact.fact_key,
             fact_version=fact.version,
+            role="SUPPORT",
+            actor_id=actor_id,
+        )
+
+
+def test_proof_task_fact_link_rejects_implicit_version(db_session: Session, owner_id, actor_id):
+    """ProofTaskFactLink requires explicit proof_task_version and fact_version (no current/latest)."""
+    svc = DomainService(db_session)
+    case = svc.create_case(title="Ver", owner_user_id=owner_id)
+    *_, item = _seed_accepted_evidence(db_session, owner_id=owner_id, actor_id=actor_id, case=case)
+    fact = _seed_fact(svc, case.id, actor_id, item)
+    issue = svc.confirm_issue(
+        svc.propose_issue(case_id=case.id, statement="版本焦点").issue_key,
+        actor_id=actor_id,
+    )
+    task = svc.adopt_proof_task(
+        svc.propose_proof_task(
+            case_id=case.id,
+            issue_key=issue.issue_key,
+            issue_version=issue.version,
+            description="证明任务",
+        ).proof_task_key,
+        actor_id=actor_id,
+    )
+    with pytest.raises(NotFoundError, match="proof task version not found"):
+        svc.link_fact_to_proof_task(
+            case_id=case.id,
+            proof_task_key=task.proof_task_key,
+            proof_task_version=task.version + 99,
+            fact_key=fact.fact_key,
+            fact_version=fact.version,
+            role="SUPPORT",
+            actor_id=actor_id,
+        )
+    with pytest.raises(NotFoundError, match="fact version not found"):
+        svc.link_fact_to_proof_task(
+            case_id=case.id,
+            proof_task_key=task.proof_task_key,
+            proof_task_version=task.version,
+            fact_key=fact.fact_key,
+            fact_version=fact.version + 99,
             role="SUPPORT",
             actor_id=actor_id,
         )
