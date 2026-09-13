@@ -1,4 +1,12 @@
-"""Issue-centered V2 domain mutations — mixed into DomainService."""
+"""Issue-centered V2 domain mutations — mixed into DomainService.
+
+Explicit invariants enforced in this module (Issue #60 / #73):
+  INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
+         (no get_current_*); rejects cross-case links.
+  INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
+  INV-4: merge_issues and split_issue persist HumanDecision + AuditLog before mutation.
+INV-1 (no production ClaimDirection creation) lives in backend/domain/services.py.
+"""
 
 from __future__ import annotations
 

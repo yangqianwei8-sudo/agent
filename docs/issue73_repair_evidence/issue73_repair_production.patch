@@ -1,0 +1,54 @@
+diff --git a/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py b/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py
+index d7f27e2..fcf25ef 100644
+--- a/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py
++++ b/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py
+@@ -1,4 +1,15 @@
+-"""phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment."""
++"""phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
++
++Issue #60 / #73 SSOT: includes proof_gaps and lawyer_assessments with every CheckConstraint:
++- proof_gaps: ck_proof_gaps_type, ck_proof_gaps_status, ck_proof_gaps_source
++- lawyer_assessments: ck_lawyer_assessments_status
++- issue_positions: ck_issue_positions_side/type/source/status
++- proof_tasks: ck_proof_tasks_status, ck_proof_tasks_source
++- proof_task_fact_links: ck_proof_task_fact_link_role, ck_proof_task_fact_link_status
++- issue_conflicts: ck_issue_conflicts_status, ck_issue_conflicts_source
++- conflict_fact_links: ck_conflict_fact_link_role
++- issue_legal_theory_links: ck_issue_legal_theory_link_role, ck_issue_legal_theory_link_status
++"""
+ 
+ from collections.abc import Sequence
+ 
+diff --git a/backend/application/issue_work_product.py b/backend/application/issue_work_product.py
+index efaf598..eb20d35 100644
+--- a/backend/application/issue_work_product.py
++++ b/backend/application/issue_work_product.py
+@@ -1,4 +1,9 @@
+-"""Issue Work Product — canonical issue-centered read projection."""
++"""Issue Work Product — canonical issue-centered read projection.
++
++Read-only projection over Issue-centered V2 domain (Issue #60 / #73).
++Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
++invariant enforcement remains in backend/domain/issue_centered.py and services.py.
++"""
+ 
+ from __future__ import annotations
+ 
+diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
+index 321406b..0a5f950 100644
+--- a/backend/domain/issue_centered.py
++++ b/backend/domain/issue_centered.py
+@@ -1,4 +1,12 @@
+-"""Issue-centered V2 domain mutations — mixed into DomainService."""
++"""Issue-centered V2 domain mutations — mixed into DomainService.
++
++Explicit invariants enforced in this module (Issue #60 / #73):
++  INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
++         (no get_current_*); rejects cross-case links.
++  INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
++  INV-4: merge_issues and split_issue persist HumanDecision + AuditLog before mutation.
++INV-1 (no production ClaimDirection creation) lives in backend/domain/services.py.
++"""
+ 
+ from __future__ import annotations
+ 

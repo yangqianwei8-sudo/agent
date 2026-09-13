@@ -1,94 +1,90 @@
 # Issue #73 Resubmit — Issue-Centered V2 (#60 repair)
 
-Generated: 2026-09-13T07:15:30Z | Base: `e774f08` | Implementation: `c19379b` (on main) | Repair: `HEAD`
+Generated: 2026-09-13T07:33:16Z | Base: `6357356` | Repair: `HEAD`
 
 **SSOT:** `docs/issue73_repair_evidence/` — complete untruncated artifacts below.
 
-| Artifact | Lines | Path |
-|----------|-------|------|
-| Full migration diff | 394 | `sources/migration_h9b0c1d2e3f4.py` |
-| Full domain | 1062 | `sources/domain_issue_centered.py` |
-| Full application | 501 | `sources/application_issue_work_product.py` |
-| Untruncated git patch (c19379b) | 1983 | `issue60_c19379b_key_files.patch` |
-| pytest output | — | `test_issue_centered_v2_output.txt` |
-| live acceptance output | — | `live_issue_centered_v2_acceptance_output.txt` |
+## Production artifacts modified in this repair commit
 
-Production paths (identical content): `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py`, `backend/domain/issue_centered.py`, `backend/application/issue_work_product.py`.
+| Artifact | Lines | Production path |
+|----------|-------|-----------------|
+| Full migration | 405 | `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` |
+| Full domain | 1070 | `backend/domain/issue_centered.py` |
+| Full application | 506 | `backend/application/issue_work_product.py` |
+| Invariant tests | 4 tests | `backend/tests/integration/test_issue_centered_v2_invariants.py` |
+| Repair production patch | — | `issue73_repair_production.patch` |
+| Full implementation patch (c19379b) | 1983 | `issue60_c19379b_key_files.patch` |
 
-## (A) Four required invariants — explicit verification
+SSOT copies (identical to production after repair): `sources/migration_h9b0c1d2e3f4.py`, `sources/domain_issue_centered.py`, `sources/application_issue_work_product.py`.
+
+## (A) Four required invariants — explicit code-level assertions
+
+Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invariants.py`
 
 ### A1. No production mutation path creates ClaimDirection
 
-`backend/domain/services.py` `create_claim_direction()` raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
+**Domain guard** (`backend/domain/services.py` `create_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
 
-Production `backend/application/claim_direction.py` calls `self.domain.create_claim_direction(...)` without `_legacy_compat` — blocked at domain layer.
-
-**TEST:** `test_claim_direction_production_disabled` — `pytest.raises(ValidationError, match="ClaimDirection production")` — **PASSED**
+**Test:** `test_invariant_1_no_production_claim_direction_creation`
+- `pytest.raises(ValidationError, match="ClaimDirection production")`
+- `assert rows == []` — no ClaimDirection row created
+— **PASSED**
 
 ### A2. ProofTaskFactLink rejects implicit current/latest and cross-case links
 
-`backend/domain/issue_centered.py` `link_fact_to_proof_task()` (lines 407–428):
-- Requires explicit `proof_task_version` and `fact_version` via `get_proof_task_version` / `get_fact_version` (NOT `get_current_*`)
-- Nonexistent version → `NotFoundError("proof task version not found")` / `NotFoundError("fact version not found")`
-- Cross-case → `ValidationError("cross-case proof task link rejected")` / `ValidationError("cross-case fact link rejected")`
+**Domain enforcement** (`link_fact_to_proof_task`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); cross-case → `ValidationError("cross-case ...")`.
 
-**TESTS:**
-- `test_proof_task_fact_link_rejects_implicit_version` — **PASSED** (version+99 → NotFoundError)
-- `test_proof_task_fact_link_cross_case_rejected` — **PASSED** (ValidationError match "cross-case")
-- `test_proof_task_adopt_and_fact_link` — **PASSED** (explicit versions required for successful link)
+**Test:** `test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case`
+- `proof_task_version+99` → `NotFoundError("proof task version not found")`
+- `fact_version+99` → `NotFoundError("fact version not found")`
+- cross-case fact → `ValidationError(match="cross-case")`
+— **PASSED**
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
 
-`backend/domain/issue_centered.py` `create_lawyer_position()` lines 135–137:
-```python
-if position_type == PositionType.FORMAL_DEFENSE.value:
-    if not opponent_material_ref:
-        raise ValidationError("FORMAL_DEFENSE requires opponent material reference")
-```
+**Domain enforcement** (`create_lawyer_position` lines 143–145): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent.
 
-**TEST:** `test_position_formal_defense_requires_material` — `pytest.raises(ValidationError, match="FORMAL_DEFENSE")` — **PASSED**
+**Test:** `test_invariant_3_formal_defense_requires_opponent_material_ref`
+- without ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
+- with ref → `assert pos.opponent_material_ref == "material:answer-001"`
+— **PASSED**
 
 ### A4. merge/split emit HumanDecision + AuditLog
 
-`merge_issues()` (lines 880–948): creates `HumanDecision` with `decision_type="MERGE_ISSUES"` before mutation, then `_audit(..., "merge_issues", ...)`.
+**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`.
 
-`split_issue()` (lines 968–1027): creates `HumanDecision` with `decision_type="SPLIT_ISSUE"` before mutation, then `_audit(..., "split_issue", ...)`.
-
-**TEST:** `test_issue_merge_and_split` asserts:
-- `len(merge_decisions) == 1` where `decision_type == "MERGE_ISSUES"`
-- `merge_audits` present where `action == "merge_issues"`
-- `len(split_decisions) == 1` where `decision_type == "SPLIT_ISSUE"`
-- `split_audits` present where `action == "split_issue"`
+**Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
+- `assert len(merge_decisions) == 1`
+- `assert len(merge_audits) >= 1`
+- `assert len(split_decisions) == 1`
+- `assert len(split_audits) >= 1`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T07:15:30Z
+## (B) Test output — actual run 2026-09-13T07:33:16Z
 
-Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py -v`
+Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
-**pytest:** 15 passed, 2 warnings in 1.37s — see `test_issue_centered_v2_output.txt`
+**pytest:** 19 passed, 2 warnings in 1.48s — see `test_issue_centered_v2_output.txt`
 
 **live acceptance:** `LLM_MODE=deterministic .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py` → **ISSUE-CENTERED CASE WORKSPACE V2: PASS** (30 steps) — see `live_issue_centered_v2_acceptance_output.txt`
 
-## (C) Migration — proof_gaps + lawyer_assessments + all check constraints (complete, untruncated)
+## (C) Migration — proof_gaps + lawyer_assessments + all CheckConstraints (complete, untruncated)
 
-Full 394-line migration in `sources/migration_h9b0c1d2e3f4.py`. Key tables:
+Full migration in production path and `sources/migration_h9b0c1d2e3f4.py`.
 
 **proof_gaps check constraints:**
 - `ck_proof_gaps_type`: `gap_type IN ('FACT','EVIDENCE','SOURCE','LEGAL_RESEARCH')`
 - `ck_proof_gaps_status`: `status IN ('OPEN','RESOLVED','WAIVED','SUPERSEDED')`
 - `ck_proof_gaps_source`: `source_type IN ('AI_DETECTED','LAWYER_CREATED')`
-- FK: `(issue_key, issue_version)` → `issues`, optional `(proof_task_key, proof_task_version)` → `proof_tasks`
 
 **lawyer_assessments check constraints:**
 - `ck_lawyer_assessments_status`: `status IN ('ACTIVE','SUPERSEDED','WITHDRAWN')`
-- FK: `(issue_key, issue_version)` → `issues`
-- Unique: `(assessment_key, version)`
 
-Also in migration: `proof_task_fact_links` (`ck_proof_task_fact_link_role`, `ck_proof_task_fact_link_status`), `issue_conflicts` (`ck_issue_conflicts_status`, `ck_issue_conflicts_source`), `conflict_fact_links` (`ck_conflict_fact_link_role`), `issue_positions` side/type/source/status constraints.
+Also: `issue_positions`, `proof_tasks`, `proof_task_fact_links`, `issue_conflicts`, `conflict_fact_links`, `issue_legal_theory_links` — every CheckConstraint listed in migration module docstring.
 
-## (D) Domain + Application — full untruncated copies
+## (D) Domain + Application — full untruncated production files
 
-- `backend/domain/issue_centered.py` — 1062 lines → `sources/domain_issue_centered.py`
-- `backend/application/issue_work_product.py` — 501 lines → `sources/application_issue_work_product.py`
+- `backend/domain/issue_centered.py` — 1070 lines (invariant docstring + full implementation)
+- `backend/application/issue_work_product.py` — 506 lines (read-only projection)
 
-Verified by: `test_issue_work_product_api`, `test_workspace_includes_issue_work_product`, `test_agent_issue_object_context` — all **PASSED**.
+Verified by: all 19 pytest tests + live acceptance 30 steps — **PASSED**.

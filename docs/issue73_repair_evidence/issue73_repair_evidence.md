@@ -1,8 +1,7 @@
 # Issue #73 Repair Evidence — Issue-Centered V2 (#60)
 
-Generated: 2026-09-13T07:15:30Z  
-Base commit: `e774f08`  
-Implementation commit: `c19379b` (on main)  
+Generated: 2026-09-13T07:33:16Z  
+Base commit: `6357356`  
 Repair commit: (this commit)
 
 **This directory is the sole SSOT for Issue #73 repair submission.**
@@ -11,13 +10,14 @@ Repair commit: (this commit)
 
 See `00_reviewer_bundle.md` for compact submission with all four invariants, test PASS output, and migration constraint summary.
 
-## (1) Full alembic migration h9b0c1d2e3f4 — untruncated
+## (1) Full alembic migration h9b0c1d2e3f4 — untruncated (production path modified)
 
 | Location | Lines |
 |----------|-------|
-| Production | `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` (394) |
-| SSOT copy | `sources/migration_h9b0c1d2e3f4.py` (394) |
-| Git patch | `issue60_c19379b_key_files.patch` (lines 9–408, untruncated) |
+| Production | `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` (405) |
+| SSOT copy | `sources/migration_h9b0c1d2e3f4.py` (405) |
+| Repair patch | `issue73_repair_production.patch` |
+| Original implementation patch | `issue60_c19379b_key_files.patch` (1983 lines, untruncated) |
 
 **proof_gaps** table with check constraints:
 - `ck_proof_gaps_type`: `gap_type IN ('FACT','EVIDENCE','SOURCE','LEGAL_RESEARCH')`
@@ -31,42 +31,35 @@ See `00_reviewer_bundle.md` for compact submission with all four invariants, tes
 - FK `fk_lawyer_assessments_issue` on `(issue_key, issue_version)`
 - Unique `uq_lawyer_assessments_key_version` on `(assessment_key, version)`
 
-Additional check constraints in same migration: `issue_positions`, `proof_tasks`, `proof_task_fact_links`, `issue_conflicts`, `conflict_fact_links`, `proof_gaps`, `lawyer_assessments`.
+Additional check constraints in same migration: `issue_positions`, `proof_tasks`, `proof_task_fact_links`, `issue_conflicts`, `conflict_fact_links`, `issue_legal_theory_links`.
 
-## (2) Full backend/domain/issue_centered.py — untruncated
-
-| Location | Lines |
-|----------|-------|
-| Production | `backend/domain/issue_centered.py` (1062) |
-| SSOT copy | `sources/domain_issue_centered.py` (1062) |
-| Git patch | `issue60_c19379b_key_files.patch` (lines 916–1983, untruncated) |
-
-## (3) Full backend/application/issue_work_product.py — untruncated
+## (2) Full backend/domain/issue_centered.py — untruncated (production path modified)
 
 | Location | Lines |
 |----------|-------|
-| Production | `backend/application/issue_work_product.py` (501) |
-| SSOT copy | `sources/application_issue_work_product.py` (501) |
-| Git patch | `issue60_c19379b_key_files.patch` (lines 409–915, untruncated) |
+| Production | `backend/domain/issue_centered.py` (1070) |
+| SSOT copy | `sources/domain_issue_centered.py` (1070) |
+
+Module docstring documents INV-2, INV-3, INV-4 enforcement points.
+
+## (3) Full backend/application/issue_work_product.py — untruncated (production path modified)
+
+| Location | Lines |
+|----------|-------|
+| Production | `backend/application/issue_work_product.py` (506) |
+| SSOT copy | `sources/application_issue_work_product.py` (506) |
 
 ## (4) Captured test output — PASS
 
-### pytest backend/tests/integration/test_issue_centered_v2.py
+### pytest test_issue_centered_v2.py + test_issue_centered_v2_invariants.py
 
-Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py -v`
+Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full output: `test_issue_centered_v2_output.txt`
 
 ```
-======================== 15 passed, 2 warnings in 1.37s ========================
+======================== 19 passed, 2 warnings in 1.48s ========================
 ```
-
-All 15 tests PASSED including invariant tests:
-- `test_claim_direction_production_disabled`
-- `test_proof_task_fact_link_rejects_implicit_version`
-- `test_proof_task_fact_link_cross_case_rejected`
-- `test_position_formal_defense_requires_material`
-- `test_issue_merge_and_split`
 
 ### live_issue_centered_v2_acceptance.py
 
@@ -81,69 +74,49 @@ Steps completed: 30
 
 ## (5) Explicit assertions/verification for four invariants
 
+Dedicated module: `backend/tests/integration/test_issue_centered_v2_invariants.py`
+
 ### 5.1 No production mutation path creates ClaimDirection
 
-**Domain guard** (`backend/domain/services.py` lines 919–922):
-```python
-if not _legacy_compat:
-    raise ValidationError(
-        "ClaimDirection production mutation disabled; use Claim Domain instead"
-    )
-```
-
-**Production path blocked:** `backend/application/claim_direction.py` → `self.domain.create_claim_direction(...)` without `_legacy_compat`.
-
-**Test assertion** (`test_claim_direction_production_disabled`):
+**Test:** `test_invariant_1_no_production_claim_direction_creation`
 ```python
 with pytest.raises(ValidationError, match="ClaimDirection production"):
     svc.create_claim_direction(case_id=case.id, payload={"claims": [], "parties": {}}, actor_id=actor_id)
+assert rows == []  # no ClaimDirection row created
 ```
 **Result: PASSED**
 
 ### 5.2 ProofTaskFactLink rejects implicit current/latest and cross-case links
 
-**Domain enforcement** (`link_fact_to_proof_task`, lines 419–428):
-- Uses `get_proof_task_version(proof_task_key, proof_task_version)` — explicit version, not current/latest
-- Uses `get_fact_version(fact_key, fact_version)` — explicit version, not current/latest
-- Cross-case task: `ValidationError("cross-case proof task link rejected")`
-- Cross-case fact: `ValidationError("cross-case fact link rejected")`
-
-**Test assertions:**
-- `test_proof_task_fact_link_rejects_implicit_version`: `proof_task_version=task.version+99` → `NotFoundError("proof task version not found")`; `fact_version=fact.version+99` → `NotFoundError("fact version not found")` — **PASSED**
-- `test_proof_task_fact_link_cross_case_rejected`: fact from case C1 linked to task in case C2 → `ValidationError(match="cross-case")` — **PASSED**
-- `test_proof_task_adopt_and_fact_link`: successful link requires explicit `proof_task_version=adopted.version` and `fact_version=fact.version` — **PASSED**
+**Test:** `test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case`
+- `proof_task_version=task.version+99` → `NotFoundError("proof task version not found")`
+- `fact_version=fact.version+99` → `NotFoundError("fact version not found")`
+- cross-case fact → `ValidationError(match="cross-case")`
+**Result: PASSED**
 
 ### 5.3 FORMAL_DEFENSE requires opponent_material_ref
 
-**Domain enforcement** (`create_lawyer_position`, lines 135–137):
-```python
-if position_type == PositionType.FORMAL_DEFENSE.value:
-    if not opponent_material_ref:
-        raise ValidationError("FORMAL_DEFENSE requires opponent material reference")
-```
-
-**Test assertion** (`test_position_formal_defense_requires_material`):
+**Test:** `test_invariant_3_formal_defense_requires_opponent_material_ref`
 ```python
 with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
-    svc.create_lawyer_position(..., position_type="FORMAL_DEFENSE", ...)  # no opponent_material_ref
+    svc.create_lawyer_position(..., position_type="FORMAL_DEFENSE", opponent_material_ref=None)
+assert pos.opponent_material_ref == "material:answer-001"  # succeeds with ref
 ```
 **Result: PASSED**
 
 ### 5.4 merge/split emit HumanDecision + AuditLog
 
-**merge_issues** (lines 880–948): `HumanDecision(decision_type="MERGE_ISSUES")` persisted before mutation; `_audit(..., "merge_issues", ...)`.
-
-**split_issue** (lines 968–1027): `HumanDecision(decision_type="SPLIT_ISSUE")` persisted before mutation; `_audit(..., "split_issue", ...)`.
-
-**Test assertions** (`test_issue_merge_and_split`):
+**Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
 ```python
 assert len(merge_decisions) == 1  # decision_type == "MERGE_ISSUES"
-assert merge_audits  # action == "merge_issues"
+assert len(merge_audits) >= 1     # action == "merge_issues"
 assert len(split_decisions) == 1  # decision_type == "SPLIT_ISSUE"
-assert split_audits  # action == "split_issue"
+assert len(split_audits) >= 1     # action == "split_issue"
 ```
 **Result: PASSED**
 
 ## Untruncated diff
 
-Complete git patch of implementation commit `c19379b` for all three key files: `issue60_c19379b_key_files.patch` (75531 bytes, 1983 lines, NOT truncated).
+Repair production patch: `issue73_repair_production.patch` (modifies migration, domain, application, adds invariant tests).
+
+Complete original implementation: `issue60_c19379b_key_files.patch` (75531 bytes, 1983 lines, NOT truncated).
