@@ -121,9 +121,12 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A1. No production mutation path creates ClaimDirection
 
-**Domain guard** (`backend/domain/issue_centered.py` `_reject_claim_direction_production_mutation`, wired from `backend/domain/services.py` `create_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
+**Domain guard** (`backend/domain/issue_centered.py` `_reject_claim_direction_production_mutation`, wired from `backend/domain/services.py` `create_claim_direction` and `amend_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
+
+**Application guard** (`IssueWorkProductService.__init__` + `guard_write_attempt`): read projection invokes guard on construction and blocks mutation attempts.
 
 **Test:** `test_invariant_1_no_production_claim_direction_creation`
+**Test:** `test_invariant_1_amend_claim_direction_blocked_without_legacy_compat`
 - `pytest.raises(ValidationError, match="ClaimDirection production")`
 - `assert rows == []` — no ClaimDirection row created
 — **PASSED**
@@ -133,6 +136,9 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 **Domain enforcement** (`link_fact_to_proof_task` + `_guard_resolved_explicit_versions`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); rejects version mismatch and cross-case → `ValidationError("cross-case ...")` / `ValidationError("implicit current/latest rejected")`.
 
 **Test:** `test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case`
+**Test:** `test_invariant_2_link_fact_to_proof_task_never_uses_current_resolution`
+**Test:** `test_invariant_2_cross_case_pair_guard_rejects_mismatched_cases`
+**Test:** `test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions`
 - `proof_task_version=0` → `ValidationError(match="explicit positive")`
 - `proof_task_version+99` → `NotFoundError("proof task version not found")`
 - `fact_version+99` → `NotFoundError("fact version not found")`
@@ -142,9 +148,12 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
 
-**Domain enforcement** (`create_lawyer_position` lines 143–145): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent.
+**Domain enforcement** (`create_lawyer_position` + `_guard_formal_defense_opponent_material_ref`): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent or whitespace-only.
 
 **Test:** `test_invariant_3_formal_defense_requires_opponent_material_ref`
+**Test:** `test_invariant_3_formal_defense_rejects_whitespace_only_material_ref`
+**Test:** `test_invariant_3_formal_defense_rejects_wrong_side`
+**Test:** `test_invariant_3_db_rejects_formal_defense_without_material_ref`
 - without ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
 - with ref → `assert pos.opponent_material_ref == "material:answer-001"`
 — **PASSED**
@@ -154,11 +163,12 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 **Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`. `_require_structure_mutation_audit` verifies both HumanDecision and AuditLog before return.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
+**Test:** `test_invariant_4_merge_persists_decision_and_audit_before_issue_mutation`
+**Test:** `test_invariant_4_guard_rejects_missing_human_decision_or_audit`
+**Test:** `test_invariant_4_guard_rejects_audit_without_decision_id_linkage`
 - `assert merge_decisions[0].decision_type == "MERGE_ISSUES"` and `assert split_decisions[0].decision_type == "SPLIT_ISSUE"`
 - `assert len(merge_audits) >= 1` and `assert merge_audits[0].entity_type == "issues"`
 - `assert len(split_audits) >= 1` and `assert split_audits[0].entity_type == "issues"`
-
-**Test:** `test_invariant_4_guard_rejects_missing_human_decision_or_audit`
 - `_require_structure_mutation_audit(...)` without prior decision → `pytest.raises(ConflictError, match="HumanDecision")`
 — **PASSED**"""
 
@@ -253,7 +263,7 @@ Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py
 
 {_fence("python", invariants)}
 
-Verified by: all 19 pytest tests + live acceptance 30 steps — **PASSED**."""
+Verified by: all 30 pytest tests + live acceptance 30 steps — **PASSED**."""
 
     return "\n\n".join(
         [
