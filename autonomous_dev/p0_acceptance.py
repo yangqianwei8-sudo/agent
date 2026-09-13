@@ -15,7 +15,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from autonomous_dev.acceptance_marker import MARKER_GIT_PATH, diff_includes_marker, write_marker
+from autonomous_dev.acceptance_marker import (
+    MARKER_GIT_PATH,
+    diff_includes_marker,
+    diff_is_marker_only,
+    diff_paths_changed,
+    write_marker,
+)
 from autonomous_dev.reviewer_service import REVIEWER_ACCEPTANCE_MARKER
 
 P0_LIVE_ACCEPTANCE_MARKER = "[P0-LIVE-ACCEPTANCE]"
@@ -82,15 +88,28 @@ def evaluate_marker_only_review(diff: str, issue_body: str) -> MarkerOnlyReviewV
     """Production reviewer gate for issue #38 Restart-B marker-only acceptance."""
     if not is_marker_only_acceptance(issue_body):
         return None
-    if diff_includes_marker(diff):
+    if not diff_includes_marker(diff):
         return MarkerOnlyReviewVerdict(
-            verdict="PASS",
-            reason="Harmless acceptance marker updated as required",
+            verdict="FAIL",
+            reason="Expected acceptance_marker.txt change not found in diff",
+            fail_repair_summary="Ensure worker updates autonomous_dev/acceptance_marker.txt",
+        )
+    if not diff_is_marker_only(diff):
+        extra = sorted(diff_paths_changed(diff) - {MARKER_GIT_PATH})
+        return MarkerOnlyReviewVerdict(
+            verdict="FAIL",
+            reason=(
+                "Marker-only acceptance must not change paths outside "
+                f"autonomous_dev/acceptance_marker.txt; also changed: {', '.join(extra)}"
+            ),
+            fail_repair_summary=(
+                "Commit only autonomous_dev/acceptance_marker.txt; "
+                "regenerate golden fixtures with pinned PDF metadata separately"
+            ),
         )
     return MarkerOnlyReviewVerdict(
-        verdict="FAIL",
-        reason="Expected acceptance_marker.txt change not found in diff",
-        fail_repair_summary="Ensure worker updates autonomous_dev/acceptance_marker.txt",
+        verdict="PASS",
+        reason="Harmless acceptance marker updated as required",
     )
 
 

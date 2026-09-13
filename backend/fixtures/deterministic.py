@@ -119,10 +119,24 @@ def generate(*, output_dir: Path | None = None) -> Path:
     return root
 
 
+def assert_pdf_fixture_metadata(pdf_bytes: bytes, *, label: str) -> None:
+    """Raise ValueError when PDF bytes lack pinned CreationDate/ModDate and stable /ID."""
+    if not pdf_has_deterministic_metadata(pdf_bytes):
+        raise ValueError(f"{label} missing deterministic PDF metadata")
+
+
+def extract_stable_pdf_id(pdf_bytes: bytes) -> str | None:
+    """Return the stable /ID digest when present, else None."""
+    match = _PDF_ID_RE.search(pdf_bytes.decode("latin-1"))
+    return match.group(1) if match else None
+
+
 def _save_canvas_with_deterministic_metadata(canvas: object, path: Path) -> None:
     """Save ReportLab canvas and pin CreationDate/ModDate plus trailer /ID in-place."""
     canvas.save()  # type: ignore[union-attr]
-    path.write_bytes(pin_pdf_deterministic_metadata(path.read_bytes()))
+    pinned = pin_pdf_deterministic_metadata(path.read_bytes())
+    assert_pdf_fixture_metadata(pinned, label=path.name)
+    path.write_bytes(pinned)
 
 
 def _new_deterministic_canvas(path: Path) -> object:

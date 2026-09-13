@@ -6,12 +6,16 @@ import re
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from backend.fixtures.deterministic import (
     DEFAULT_FIXTURES_DIR as FIXTURES,
 )
 from backend.fixtures.deterministic import (
     DETERMINISTIC_PDF_EPOCH,
+    assert_pdf_fixture_metadata,
     ensure_fixtures,
+    extract_stable_pdf_id,
     generate,
     pdf_has_deterministic_metadata,
     pin_pdf_deterministic_metadata,
@@ -186,3 +190,18 @@ def test_pdf_has_deterministic_metadata() -> None:
 def test_committed_fixtures_match_deterministic_generator() -> None:
     """Committed golden files must match fresh deterministic generation."""
     validate_fixtures(FIXTURES)
+
+
+def test_assert_pdf_fixture_metadata_rejects_volatile_pdf() -> None:
+    volatile = b"%PDF-1.4\n1 0 obj\n<< /CreationDate (D:20991231120000+00'00') >>\n"
+    with pytest.raises(ValueError, match="missing deterministic PDF metadata"):
+        assert_pdf_fixture_metadata(volatile, label="volatile.pdf")
+
+
+def test_extract_stable_pdf_id_from_generated_fixture() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = generate(output_dir=Path(tmp))
+        for name in _PDF_FIXTURES:
+            doc_id = extract_stable_pdf_id((root / name).read_bytes())
+            assert doc_id is not None
+            assert len(doc_id) == 32

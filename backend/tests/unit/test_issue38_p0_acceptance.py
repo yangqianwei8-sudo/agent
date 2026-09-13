@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from autonomous_dev.acceptance_marker import read_marker
+from autonomous_dev.acceptance_marker import diff_is_marker_only, diff_paths_changed, read_marker
 from autonomous_dev.p0_acceptance import (
     evaluate_marker_only_review,
     execute_marker_only_acceptance,
@@ -20,6 +20,8 @@ from autonomous_dev.reviewer_service import REVIEWER_ACCEPTANCE_MARKER
 from backend.fixtures.deterministic import (
     DETERMINISTIC_PDF_EPOCH,
     FIXTURE_NAMES,
+    assert_pdf_fixture_metadata,
+    extract_stable_pdf_id,
     generate,
     pdf_has_deterministic_metadata,
     pin_pdf_deterministic_metadata,
@@ -153,6 +155,41 @@ def test_issue38_reviewer_fails_without_marker_diff() -> None:
     assert verdict is not None
     assert verdict.verdict == "FAIL"
     assert "Expected acceptance_marker.txt change not found in diff" in verdict.reason
+
+
+def test_issue38_reviewer_fails_when_marker_diff_includes_fixtures() -> None:
+    """Issue #75 repair: marker+fixture churn must FAIL, not pass as harmless marker."""
+    diff = (
+        "diff --git a/autonomous_dev/acceptance_marker.txt "
+        "b/autonomous_dev/acceptance_marker.txt\n"
+        "+++ b/autonomous_dev/acceptance_marker.txt\n"
+        "+worker-run issue=38\n"
+        "diff --git a/backend/tests/fixtures/sample_text.pdf "
+        "b/backend/tests/fixtures/sample_text.pdf\n"
+    )
+    assert diff_is_marker_only(diff) is False
+    assert "backend/tests/fixtures/sample_text.pdf" in diff_paths_changed(diff)
+    verdict = evaluate_marker_only_review(diff, _issue38_body())
+    assert verdict is not None
+    assert verdict.verdict == "FAIL"
+    assert "sample_text.pdf" in verdict.reason
+    assert verdict.fail_repair_summary is not None
+    assert "Commit only autonomous_dev/acceptance_marker.txt" in verdict.fail_repair_summary
+
+
+def test_issue75_repair_pdf_write_path_asserts_pinned_metadata() -> None:
+    """Production PDF write path rejects unpinned metadata before fixtures are committed."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        generate(output_dir=root)
+        for name in ("sample_text.pdf", "sample_scanned.pdf"):
+            data = (root / name).read_bytes()
+            assert_pdf_fixture_metadata(data, label=name)
+            doc_id = extract_stable_pdf_id(data)
+            assert doc_id is not None
+            assert len(doc_id) == 32
+            generate(output_dir=root)
+            assert extract_stable_pdf_id((root / name).read_bytes()) == doc_id
 
 
 def test_committed_golden_fixtures_match_sync_output() -> None:

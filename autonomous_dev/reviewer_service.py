@@ -116,11 +116,26 @@ class ReviewerService:
                 fail_repair_summary=marker_only.fail_repair_summary,
             )
         if REVIEWER_ACCEPTANCE_MARKER in body or "[P0-LIVE-ACCEPTANCE]" in body:
-            if diff_includes_marker(ctx.diff):
+            from autonomous_dev.acceptance_marker import diff_is_marker_only
+
+            if diff_includes_marker(ctx.diff) and diff_is_marker_only(ctx.diff):
                 return ReviewResult(
                     verdict="PASS",
                     reason="Harmless acceptance marker updated as required",
                     invocation_id=inv_id,
+                )
+            if diff_includes_marker(ctx.diff):
+                return ReviewResult(
+                    verdict="FAIL",
+                    reason=(
+                        "Marker-only acceptance must not change paths outside "
+                        "autonomous_dev/acceptance_marker.txt"
+                    ),
+                    invocation_id=inv_id,
+                    fail_repair_summary=(
+                        "Commit only autonomous_dev/acceptance_marker.txt; "
+                        "do not stage golden fixture files"
+                    ),
                 )
             return ReviewResult(
                 verdict="FAIL",

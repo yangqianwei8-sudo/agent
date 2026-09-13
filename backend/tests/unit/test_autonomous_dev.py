@@ -2932,6 +2932,47 @@ def test_issue38_restart_b_reviewer_passes_on_marker_diff(infra_env):
     assert "Harmless acceptance marker updated as required" in result.reason
 
 
+def test_issue38_reviewer_fails_when_diff_includes_fixtures(infra_env):
+    """Issue #75 repair: marker-only reviewer must FAIL when fixtures are also staged."""
+    from autonomous_dev.next_task_resolver import build_roadmap_issue_body
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    body = build_roadmap_issue_body(
+        source_issue_number=37,
+        stable_key="roadmap-issue:37:e0bff02d3b4a8815",
+        next_title="[ACCEPT] Restart B 747cb2ef",
+        source_body=f"{REVIEWER_ACCEPTANCE_MARKER}\n[P0-LIVE-ACCEPTANCE]",
+    )
+    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("worker-run issue=38\n", encoding="utf-8")
+    fixture = repo / "backend" / "tests" / "fixtures" / "sample_text.pdf"
+    fixture.parent.mkdir(parents=True, exist_ok=True)
+    fixture.write_bytes(b"%PDF-1.4 fixture churn\n")
+    subprocess.run(["git", "add", "autonomous_dev/acceptance_marker.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "backend/tests/fixtures/sample_text.pdf"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "marker plus fixture churn"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    commit_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    svc = ReviewerService(settings, repo_root=repo)
+    ctx = svc.gather_context(issue_number=38, issue_body=body, commit_sha=commit_sha)
+    result = svc.review(ctx)
+    assert result.verdict == "FAIL"
+    assert "must not change paths outside" in result.reason
+
+
 def test_issue38_reviewer_fails_when_diff_lacks_marker(infra_env):
     """P0 acceptance without marker change must FAIL — exercises diff_includes_marker."""
     from autonomous_dev.next_task_resolver import build_roadmap_issue_body

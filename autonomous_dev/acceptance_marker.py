@@ -48,3 +48,24 @@ def parse_marker_issue_number(content: str) -> int | None:
 def diff_includes_marker(diff: str) -> bool:
     """Return True when a git diff touches the P0 acceptance marker file."""
     return MARKER_GIT_PATH in diff
+
+
+def diff_paths_changed(diff: str) -> frozenset[str]:
+    """Extract changed file paths from a unified git diff."""
+    paths: set[str] = set()
+    for line in diff.splitlines():
+        if not line.startswith("diff --git "):
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        for token in (parts[2], parts[3]):
+            if token.startswith(("a/", "b/")):
+                paths.add(token[2:])
+    return frozenset(paths)
+
+
+def diff_is_marker_only(diff: str) -> bool:
+    """Return True when the diff changes only the P0 acceptance marker file."""
+    paths = diff_paths_changed(diff)
+    return paths == frozenset({MARKER_GIT_PATH})
