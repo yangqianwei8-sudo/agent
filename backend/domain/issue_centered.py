@@ -114,7 +114,7 @@ def _guard_resolved_explicit_versions(
     task: ProofTask,
     fact: Any,
 ) -> None:
-    """INV-2: resolved rows must match explicitly requested versions (no implicit current/latest)."""
+    """INV-2: resolved rows must match requested versions (no implicit current/latest)."""
     if task.version != proof_task_version:
         raise ValidationError(
             "ProofTaskFactLink requires explicit proof_task_version; "
