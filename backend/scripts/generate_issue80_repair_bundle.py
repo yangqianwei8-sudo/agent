@@ -9,7 +9,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE = ROOT / "docs" / "issue80_repair_evidence"
-PATCH_BASE = "c19379b^"
+# Stable base before issue-centered v2 (parent of c19379b); distinct from repair HEAD.
+PATCH_BASE = "f84972a"
 
 PRODUCTION_FILES = {
     "migration": ROOT / "alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py",
@@ -32,10 +33,14 @@ def _fence(lang: str, content: str) -> str:
     return f"```{lang}\n{content.rstrip()}\n```"
 
 
-def _git_head() -> str:
+def _git_short(rev: str) -> str:
     return subprocess.check_output(
-        ["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, text=True
+        ["git", "rev-parse", "--short", rev], cwd=ROOT, text=True
     ).strip()
+
+
+def _git_head() -> str:
+    return _git_short("HEAD")
 
 
 def _generate_production_patch() -> str:
@@ -92,7 +97,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 — **PASSED**"""
 
 
-def build_bundle(ts: datetime, head: str, patch: str) -> str:
+def build_bundle(ts: datetime, patch_base: str, repair_head: str, patch: str) -> str:
     ts_iso = ts.isoformat().replace("+00:00", "Z")
     pytest_out = _read(OUTPUT_FILES["pytest"])
     live_out = _read(OUTPUT_FILES["live"])
@@ -109,7 +114,7 @@ def build_bundle(ts: datetime, head: str, patch: str) -> str:
 
     header = f"""# Issue #80 Resubmit — Issue-Centered V2 (#73 repair)
 
-Generated: {ts_iso} | Base: `{head}` | Repair: `HEAD`
+Generated: {ts_iso} | Base: `{patch_base}` | Repair: `{repair_head}`
 
 **SSOT:** `docs/issue80_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -198,7 +203,9 @@ Verified by: all 19 pytest tests + live acceptance 30 steps — **PASSED**."""
     )
 
 
-def build_evidence_md(ts: datetime, head: str, bundle_rel: str, patch: str) -> str:
+def build_evidence_md(
+    ts: datetime, patch_base: str, repair_head: str, bundle_rel: str, patch: str
+) -> str:
     ts_iso = ts.isoformat().replace("+00:00", "Z")
     pytest_out = _read(OUTPUT_FILES["pytest"])
     live_out = _read(OUTPUT_FILES["live"])
@@ -211,8 +218,8 @@ def build_evidence_md(ts: datetime, head: str, bundle_rel: str, patch: str) -> s
     return f"""# Issue #80 Repair Evidence — Issue-Centered V2 (#73)
 
 Generated: {ts_iso}
-Base commit: `{head}`
-Repair commit: (this commit)
+Base commit: `{patch_base}` (pre issue-centered v2; parent of c19379b)
+Repair commit: `{repair_head}`
 
 **This directory is the sole SSOT for Issue #80 repair submission.**
 
@@ -305,7 +312,8 @@ def sync_sources() -> None:
 
 def main() -> None:
     ts = datetime.now(UTC)
-    head = _git_head()
+    patch_base = _git_short(PATCH_BASE)
+    repair_head = _git_head()
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     sync_sources()
     patch = _generate_production_patch()
@@ -313,9 +321,17 @@ def main() -> None:
     patch_path.write_text(patch, encoding="utf-8")
     bundle_path = EVIDENCE / "00_reviewer_bundle.md"
     evidence_path = EVIDENCE / "issue80_repair_evidence.md"
-    bundle_path.write_text(build_bundle(ts, head, patch), encoding="utf-8")
+    bundle_path.write_text(
+        build_bundle(ts, patch_base, repair_head, patch), encoding="utf-8"
+    )
     evidence_path.write_text(
-        build_evidence_md(ts, head, "docs/issue80_repair_evidence/00_reviewer_bundle.md", patch),
+        build_evidence_md(
+            ts,
+            patch_base,
+            repair_head,
+            "docs/issue80_repair_evidence/00_reviewer_bundle.md",
+            patch,
+        ),
         encoding="utf-8",
     )
     marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
