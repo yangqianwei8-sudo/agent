@@ -116,6 +116,8 @@ def generate(*, output_dir: Path | None = None) -> Path:
     _write_blank_pdf(root / "sample_scanned.pdf")
     _write_docx(root / "sample.docx")
     _write_png(root / "sample_image.png")
+    for pdf_name in ("sample_text.pdf", "sample_scanned.pdf"):
+        assert_pdf_fixture_metadata((root / pdf_name).read_bytes(), label=pdf_name)
     return root
 
 

@@ -205,3 +205,44 @@ def test_extract_stable_pdf_id_from_generated_fixture() -> None:
             doc_id = extract_stable_pdf_id((root / name).read_bytes())
             assert doc_id is not None
             assert len(doc_id) == 32
+
+
+def test_issue81_repair_volatile_reportlab_pdf_rejected_without_pin() -> None:
+    """Issue #38/#81: default ReportLab output must fail until metadata is pinned."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "volatile.pdf"
+        c = canvas.Canvas(str(path), pagesize=A4)
+        c.drawString(72, 800, "volatile fixture")
+        c.save()
+        raw = path.read_bytes()
+        assert not pdf_has_deterministic_metadata(raw)
+        with pytest.raises(ValueError, match="missing deterministic PDF metadata"):
+            assert_pdf_fixture_metadata(raw, label="volatile.pdf")
+
+
+def test_issue81_repair_pin_makes_volatile_reportlab_pdf_deterministic() -> None:
+    """Production pin step must normalize volatile ReportLab bytes to pinned metadata."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "volatile.pdf"
+        c = canvas.Canvas(str(path), pagesize=A4)
+        c.drawString(72, 800, "volatile fixture")
+        c.save()
+        raw = path.read_bytes()
+        pinned = pin_pdf_deterministic_metadata(raw)
+        assert_pdf_fixture_metadata(pinned, label="volatile.pdf")
+        text = pinned.decode("latin-1")
+        assert DETERMINISTIC_PDF_EPOCH in text
+        doc_id = extract_stable_pdf_id(pinned)
+        assert doc_id is not None
+        assert pin_pdf_deterministic_metadata(pinned) == pinned
+
+
+def test_issue81_repair_independent_generation_produces_byte_identical_pdfs() -> None:
+    """Issue #81 repair: two generate() runs into separate dirs must match exactly."""
+    verify_independent_generation_byte_identity()
