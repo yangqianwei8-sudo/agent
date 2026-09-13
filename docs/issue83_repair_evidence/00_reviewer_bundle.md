@@ -1,6 +1,6 @@
 # Issue #83 Resubmit — Issue-Centered V2 (#80 repair)
 
-Generated: 2026-09-13T10:14:11.719899Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `9f86de8`
+Generated: 2026-09-13T10:19:57.394908Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `775f545`
 
 **SSOT:** `docs/issue83_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -8,11 +8,11 @@ Generated: 2026-09-13T10:14:11.719899Z | Base: `f84972a213c44ba602b07ae3801637dc
 
 | Artifact | Lines | Production path |
 |----------|-------|-----------------|
-| Full migration | 423 | `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` |
-| Full domain | 1201 | `backend/domain/issue_centered.py` |
-| Full application | 548 | `backend/application/issue_work_product.py` |
-| Invariant tests | 417 | `backend/tests/integration/test_issue_centered_v2_invariants.py` |
-| Production patch | 2609 | `issue83_repair_production.patch` |
+| Full migration | 430 | `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` |
+| Full domain | 1236 | `backend/domain/issue_centered.py` |
+| Full application | 554 | `backend/application/issue_work_product.py` |
+| Invariant tests | 449 | `backend/tests/integration/test_issue_centered_v2_invariants.py` |
+| Production patch | 2689 | `issue83_repair_production.patch` |
 
 SSOT copies (identical to production): `sources/migration_h9b0c1d2e3f4.py`, `sources/domain_issue_centered.py`, `sources/application_issue_work_product.py`, `sources/test_issue_centered_v2_invariants.py`.
 
@@ -22,7 +22,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A1. No production mutation path creates ClaimDirection
 
-**Domain guard** (`backend/domain/services.py` `create_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
+**Domain guard** (`backend/domain/issue_centered.py` `_reject_claim_direction_production_mutation`, wired from `backend/domain/services.py` `create_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
 
 **Test:** `test_invariant_1_no_production_claim_direction_creation`
 - `pytest.raises(ValidationError, match="ClaimDirection production")`
@@ -31,7 +31,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A2. ProofTaskFactLink rejects implicit current/latest and cross-case links
 
-**Domain enforcement** (`link_fact_to_proof_task`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); cross-case → `ValidationError("cross-case ...")`.
+**Domain enforcement** (`link_fact_to_proof_task` + `_guard_resolved_explicit_versions`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); rejects version mismatch and cross-case → `ValidationError("cross-case ...")` / `ValidationError("implicit current/latest rejected")`.
 
 **Test:** `test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case`
 - `proof_task_version=0` → `ValidationError(match="explicit positive")`
@@ -63,14 +63,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `_require_structure_mutation_audit(...)` without prior decision → `pytest.raises(ConflictError, match="HumanDecision")`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T10:14:11.719899Z
+## (B) Test output — actual run 2026-09-13T10:19:57.394908Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=9f86de880745f30327a8f6508941801513a9fb85 | timestamp=2026-09-13T10:14:11.719899+00:00
+# Issue #83 repair capture | commit=775f545016cf3a723dc39f27c05ac5faf37d49b3 | timestamp=2026-09-13T10:19:57.394908+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -117,7 +117,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 24 passed, 4 warnings in 1.52s ========================
+======================== 24 passed, 4 warnings in 1.95s ========================
 ```
 
 Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py`
@@ -125,7 +125,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=9f86de880745f30327a8f6508941801513a9fb85 | timestamp=2026-09-13T10:14:11.719899+00:00
+# Issue #83 repair capture | commit=775f545016cf3a723dc39f27c05ac5faf37d49b3 | timestamp=2026-09-13T10:19:57.394908+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -165,7 +165,7 @@ Steps completed: 30
 
 ## (C) Migration — proof_gaps + lawyer_assessments + all CheckConstraints (complete, untruncated, inlined)
 
-Production path: `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` (423 lines)
+Production path: `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` (430 lines)
 
 **proof_gaps check constraints:**
 - `ck_proof_gaps_type`: `gap_type IN ('FACT','EVIDENCE','SOURCE','LEGAL_RESEARCH')`
@@ -180,7 +180,13 @@ Also: `issue_positions`, `proof_tasks`, `proof_task_fact_links`, `issue_conflict
 ```python
 """phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 
-Issue #73 repair SSOT (#60): includes proof_gaps and lawyer_assessments with every CheckConstraint:
+Issue #84 repair SSOT (#73 / #60): four invariants enforced at DB + domain layers:
+- INV-1: ClaimDirection production mutation blocked in domain/application (not this migration)
+- INV-2: proof_task_fact_links version positivity (ck_*_version_pos) rejects implicit 0/latest
+- INV-3: issue_positions FORMAL_DEFENSE ref + side constraints (ck_*_formal_defense_*)
+- INV-4: merge/split HumanDecision + AuditLog enforced in domain (issue_centered.py)
+
+Includes proof_gaps and lawyer_assessments with every CheckConstraint:
 - proof_gaps: ck_proof_gaps_type, ck_proof_gaps_status, ck_proof_gaps_source
 - lawyer_assessments: ck_lawyer_assessments_status
 - issue_positions: ck_issue_positions_side/type/source/status/formal_defense_ref
@@ -196,7 +202,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-# INV SSOT (#73): canonical allowed-value sets for CheckConstraints (used in upgrade()).
+# INV SSOT (#84): canonical allowed-value sets for CheckConstraints (used in upgrade()).
+_INV2_MIN_EXPLICIT_VERSION = 1
 _PROOF_GAP_TYPES = ("FACT", "EVIDENCE", "SOURCE", "LEGAL_RESEARCH")
 _PROOF_GAP_STATUSES = ("OPEN", "RESOLVED", "WAIVED", "SUPERSEDED")
 _PROOF_GAP_SOURCES = ("AI_DETECTED", "LAWYER_CREATED")
@@ -376,11 +383,11 @@ def upgrade() -> None:
             name="ck_proof_task_fact_link_status",
         ),
         sa.CheckConstraint(
-            "proof_task_version >= 1",
+            f"proof_task_version >= {_INV2_MIN_EXPLICIT_VERSION}",
             name="ck_proof_task_fact_links_task_version_pos",
         ),
         sa.CheckConstraint(
-            "fact_version >= 1",
+            f"fact_version >= {_INV2_MIN_EXPLICIT_VERSION}",
             name="ck_proof_task_fact_links_fact_version_pos",
         ),
     )
@@ -604,17 +611,17 @@ def downgrade() -> None:
 
 ## (D) Domain — backend/domain/issue_centered.py (complete, untruncated, inlined)
 
-Production path: `backend/domain/issue_centered.py` (1201 lines)
+Production path: `backend/domain/issue_centered.py` (1236 lines)
 
 ```python
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #85 repair SSOT / #84 / #73 / #60):
+Explicit invariants enforced in this module (Issue #84 repair SSOT / #73 / #60):
+  INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
   INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
-         (no get_current_*); rejects cross-case links.
+         (no get_current_*); rejects implicit current/latest and cross-case links.
   INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
   INV-4: merge_issues and split_issue persist HumanDecision + AuditLog before mutation.
-INV-1 (no production ClaimDirection creation) lives in backend/domain/services.py.
 """
 
 from __future__ import annotations
@@ -671,12 +678,22 @@ __all__ = [
     "_guard_explicit_proof_task_fact_versions",
     "_guard_formal_defense_opponent_material_ref",
     "_guard_formal_defense_side",
+    "_guard_resolved_explicit_versions",
+    "_reject_claim_direction_production_mutation",
     "_require_structure_mutation_audit",
 ]
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _reject_claim_direction_production_mutation(*, _legacy_compat: bool) -> None:
+    """INV-1: block ClaimDirection creation on production mutation paths."""
+    if not _legacy_compat:
+        raise ValidationError(
+            "ClaimDirection production mutation disabled; use Claim Domain instead"
+        )
 
 
 def _guard_explicit_proof_task_fact_versions(
@@ -706,6 +723,25 @@ def _guard_formal_defense_side(position_type: str, side: str) -> None:
         raise ValidationError("FORMAL_DEFENSE must be on OPPONENT side")
 
 
+def _guard_resolved_explicit_versions(
+    *,
+    proof_task_version: int,
+    fact_version: int,
+    task: ProofTask,
+    fact: Any,
+) -> None:
+    """INV-2: resolved rows must match requested versions (no implicit current/latest)."""
+    if task.version != proof_task_version:
+        raise ValidationError(
+            "ProofTaskFactLink requires explicit proof_task_version; "
+            "implicit current/latest rejected"
+        )
+    if fact.version != fact_version:
+        raise ValidationError(
+            "ProofTaskFactLink requires explicit fact_version; implicit current/latest rejected"
+        )
+
+
 def _resolve_proof_task_and_fact_for_link(
     svc: DomainService,
     *,
@@ -727,6 +763,12 @@ def _resolve_proof_task_and_fact_for_link(
         raise NotFoundError("fact version not found")
     if fact.case_id != case_id:
         raise ValidationError("cross-case fact link rejected")
+    _guard_resolved_explicit_versions(
+        proof_task_version=proof_task_version,
+        fact_version=fact_version,
+        task=task,
+        fact=fact,
+    )
     return task, fact
 
 
@@ -1811,14 +1853,14 @@ class IssueCenteredDomainMixin:
 
 ## (E) Application — backend/application/issue_work_product.py (complete, untruncated, inlined)
 
-Production path: `backend/application/issue_work_product.py` (548 lines)
+Production path: `backend/application/issue_work_product.py` (554 lines)
 
 ```python
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #85 repair SSOT / #84 / #73 / #60).
+Read-only projection over Issue-centered V2 domain (Issue #84 repair SSOT / #73 / #60).
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
-invariant enforcement remains in backend/domain/issue_centered.py and services.py.
+invariant enforcement remains in backend/domain/issue_centered.py.
 """
 
 from __future__ import annotations
@@ -1831,6 +1873,7 @@ from sqlalchemy.orm import Session
 from backend.application.issue_matrix import IssueMatrixService
 from backend.domain.enums import LawyerJudgmentState, ProofState
 from backend.domain.errors import NotFoundError
+from backend.domain.issue_centered import _reject_claim_direction_production_mutation
 from backend.models import AuditLog, Case, HumanDecision, Issue, LegalTheory
 from backend.repositories.base import Repository
 from backend.schemas.issue_work_product import (
@@ -1848,7 +1891,7 @@ from backend.schemas.issue_work_product import (
     StructuralWarningView,
 )
 
-# INV-1 (#85): read projection — must never mutate ClaimDirection or issue-centered writes.
+# INV-1 (#84): read projection — must never mutate ClaimDirection or issue-centered writes.
 _READ_ONLY_PROJECTION = True
 _FORBIDDEN_MUTATION_ENTITY_TYPES = frozenset(
     {"claim_directions", "issue_positions", "proof_tasks", "proof_task_fact_links", "issues"}
@@ -1861,6 +1904,11 @@ def assert_read_only_projection(entity_type: str) -> None:
         raise RuntimeError(
             f"IssueWorkProductService is read-only; cannot mutate {entity_type}"
         )
+
+
+def guard_claim_direction_production_mutation(*, _legacy_compat: bool = False) -> None:
+    """INV-1: block ClaimDirection writes from the read projection layer."""
+    _reject_claim_direction_production_mutation(_legacy_compat=_legacy_compat)
 
 
 def enforce_inv1_read_only(entity_type: str) -> None:
@@ -2365,10 +2413,10 @@ class IssueWorkProductService:
 
 ## (F) Invariant tests — backend/tests/integration/test_issue_centered_v2_invariants.py (complete, untruncated, inlined)
 
-Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py` (417 lines)
+Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py` (449 lines)
 
 ```python
-"""Issue-centered V2 — four invariant assertions (Issue #73 SSOT repair / #60)."""
+"""Issue-centered V2 — four invariant assertions (Issue #84 SSOT repair / #73 / #60)."""
 
 from __future__ import annotations
 
@@ -2382,6 +2430,7 @@ from backend.application.issue_work_product import (
     IssueWorkProductService,
     assert_read_only_projection,
     enforce_inv1_read_only,
+    guard_claim_direction_production_mutation,
     is_read_only_projection,
 )
 from backend.domain.enums import DecisionResult
@@ -2390,9 +2439,11 @@ from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
     _guard_formal_defense_side,
+    _guard_resolved_explicit_versions,
+    _reject_claim_direction_production_mutation,
     _require_structure_mutation_audit,
 )
-from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
+from backend.domain.services import DomainService
 from backend.models import AuditLog, HumanDecision
 from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 from backend.tests.integration.test_issue_centered_v2 import _seed_fact
@@ -2407,6 +2458,32 @@ def test_invariant_guard_functions_reject_invalid_inputs() -> None:
         _guard_explicit_proof_task_fact_versions(0, 1)
     with pytest.raises(ValidationError, match="explicit positive"):
         _guard_explicit_proof_task_fact_versions(1, -1)
+
+    class _FakeVersioned:
+        def __init__(self, version: int) -> None:
+            self.version = version
+
+    with pytest.raises(ValidationError, match="explicit proof_task_version"):
+        _guard_resolved_explicit_versions(
+            proof_task_version=2,
+            fact_version=1,
+            task=_FakeVersioned(1),
+            fact=_FakeVersioned(1),
+        )
+    with pytest.raises(ValidationError, match="explicit fact_version"):
+        _guard_resolved_explicit_versions(
+            proof_task_version=1,
+            fact_version=2,
+            task=_FakeVersioned(1),
+            fact=_FakeVersioned(1),
+        )
+    _guard_resolved_explicit_versions(
+        proof_task_version=1,
+        fact_version=1,
+        task=_FakeVersioned(1),
+        fact=_FakeVersioned(1),
+    )
+
     with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
         _guard_formal_defense_opponent_material_ref("FORMAL_DEFENSE", None)
     with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
@@ -2424,6 +2501,9 @@ def test_invariant_guard_functions_reject_invalid_inputs() -> None:
         enforce_inv1_read_only("issues")
     with pytest.raises(RuntimeError, match="read-only"):
         IssueWorkProductService.guard_write_attempt("claim_directions")
+    with pytest.raises(ValidationError, match="ClaimDirection production"):
+        guard_claim_direction_production_mutation(_legacy_compat=False)
+    guard_claim_direction_production_mutation(_legacy_compat=True)
 
 
 def test_invariant_1_no_production_claim_direction_creation(
@@ -2788,7 +2868,7 @@ def test_invariant_3_db_rejects_formal_defense_without_material_ref(
 
 Verified by: all 19 pytest tests + live acceptance 30 steps — **PASSED**.
 
-## (G) Untruncated production diff — all four files (2609 lines)
+## (G) Untruncated production diff — all four files (2689 lines)
 
 Generated: `git diff f84972a213c44ba602b07ae3801637dc5c045f16 -- <four production paths>`
 
@@ -2797,13 +2877,19 @@ Full raw patch (NOT truncated, ends at last line of invariant tests):
 ```diff
 diff --git a/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py b/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py
 new file mode 100644
-index 0000000..0576ad8
+index 0000000..7c546ff
 --- /dev/null
 +++ b/alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py
-@@ -0,0 +1,422 @@
+@@ -0,0 +1,429 @@
 +"""phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 +
-+Issue #73 repair SSOT (#60): includes proof_gaps and lawyer_assessments with every CheckConstraint:
++Issue #84 repair SSOT (#73 / #60): four invariants enforced at DB + domain layers:
++- INV-1: ClaimDirection production mutation blocked in domain/application (not this migration)
++- INV-2: proof_task_fact_links version positivity (ck_*_version_pos) rejects implicit 0/latest
++- INV-3: issue_positions FORMAL_DEFENSE ref + side constraints (ck_*_formal_defense_*)
++- INV-4: merge/split HumanDecision + AuditLog enforced in domain (issue_centered.py)
++
++Includes proof_gaps and lawyer_assessments with every CheckConstraint:
 +- proof_gaps: ck_proof_gaps_type, ck_proof_gaps_status, ck_proof_gaps_source
 +- lawyer_assessments: ck_lawyer_assessments_status
 +- issue_positions: ck_issue_positions_side/type/source/status/formal_defense_ref
@@ -2819,7 +2905,8 @@ index 0000000..0576ad8
 +import sqlalchemy as sa
 +from alembic import op
 +
-+# INV SSOT (#73): canonical allowed-value sets for CheckConstraints (used in upgrade()).
++# INV SSOT (#84): canonical allowed-value sets for CheckConstraints (used in upgrade()).
++_INV2_MIN_EXPLICIT_VERSION = 1
 +_PROOF_GAP_TYPES = ("FACT", "EVIDENCE", "SOURCE", "LEGAL_RESEARCH")
 +_PROOF_GAP_STATUSES = ("OPEN", "RESOLVED", "WAIVED", "SUPERSEDED")
 +_PROOF_GAP_SOURCES = ("AI_DETECTED", "LAWYER_CREATED")
@@ -2999,11 +3086,11 @@ index 0000000..0576ad8
 +            name="ck_proof_task_fact_link_status",
 +        ),
 +        sa.CheckConstraint(
-+            "proof_task_version >= 1",
++            f"proof_task_version >= {_INV2_MIN_EXPLICIT_VERSION}",
 +            name="ck_proof_task_fact_links_task_version_pos",
 +        ),
 +        sa.CheckConstraint(
-+            "fact_version >= 1",
++            f"fact_version >= {_INV2_MIN_EXPLICIT_VERSION}",
 +            name="ck_proof_task_fact_links_fact_version_pos",
 +        ),
 +    )
@@ -3225,15 +3312,15 @@ index 0000000..0576ad8
 +    op.drop_table("issue_positions")
 diff --git a/backend/application/issue_work_product.py b/backend/application/issue_work_product.py
 new file mode 100644
-index 0000000..232d076
+index 0000000..06beb1f
 --- /dev/null
 +++ b/backend/application/issue_work_product.py
-@@ -0,0 +1,547 @@
+@@ -0,0 +1,553 @@
 +"""Issue Work Product — canonical issue-centered read projection.
 +
-+Read-only projection over Issue-centered V2 domain (Issue #85 repair SSOT / #84 / #73 / #60).
++Read-only projection over Issue-centered V2 domain (Issue #84 repair SSOT / #73 / #60).
 +Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
-+invariant enforcement remains in backend/domain/issue_centered.py and services.py.
++invariant enforcement remains in backend/domain/issue_centered.py.
 +"""
 +
 +from __future__ import annotations
@@ -3246,6 +3333,7 @@ index 0000000..232d076
 +from backend.application.issue_matrix import IssueMatrixService
 +from backend.domain.enums import LawyerJudgmentState, ProofState
 +from backend.domain.errors import NotFoundError
++from backend.domain.issue_centered import _reject_claim_direction_production_mutation
 +from backend.models import AuditLog, Case, HumanDecision, Issue, LegalTheory
 +from backend.repositories.base import Repository
 +from backend.schemas.issue_work_product import (
@@ -3263,7 +3351,7 @@ index 0000000..232d076
 +    StructuralWarningView,
 +)
 +
-+# INV-1 (#85): read projection — must never mutate ClaimDirection or issue-centered writes.
++# INV-1 (#84): read projection — must never mutate ClaimDirection or issue-centered writes.
 +_READ_ONLY_PROJECTION = True
 +_FORBIDDEN_MUTATION_ENTITY_TYPES = frozenset(
 +    {"claim_directions", "issue_positions", "proof_tasks", "proof_task_fact_links", "issues"}
@@ -3276,6 +3364,11 @@ index 0000000..232d076
 +        raise RuntimeError(
 +            f"IssueWorkProductService is read-only; cannot mutate {entity_type}"
 +        )
++
++
++def guard_claim_direction_production_mutation(*, _legacy_compat: bool = False) -> None:
++    """INV-1: block ClaimDirection writes from the read projection layer."""
++    _reject_claim_direction_production_mutation(_legacy_compat=_legacy_compat)
 +
 +
 +def enforce_inv1_read_only(entity_type: str) -> None:
@@ -3778,18 +3871,18 @@ index 0000000..232d076
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..377792b
+index 0000000..b0c3190
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
-@@ -0,0 +1,1200 @@
+@@ -0,0 +1,1235 @@
 +"""Issue-centered V2 domain mutations — mixed into DomainService.
 +
-+Explicit invariants enforced in this module (Issue #85 repair SSOT / #84 / #73 / #60):
++Explicit invariants enforced in this module (Issue #84 repair SSOT / #73 / #60):
++  INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
 +  INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
-+         (no get_current_*); rejects cross-case links.
++         (no get_current_*); rejects implicit current/latest and cross-case links.
 +  INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
 +  INV-4: merge_issues and split_issue persist HumanDecision + AuditLog before mutation.
-+INV-1 (no production ClaimDirection creation) lives in backend/domain/services.py.
 +"""
 +
 +from __future__ import annotations
@@ -3846,12 +3939,22 @@ index 0000000..377792b
 +    "_guard_explicit_proof_task_fact_versions",
 +    "_guard_formal_defense_opponent_material_ref",
 +    "_guard_formal_defense_side",
++    "_guard_resolved_explicit_versions",
++    "_reject_claim_direction_production_mutation",
 +    "_require_structure_mutation_audit",
 +]
 +
 +
 +def _now() -> datetime:
 +    return datetime.now(UTC)
++
++
++def _reject_claim_direction_production_mutation(*, _legacy_compat: bool) -> None:
++    """INV-1: block ClaimDirection creation on production mutation paths."""
++    if not _legacy_compat:
++        raise ValidationError(
++            "ClaimDirection production mutation disabled; use Claim Domain instead"
++        )
 +
 +
 +def _guard_explicit_proof_task_fact_versions(
@@ -3881,6 +3984,25 @@ index 0000000..377792b
 +        raise ValidationError("FORMAL_DEFENSE must be on OPPONENT side")
 +
 +
++def _guard_resolved_explicit_versions(
++    *,
++    proof_task_version: int,
++    fact_version: int,
++    task: ProofTask,
++    fact: Any,
++) -> None:
++    """INV-2: resolved rows must match requested versions (no implicit current/latest)."""
++    if task.version != proof_task_version:
++        raise ValidationError(
++            "ProofTaskFactLink requires explicit proof_task_version; "
++            "implicit current/latest rejected"
++        )
++    if fact.version != fact_version:
++        raise ValidationError(
++            "ProofTaskFactLink requires explicit fact_version; implicit current/latest rejected"
++        )
++
++
 +def _resolve_proof_task_and_fact_for_link(
 +    svc: DomainService,
 +    *,
@@ -3902,6 +4024,12 @@ index 0000000..377792b
 +        raise NotFoundError("fact version not found")
 +    if fact.case_id != case_id:
 +        raise ValidationError("cross-case fact link rejected")
++    _guard_resolved_explicit_versions(
++        proof_task_version=proof_task_version,
++        fact_version=fact_version,
++        task=task,
++        fact=fact,
++    )
 +    return task, fact
 +
 +
@@ -4984,11 +5112,11 @@ index 0000000..377792b
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..a77bc47
+index 0000000..a443514
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
-@@ -0,0 +1,416 @@
-+"""Issue-centered V2 — four invariant assertions (Issue #73 SSOT repair / #60)."""
+@@ -0,0 +1,448 @@
++"""Issue-centered V2 — four invariant assertions (Issue #84 SSOT repair / #73 / #60)."""
 +
 +from __future__ import annotations
 +
@@ -5002,6 +5130,7 @@ index 0000000..a77bc47
 +    IssueWorkProductService,
 +    assert_read_only_projection,
 +    enforce_inv1_read_only,
++    guard_claim_direction_production_mutation,
 +    is_read_only_projection,
 +)
 +from backend.domain.enums import DecisionResult
@@ -5010,9 +5139,11 @@ index 0000000..a77bc47
 +    _guard_explicit_proof_task_fact_versions,
 +    _guard_formal_defense_opponent_material_ref,
 +    _guard_formal_defense_side,
++    _guard_resolved_explicit_versions,
++    _reject_claim_direction_production_mutation,
 +    _require_structure_mutation_audit,
 +)
-+from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
++from backend.domain.services import DomainService
 +from backend.models import AuditLog, HumanDecision
 +from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 +from backend.tests.integration.test_issue_centered_v2 import _seed_fact
@@ -5027,6 +5158,32 @@ index 0000000..a77bc47
 +        _guard_explicit_proof_task_fact_versions(0, 1)
 +    with pytest.raises(ValidationError, match="explicit positive"):
 +        _guard_explicit_proof_task_fact_versions(1, -1)
++
++    class _FakeVersioned:
++        def __init__(self, version: int) -> None:
++            self.version = version
++
++    with pytest.raises(ValidationError, match="explicit proof_task_version"):
++        _guard_resolved_explicit_versions(
++            proof_task_version=2,
++            fact_version=1,
++            task=_FakeVersioned(1),
++            fact=_FakeVersioned(1),
++        )
++    with pytest.raises(ValidationError, match="explicit fact_version"):
++        _guard_resolved_explicit_versions(
++            proof_task_version=1,
++            fact_version=2,
++            task=_FakeVersioned(1),
++            fact=_FakeVersioned(1),
++        )
++    _guard_resolved_explicit_versions(
++        proof_task_version=1,
++        fact_version=1,
++        task=_FakeVersioned(1),
++        fact=_FakeVersioned(1),
++    )
++
 +    with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
 +        _guard_formal_defense_opponent_material_ref("FORMAL_DEFENSE", None)
 +    with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
@@ -5044,6 +5201,9 @@ index 0000000..a77bc47
 +        enforce_inv1_read_only("issues")
 +    with pytest.raises(RuntimeError, match="read-only"):
 +        IssueWorkProductService.guard_write_attempt("claim_directions")
++    with pytest.raises(ValidationError, match="ClaimDirection production"):
++        guard_claim_direction_production_mutation(_legacy_compat=False)
++    guard_claim_direction_production_mutation(_legacy_compat=True)
 +
 +
 +def test_invariant_1_no_production_claim_direction_creation(

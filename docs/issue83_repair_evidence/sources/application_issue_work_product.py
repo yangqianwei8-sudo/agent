@@ -1,8 +1,8 @@
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #85 repair SSOT / #84 / #73 / #60).
+Read-only projection over Issue-centered V2 domain (Issue #84 repair SSOT / #73 / #60).
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
-invariant enforcement remains in backend/domain/issue_centered.py and services.py.
+invariant enforcement remains in backend/domain/issue_centered.py.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from backend.application.issue_matrix import IssueMatrixService
 from backend.domain.enums import LawyerJudgmentState, ProofState
 from backend.domain.errors import NotFoundError
+from backend.domain.issue_centered import _reject_claim_direction_production_mutation
 from backend.models import AuditLog, Case, HumanDecision, Issue, LegalTheory
 from backend.repositories.base import Repository
 from backend.schemas.issue_work_product import (
@@ -32,7 +33,7 @@ from backend.schemas.issue_work_product import (
     StructuralWarningView,
 )
 
-# INV-1 (#85): read projection — must never mutate ClaimDirection or issue-centered writes.
+# INV-1 (#84): read projection — must never mutate ClaimDirection or issue-centered writes.
 _READ_ONLY_PROJECTION = True
 _FORBIDDEN_MUTATION_ENTITY_TYPES = frozenset(
     {"claim_directions", "issue_positions", "proof_tasks", "proof_task_fact_links", "issues"}
@@ -45,6 +46,11 @@ def assert_read_only_projection(entity_type: str) -> None:
         raise RuntimeError(
             f"IssueWorkProductService is read-only; cannot mutate {entity_type}"
         )
+
+
+def guard_claim_direction_production_mutation(*, _legacy_compat: bool = False) -> None:
+    """INV-1: block ClaimDirection writes from the read projection layer."""
+    _reject_claim_direction_production_mutation(_legacy_compat=_legacy_compat)
 
 
 def enforce_inv1_read_only(entity_type: str) -> None:

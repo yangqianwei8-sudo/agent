@@ -1,4 +1,4 @@
-"""Issue-centered V2 — four invariant assertions (Issue #73 SSOT repair / #60)."""
+"""Issue-centered V2 — four invariant assertions (Issue #84 SSOT repair / #73 / #60)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from backend.application.issue_work_product import (
     IssueWorkProductService,
     assert_read_only_projection,
     enforce_inv1_read_only,
+    guard_claim_direction_production_mutation,
     is_read_only_projection,
 )
 from backend.domain.enums import DecisionResult
@@ -20,9 +21,11 @@ from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
     _guard_formal_defense_side,
+    _guard_resolved_explicit_versions,
+    _reject_claim_direction_production_mutation,
     _require_structure_mutation_audit,
 )
-from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
+from backend.domain.services import DomainService
 from backend.models import AuditLog, HumanDecision
 from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 from backend.tests.integration.test_issue_centered_v2 import _seed_fact
@@ -37,6 +40,32 @@ def test_invariant_guard_functions_reject_invalid_inputs() -> None:
         _guard_explicit_proof_task_fact_versions(0, 1)
     with pytest.raises(ValidationError, match="explicit positive"):
         _guard_explicit_proof_task_fact_versions(1, -1)
+
+    class _FakeVersioned:
+        def __init__(self, version: int) -> None:
+            self.version = version
+
+    with pytest.raises(ValidationError, match="explicit proof_task_version"):
+        _guard_resolved_explicit_versions(
+            proof_task_version=2,
+            fact_version=1,
+            task=_FakeVersioned(1),
+            fact=_FakeVersioned(1),
+        )
+    with pytest.raises(ValidationError, match="explicit fact_version"):
+        _guard_resolved_explicit_versions(
+            proof_task_version=1,
+            fact_version=2,
+            task=_FakeVersioned(1),
+            fact=_FakeVersioned(1),
+        )
+    _guard_resolved_explicit_versions(
+        proof_task_version=1,
+        fact_version=1,
+        task=_FakeVersioned(1),
+        fact=_FakeVersioned(1),
+    )
+
     with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
         _guard_formal_defense_opponent_material_ref("FORMAL_DEFENSE", None)
     with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
@@ -54,6 +83,9 @@ def test_invariant_guard_functions_reject_invalid_inputs() -> None:
         enforce_inv1_read_only("issues")
     with pytest.raises(RuntimeError, match="read-only"):
         IssueWorkProductService.guard_write_attempt("claim_directions")
+    with pytest.raises(ValidationError, match="ClaimDirection production"):
+        guard_claim_direction_production_mutation(_legacy_compat=False)
+    guard_claim_direction_production_mutation(_legacy_compat=True)
 
 
 def test_invariant_1_no_production_claim_direction_creation(
