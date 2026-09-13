@@ -14,6 +14,7 @@ from backend.application.issue_work_product import (
     enforce_inv1_read_only,
     is_read_only_projection,
 )
+from backend.domain.enums import DecisionResult
 from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
@@ -21,7 +22,6 @@ from backend.domain.issue_centered import (
     _guard_formal_defense_side,
     _require_structure_mutation_audit,
 )
-from backend.domain.enums import DecisionResult
 from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
 from backend.models import AuditLog, HumanDecision
 from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
