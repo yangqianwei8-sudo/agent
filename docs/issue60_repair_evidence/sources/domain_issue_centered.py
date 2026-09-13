@@ -1,11 +1,11 @@
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #60 / #73 / #80):
+Explicit invariants enforced in this module (Issue #60 repair SSOT / #83 / #86 / #85 / #84 / #73):
+  INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
   INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
-         (no get_current_*); rejects cross-case links.
+         (no get_current_*); rejects implicit current/latest and cross-case links.
   INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
   INV-4: merge_issues and split_issue persist HumanDecision + AuditLog before mutation.
-INV-1 (no production ClaimDirection creation) lives in backend/domain/services.py.
 """
 
 from __future__ import annotations
@@ -40,7 +40,9 @@ from backend.domain.enums import (
 )
 from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.models import (
+    AuditLog,
     ConflictFactLink,
+    HumanDecision,
     Issue,
     IssueConflict,
     IssueFactLink,
@@ -55,9 +57,37 @@ from backend.models import (
 if TYPE_CHECKING:
     from backend.domain.services import DomainService
 
+__all__ = [
+    "IssueCenteredDomainMixin",
+    "_guard_cross_case_proof_task_fact_pair",
+    "_guard_explicit_proof_task_fact_versions",
+    "_guard_formal_defense_opponent_material_ref",
+    "_guard_formal_defense_side",
+    "_guard_resolved_explicit_versions",
+    "_normalize_opponent_material_ref",
+    "_reject_claim_direction_production_mutation",
+    "_require_structure_mutation_audit",
+]
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _reject_claim_direction_production_mutation(*, _legacy_compat: bool) -> None:
+    """INV-1: block ClaimDirection creation on production mutation paths."""
+    if not _legacy_compat:
+        raise ValidationError(
+            "ClaimDirection production mutation disabled; use Claim Domain instead"
+        )
+
+
+def _normalize_opponent_material_ref(ref: str | None) -> str | None:
+    """INV-3: strip whitespace so blank refs cannot bypass FORMAL_DEFENSE guard."""
+    if ref is None:
+        return None
+    stripped = ref.strip()
+    return stripped or None
 
 
 def _guard_explicit_proof_task_fact_versions(
@@ -81,6 +111,37 @@ def _guard_formal_defense_opponent_material_ref(
             raise ValidationError("FORMAL_DEFENSE requires opponent material reference")
 
 
+def _guard_formal_defense_side(position_type: str, side: str) -> None:
+    """INV-3: FORMAL_DEFENSE positions must be recorded on the OPPONENT side."""
+    if position_type == PositionType.FORMAL_DEFENSE.value and side != PositionSide.OPPONENT.value:
+        raise ValidationError("FORMAL_DEFENSE must be on OPPONENT side")
+
+
+def _guard_cross_case_proof_task_fact_pair(task: ProofTask, fact: Any) -> None:
+    """INV-2: proof task and fact must belong to the same case."""
+    if task.case_id != fact.case_id:
+        raise ValidationError("cross-case proof task fact link rejected")
+
+
+def _guard_resolved_explicit_versions(
+    *,
+    proof_task_version: int,
+    fact_version: int,
+    task: ProofTask,
+    fact: Any,
+) -> None:
+    """INV-2: resolved rows must match requested versions (no implicit current/latest)."""
+    if task.version != proof_task_version:
+        raise ValidationError(
+            "ProofTaskFactLink requires explicit proof_task_version; "
+            "implicit current/latest rejected"
+        )
+    if fact.version != fact_version:
+        raise ValidationError(
+            "ProofTaskFactLink requires explicit fact_version; implicit current/latest rejected"
+        )
+
+
 def _resolve_proof_task_and_fact_for_link(
     svc: DomainService,
     *,
@@ -102,6 +163,12 @@ def _resolve_proof_task_and_fact_for_link(
         raise NotFoundError("fact version not found")
     if fact.case_id != case_id:
         raise ValidationError("cross-case fact link rejected")
+    _guard_resolved_explicit_versions(
+        proof_task_version=proof_task_version,
+        fact_version=fact_version,
+        task=task,
+        fact=fact,
+    )
     return task, fact
 
 
@@ -129,6 +196,41 @@ def _persist_issue_structure_decision(
     if decision.id is None:
         raise ConflictError(f"{decision_type} decision failed to persist")
     return decision
+
+
+def _require_structure_mutation_audit(
+    svc: DomainService,
+    *,
+    case_id: UUID,
+    action: str,
+    decision_type: str,
+) -> None:
+    """INV-4: merge/split must emit HumanDecision + AuditLog before returning."""
+    from sqlalchemy import select
+
+    decision = svc.session.scalars(
+        select(HumanDecision)
+        .where(
+            HumanDecision.case_id == case_id,
+            HumanDecision.decision_type == decision_type,
+        )
+        .order_by(HumanDecision.created_at.desc())
+        .limit(1)
+    ).first()
+    if decision is None:
+        raise ConflictError(f"{action} must emit HumanDecision before completing")
+    audit = svc.session.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.case_id == case_id,
+            AuditLog.action == action,
+            AuditLog.entity_type == "issues",
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(1)
+    ).first()
+    if audit is None:
+        raise ConflictError(f"{action} must emit AuditLog before completing")
 
 
 class IssueCenteredDomainMixin:
@@ -211,7 +313,9 @@ class IssueCenteredDomainMixin:
         issue = self._require_issue_version(issue_key, issue_version)
         if issue.case_id != case_id:
             raise ValidationError("issue case_id mismatch")
+        opponent_material_ref = _normalize_opponent_material_ref(opponent_material_ref)
         _guard_formal_defense_opponent_material_ref(position_type, opponent_material_ref)
+        _guard_formal_defense_side(position_type, side)
         if position_type == PositionType.FORMAL_DEFENSE.value:
             source = PositionSourceType.OPPONENT_MATERIAL.value
         else:
@@ -493,8 +597,10 @@ class IssueCenteredDomainMixin:
         role: str,
         actor_id: UUID,
     ) -> ProofTaskFactLink:
+        # INV-2: reject invalid/implicit versions before any DB row lookup.
+        _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
         self._require_case(case_id)
-        _resolve_proof_task_and_fact_for_link(
+        task, fact = _resolve_proof_task_and_fact_for_link(
             self,
             case_id=case_id,
             proof_task_key=proof_task_key,
@@ -502,6 +608,7 @@ class IssueCenteredDomainMixin:
             fact_key=fact_key,
             fact_version=fact_version,
         )
+        _guard_cross_case_proof_task_fact_pair(task, fact)
         if role not in {r.value for r in ProofTaskFactLinkRole}:
             raise ValidationError(f"invalid proof task fact link role: {role}")
         link = ProofTaskFactLink(
@@ -1017,7 +1124,14 @@ class IssueCenteredDomainMixin:
             after={
                 "issue_key": str(merged.issue_key),
                 "merged_from": [str(k) for k in source_issue_keys],
+                "decision_id": str(decision.id),
             },
+        )
+        _require_structure_mutation_audit(
+            self,
+            case_id=case_id,
+            action="merge_issues",
+            decision_type="MERGE_ISSUES",
         )
         return merged
 
@@ -1093,7 +1207,14 @@ class IssueCenteredDomainMixin:
             after={
                 "source_key": str(source_issue_key),
                 "new_keys": [str(i.issue_key) for i in created],
+                "decision_id": str(decision.id),
             },
+        )
+        _require_structure_mutation_audit(
+            self,
+            case_id=case_id,
+            action="split_issue",
+            decision_type="SPLIT_ISSUE",
         )
         return created
 

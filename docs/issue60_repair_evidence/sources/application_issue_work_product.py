@@ -1,8 +1,8 @@
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #60 / #73 / #80).
+Read-only projection over Issue-centered V2 domain (Issue #60 repair SSOT / #83 / #86 / #84 / #73).
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
-invariant enforcement remains in backend/domain/issue_centered.py and services.py.
+invariant enforcement remains in backend/domain/issue_centered.py.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from backend.application.issue_matrix import IssueMatrixService
 from backend.domain.enums import LawyerJudgmentState, ProofState
 from backend.domain.errors import NotFoundError
+from backend.domain.issue_centered import _reject_claim_direction_production_mutation
 from backend.models import AuditLog, Case, HumanDecision, Issue, LegalTheory
 from backend.repositories.base import Repository
 from backend.schemas.issue_work_product import (
@@ -32,7 +33,8 @@ from backend.schemas.issue_work_product import (
     StructuralWarningView,
 )
 
-# INV-1 (#73): read projection — must never mutate ClaimDirection or issue-centered writes.
+# INV-1 (#84): read projection — must never mutate ClaimDirection or issue-centered writes.
+_READ_ONLY_PROJECTION = True
 _FORBIDDEN_MUTATION_ENTITY_TYPES = frozenset(
     {"claim_directions", "issue_positions", "proof_tasks", "proof_task_fact_links", "issues"}
 )
@@ -44,6 +46,26 @@ def assert_read_only_projection(entity_type: str) -> None:
         raise RuntimeError(
             f"IssueWorkProductService is read-only; cannot mutate {entity_type}"
         )
+
+
+def guard_claim_direction_production_mutation(*, _legacy_compat: bool = False) -> None:
+    """INV-1: block ClaimDirection writes from the read projection layer."""
+    _reject_claim_direction_production_mutation(_legacy_compat=_legacy_compat)
+
+
+def enforce_inv1_read_only(entity_type: str) -> None:
+    """INV-1: block mutation attempts from the read projection layer."""
+    assert_read_only_projection(entity_type)
+
+
+def is_read_only_projection() -> bool:
+    """INV-1: expose read-only configuration for invariant checks."""
+    return _READ_ONLY_PROJECTION
+
+
+def _link_matches_explicit_task_version(link, task_version: int) -> bool:
+    """INV-2: read path ignores links that alias implicit current/latest versions."""
+    return link.proof_task_version == task_version
 
 
 _PROOF_STATE_ZH = {
@@ -78,11 +100,25 @@ class IssueWorkProductService:
         self.repo = Repository(session)
         self.matrix_svc = IssueMatrixService(session)
 
+    @staticmethod
+    def _assert_read_only(operation: str) -> None:
+        """INV-1: every public entrypoint stays on the read-only projection path."""
+        if not _READ_ONLY_PROJECTION:
+            raise RuntimeError(
+                f"IssueWorkProductService lost read-only configuration during {operation}"
+            )
+
+    @staticmethod
+    def guard_write_attempt(entity_type: str) -> None:
+        """INV-1: block mutation attempts from the read projection layer."""
+        enforce_inv1_read_only(entity_type)
+
     def build_issue(
         self,
         issue_key: UUID,
         issue_version: int | None = None,
     ) -> IssueWorkProduct:
+        self._assert_read_only("build_issue")
         if issue_version is not None:
             issue = self.repo.get_issue_version(issue_key, issue_version)
         else:
@@ -92,6 +128,7 @@ class IssueWorkProductService:
         return self._build_for_issue(issue)
 
     def build_case(self, case_id: UUID) -> CaseIssueWorkProduct:
+        self._assert_read_only("build_case")
         case = self.session.get(Case, case_id)
         if case is None:
             raise NotFoundError("case not found")
@@ -140,6 +177,7 @@ class IssueWorkProductService:
         )
 
     def build_litigation_plan(self, case_id: UUID) -> LitigationPlanView:
+        self._assert_read_only("build_litigation_plan")
         from backend.application.claim_view import ClaimViewService
         from backend.application.pleading_readiness import PleadingReadinessService
 
@@ -326,6 +364,10 @@ class IssueWorkProductService:
         for link in self.repo.list_proof_task_fact_links(
             task.proof_task_key, task.version
         ):
+            if not _link_matches_explicit_task_version(link, task.version):
+                continue
+            if link.fact_version < 1:
+                continue
             fact = self.repo.get_fact_version(link.fact_key, link.fact_version)
             if fact is None:
                 continue

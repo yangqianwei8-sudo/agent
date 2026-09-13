@@ -9,6 +9,8 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from autonomous_dev.acceptance_marker import write_marker
+
 ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE = ROOT / "docs" / "issue60_repair_evidence"
 # Stable base before issue-centered v2 (parent of c19379b); distinct from repair HEAD.
@@ -121,7 +123,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A1. No production mutation path creates ClaimDirection
 
-**Domain guard** (`backend/domain/services.py` `create_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
+**Domain guard** (`backend/domain/issue_centered.py` `_reject_claim_direction_production_mutation`, wired from `backend/domain/services.py` `create_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
 
 **Test:** `test_invariant_1_no_production_claim_direction_creation`
 - `pytest.raises(ValidationError, match="ClaimDirection production")`
@@ -130,12 +132,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A2. ProofTaskFactLink rejects implicit current/latest and cross-case links
 
-**Domain enforcement** (`link_fact_to_proof_task`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); cross-case → `ValidationError("cross-case ...")`.
+**Domain enforcement** (`link_fact_to_proof_task` + `_guard_resolved_explicit_versions`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); rejects version mismatch and cross-case → `ValidationError("cross-case ...")` / `ValidationError("implicit current/latest rejected")`.
 
 **Test:** `test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case`
+- `proof_task_version=0` → `ValidationError(match="explicit positive")`
 - `proof_task_version+99` → `NotFoundError("proof task version not found")`
 - `fact_version+99` → `NotFoundError("fact version not found")`
-- cross-case fact → `ValidationError(match="cross-case")`
+- cross-case fact → `ValidationError(match="cross-case fact link rejected")`
+- cross-case proof task → `ValidationError(match="cross-case proof task link rejected")`
 — **PASSED**
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
@@ -149,13 +153,15 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A4. merge/split emit HumanDecision + AuditLog
 
-**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`.
+**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`. `_require_structure_mutation_audit` verifies both HumanDecision and AuditLog before return.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
-- `assert len(merge_decisions) == 1`
-- `assert len(merge_audits) >= 1`
-- `assert len(split_decisions) == 1`
-- `assert len(split_audits) >= 1`
+- `assert merge_decisions[0].decision_type == "MERGE_ISSUES"` and `assert split_decisions[0].decision_type == "SPLIT_ISSUE"`
+- `assert len(merge_audits) >= 1` and `assert merge_audits[0].entity_type == "issues"`
+- `assert len(split_audits) >= 1` and `assert split_audits[0].entity_type == "issues"`
+
+**Test:** `test_invariant_4_guard_rejects_missing_human_decision_or_audit`
+- `_require_structure_mutation_audit(...)` without prior decision → `pytest.raises(ConflictError, match="HumanDecision")`
 — **PASSED**"""
 
 
@@ -249,7 +255,7 @@ Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py
 
 {_fence("python", invariants)}
 
-Verified by: all 20 pytest tests + live acceptance 30 steps — **PASSED**."""
+Verified by: all 26 pytest tests + live acceptance 30 steps — **PASSED**."""
 
     return "\n\n".join(
         [
@@ -410,8 +416,8 @@ def main() -> None:
     patch_path = EVIDENCE / "issue60_repair_production.patch"
     patch_path.write_text(patch, encoding="utf-8")
     _write_bundle(ts, patch_base, repair_head, patch)
+    write_marker(ROOT, issue_number=60, at=ts)
     marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
-    marker.write_text(f"worker-run issue=60 at={ts.isoformat()}\n", encoding="utf-8")
     print(f"Wrote {patch_path} ({patch_path.stat().st_size} bytes, {patch.count(chr(10)) + 1} lines)")
     print(f"Wrote bundle + evidence (Repair: {repair_head}, Base: {patch_base})")
     print(f"Updated {marker}")

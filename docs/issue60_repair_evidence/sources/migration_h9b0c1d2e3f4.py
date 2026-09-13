@@ -1,11 +1,17 @@
 """phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 
-Issue #60 / #73 / #80 SSOT: includes proof_gaps and lawyer_assessments with every CheckConstraint:
+Issue #83 repair SSOT (#86 / #84 / #73 / #60): four invariants enforced at DB + domain layers:
+- INV-1: ClaimDirection production mutation blocked in domain/application (not this migration)
+- INV-2: proof_task_fact_links version positivity (ck_*_version_pos) rejects implicit 0/latest
+- INV-3: issue_positions FORMAL_DEFENSE ref + side constraints (ck_*_formal_defense_*)
+- INV-4: merge/split HumanDecision + AuditLog enforced in domain (issue_centered.py)
+
+Includes proof_gaps and lawyer_assessments with every CheckConstraint:
 - proof_gaps: ck_proof_gaps_type, ck_proof_gaps_status, ck_proof_gaps_source
 - lawyer_assessments: ck_lawyer_assessments_status
-- issue_positions: ck_issue_positions_side/type/source/status
+- issue_positions: ck_issue_positions_side/type/source/status/formal_defense_ref
 - proof_tasks: ck_proof_tasks_status, ck_proof_tasks_source
-- proof_task_fact_links: ck_proof_task_fact_link_role, ck_proof_task_fact_link_status
+- proof_task_fact_links: ck_proof_task_fact_link_role/status + version positivity
 - issue_conflicts: ck_issue_conflicts_status, ck_issue_conflicts_source
 - conflict_fact_links: ck_conflict_fact_link_role
 - issue_legal_theory_links: ck_issue_legal_theory_link_role, ck_issue_legal_theory_link_status
@@ -16,7 +22,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-# INV SSOT (#73): canonical allowed-value sets for CheckConstraints (used in upgrade()).
+# INV SSOT (#84): canonical allowed-value sets for CheckConstraints (used in upgrade()).
+_INV2_MIN_EXPLICIT_VERSION = 1
 _PROOF_GAP_TYPES = ("FACT", "EVIDENCE", "SOURCE", "LEGAL_RESEARCH")
 _PROOF_GAP_STATUSES = ("OPEN", "RESOLVED", "WAIVED", "SUPERSEDED")
 _PROOF_GAP_SOURCES = ("AI_DETECTED", "LAWYER_CREATED")
@@ -26,6 +33,14 @@ _LAWYER_ASSESSMENT_STATUSES = ("ACTIVE", "SUPERSEDED", "WITHDRAWN")
 def _in_check(name: str, column: str, values: tuple[str, ...]) -> sa.CheckConstraint:
     quoted = ", ".join(f"'{v}'" for v in values)
     return sa.CheckConstraint(f"{column} IN ({quoted})", name=name)
+
+
+def _version_pos_check(name: str, column: str) -> sa.CheckConstraint:
+    """INV-2: explicit positive version columns (no implicit 0/latest)."""
+    return sa.CheckConstraint(
+        f"{column} >= {_INV2_MIN_EXPLICIT_VERSION}",
+        name=name,
+    )
 
 
 revision: str = "h9b0c1d2e3f4"
@@ -81,6 +96,15 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "status IN ('CANDIDATE','CONFIRMED','REJECTED','SUPERSEDED')",
             name="ck_issue_positions_status",
+        ),
+        sa.CheckConstraint(
+            "(position_type <> 'FORMAL_DEFENSE') OR "
+            "(opponent_material_ref IS NOT NULL AND btrim(opponent_material_ref) <> '')",
+            name="ck_issue_positions_formal_defense_ref",
+        ),
+        sa.CheckConstraint(
+            "(position_type <> 'FORMAL_DEFENSE') OR (side = 'OPPONENT')",
+            name="ck_issue_positions_formal_defense_side",
         ),
     )
     op.create_index("ix_issue_positions_case", "issue_positions", ["case_id"])
@@ -186,6 +210,8 @@ def upgrade() -> None:
             "status IN ('ACTIVE','VOID')",
             name="ck_proof_task_fact_link_status",
         ),
+        _version_pos_check("ck_proof_task_fact_links_task_version_pos", "proof_task_version"),
+        _version_pos_check("ck_proof_task_fact_links_fact_version_pos", "fact_version"),
     )
     op.create_index("ix_proof_task_fact_links_case", "proof_task_fact_links", ["case_id"])
 
@@ -263,6 +289,7 @@ def upgrade() -> None:
             "role IN ('SIDE_A','SIDE_B','CONTEXT')",
             name="ck_conflict_fact_link_role",
         ),
+        _version_pos_check("ck_conflict_fact_links_fact_version_pos", "fact_version"),
     )
     op.create_index("ix_conflict_fact_links_case", "conflict_fact_links", ["case_id"])
 
