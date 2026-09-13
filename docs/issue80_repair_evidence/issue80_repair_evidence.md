@@ -1,8 +1,8 @@
 # Issue #80 Repair Evidence — Issue-Centered V2 (#73)
 
-Generated: 2026-09-13T09:30:20.399290Z
+Generated: 2026-09-13T09:30:26.440258Z
 Base commit: `f84972a` (pre issue-centered v2; parent of c19379b)
-Repair commit: `f443bbd`
+Repair commit: `8633232`
 
 **This directory is the sole SSOT for Issue #80 repair submission.**
 
