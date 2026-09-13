@@ -165,7 +165,7 @@ def kick_reviewer_reactivation(
             issue_number=task.issue_number,
             task_id=task.id,
             attempt_count=0,
-            next_retry_at=now_iso,
+            next_retry_at=None,
             last_error="reset after exhausted cooldown",
             status=ReviewerReactivationStatus.PENDING,
             last_kick_at=None,

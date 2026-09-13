@@ -9,7 +9,6 @@ from enum import StrEnum
 from autonomous_dev.config import AutonomousDevSettings
 from autonomous_dev.execution_events import ExecutionEventType, record_review_event
 from autonomous_dev.github_client import (
-    LABEL_CURRENT_TASK,
     LABEL_CURSOR_TASK,
     GitHubClient,
     GitHubClientError,
