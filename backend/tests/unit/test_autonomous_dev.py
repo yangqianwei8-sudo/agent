@@ -1021,24 +1021,16 @@ def test_reviewer_live_acceptance_uses_marker_only_in_real_mode(
     clear_autonomous_settings_cache()
     settings = AutonomousDevSettings()
     assert settings.autonomous_worker_mode == "cursor_sdk"
-    marker = repo / "autonomous_dev" / "acceptance_marker.txt"
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("live\n", encoding="utf-8")
-    svc = ReviewerService(settings, repo_root=repo)
-    monkeypatch.setattr(
-        svc,
-        "_git_diff",
-        lambda _sha: (
-            "diff --git a/autonomous_dev/acceptance_marker.txt "
-            "b/autonomous_dev/acceptance_marker.txt"
-        ),
+    commit_sha = _commit_acceptance_marker(
+        repo, issue_number=1, message="live acceptance marker for issue #1"
     )
+    svc = ReviewerService(settings, repo_root=repo)
     ctx = svc.gather_context(
         issue_number=1,
         issue_body=f"{REVIEWER_ACCEPTANCE_MARKER}\n[P0-LIVE-ACCEPTANCE]\nAUTO-A marker only",
-        commit_sha="abc123",
+        commit_sha=commit_sha,
     )
-    assert "acceptance_marker" in ctx.diff
+    assert "autonomous_dev/acceptance_marker.txt" in ctx.diff
 
     calls = {"openai": 0}
     real_openai = ReviewerService._openai_review

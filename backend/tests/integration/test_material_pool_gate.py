@@ -22,7 +22,7 @@ from backend.domain.services import DomainService
 from backend.models import CaseMaterial, EvidenceItem, ExtractedContent, SourceSpan
 from backend.schemas.evidence_proposal import EvidenceItemProposal
 from backend.skills.evidence_organizer import ScriptedOrganizerEngine
-from backend.tests.fixtures.generate_fixtures import generate as generate_fixtures
+from backend.fixtures import generate as generate_fixtures
 from backend.tools.storage import ObjectStorage
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"

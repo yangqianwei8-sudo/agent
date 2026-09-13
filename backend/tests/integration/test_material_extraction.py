@@ -14,7 +14,7 @@ from backend.application.material_extraction import MaterialExtractionService
 from backend.domain.errors import ValidationError
 from backend.domain.services import DomainService
 from backend.models import ExtractedContent, SourceSpan
-from backend.tests.fixtures.generate_fixtures import generate as generate_fixtures
+from backend.fixtures import generate as generate_fixtures
 from backend.tools.docx_parser import DocxParser
 from backend.tools.errors import UnsupportedFormatError
 from backend.tools.image_ocr import ImageOcr

@@ -47,4 +47,4 @@ def parse_marker_issue_number(content: str) -> int | None:
 
 def diff_includes_marker(diff: str) -> bool:
     """Return True when a git diff touches the P0 acceptance marker file."""
-    return MARKER_GIT_PATH in diff or "acceptance_marker" in diff
+    return MARKER_GIT_PATH in diff

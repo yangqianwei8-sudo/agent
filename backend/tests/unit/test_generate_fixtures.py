@@ -6,9 +6,9 @@ import re
 import tempfile
 from pathlib import Path
 
-from backend.tests.fixtures.generate_fixtures import (
+from backend.fixtures.deterministic import (
     DETERMINISTIC_PDF_EPOCH,
-    FIXTURES,
+    DEFAULT_FIXTURES_DIR as FIXTURES,
     generate,
 )
 

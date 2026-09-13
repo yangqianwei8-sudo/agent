@@ -17,7 +17,7 @@ from backend.domain.errors import ValidationError
 from backend.infrastructure.db import get_db_session
 from backend.main import app
 from backend.models import CaseMaterial
-from backend.tests.fixtures.generate_fixtures import generate as generate_fixtures
+from backend.fixtures import generate as generate_fixtures
 from backend.tools.storage import ObjectStorage
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
