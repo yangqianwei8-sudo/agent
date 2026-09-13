@@ -21,6 +21,12 @@ from autonomous_dev.reviewer_service import REVIEWER_ACCEPTANCE_MARKER
 P0_LIVE_ACCEPTANCE_MARKER = "[P0-LIVE-ACCEPTANCE]"
 _MARKER_ONLY_INSTRUCTION = "Update autonomous_dev/acceptance_marker.txt only."
 
+# Pytest targets run before marker-only commits — health plus fixture determinism.
+ACCEPTANCE_GATE_PYTEST_TARGETS: tuple[str, ...] = (
+    "backend/tests/test_health.py",
+    "backend/tests/unit/test_generate_fixtures.py",
+)
+
 
 @dataclass(frozen=True)
 class MarkerOnlyReviewVerdict:
@@ -55,6 +61,11 @@ def ensure_golden_fixtures_stable() -> None:
     from backend.fixtures import ensure_fixtures
 
     ensure_fixtures()
+
+
+def acceptance_gate_pytest_argv() -> list[str]:
+    """Argv fragment for pytest gate runs before marker-only worker commits."""
+    return ["-m", "pytest", *ACCEPTANCE_GATE_PYTEST_TARGETS, "-q"]
 
 
 def evaluate_marker_only_review(diff: str, issue_body: str) -> MarkerOnlyReviewVerdict | None:

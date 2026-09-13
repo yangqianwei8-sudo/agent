@@ -14,6 +14,7 @@ from autonomous_dev.execution_events import ExecutionEventRecorder
 from autonomous_dev.github_auth import git_env
 from autonomous_dev.github_client import GitHubClient, GitHubClientError
 from autonomous_dev.p0_acceptance import (
+    acceptance_gate_pytest_argv,
     apply_harmless_marker_change,
     execute_marker_only_acceptance,
     is_marker_only_acceptance,
@@ -447,7 +448,7 @@ class Worker:
             raise RuntimeError(f"ruff failed: {(result.stdout + result.stderr)[:500]}")
 
     def _run_acceptance_gate_tests(self, events: ExecutionEventRecorder | None = None) -> None:
-        cmd = [sys.executable, "-m", "pytest", "backend/tests/test_health.py", "-q"]
+        cmd = [sys.executable, *acceptance_gate_pytest_argv()]
         if events:
             events.test_started(cmd)
         result = self._run(cmd, check=True)

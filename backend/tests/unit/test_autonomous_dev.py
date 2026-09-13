@@ -3117,6 +3117,51 @@ def test_worker_deterministic_marker_only_commits_marker_path_only(
     assert changed == marker_commit_paths()
 
 
+def test_p0_acceptance_gate_includes_fixture_determinism_tests():
+    """Marker-only gate must exercise PDF CreationDate/ModDate and /ID pinning."""
+    from autonomous_dev.p0_acceptance import ACCEPTANCE_GATE_PYTEST_TARGETS, acceptance_gate_pytest_argv
+
+    assert "backend/tests/unit/test_generate_fixtures.py" in ACCEPTANCE_GATE_PYTEST_TARGETS
+    assert acceptance_gate_pytest_argv() == [
+        "-m",
+        "pytest",
+        *ACCEPTANCE_GATE_PYTEST_TARGETS,
+        "-q",
+    ]
+
+
+def test_issue75_repair_ensure_golden_fixtures_blocks_marker_on_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Issue #38 repair: fixture drift must fail before marker-only commit proceeds."""
+    import tempfile
+
+    from backend.fixtures.deterministic import generate
+    from autonomous_dev.p0_acceptance import ensure_golden_fixtures_stable
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        generate(output_dir=root)
+        monkeypatch.setattr(
+            "backend.fixtures.deterministic.DEFAULT_FIXTURES_DIR",
+            root,
+        )
+        ensure_golden_fixtures_stable()
+        fixture = root / "sample_text.pdf"
+        original = fixture.read_bytes()
+        try:
+            fixture.write_bytes(b"%PDF-1.4 corrupt fixture for drift test")
+            try:
+                ensure_golden_fixtures_stable()
+            except ValueError as exc:
+                assert "sample_text.pdf" in str(exc)
+            else:
+                raise AssertionError("expected drift validation to fail before marker commit")
+        finally:
+            fixture.write_bytes(original)
+            ensure_golden_fixtures_stable()
+
+
 def test_handoff_pass_activates_queued_next_task_once(infra_env, _mock_github_client):
     from autonomous_dev.state import HandoffStatus
     from autonomous_dev.task_handoff import TaskHandoffEngine
