@@ -52,6 +52,11 @@ def enforce_inv1_read_only(entity_type: str) -> None:
     assert_read_only_projection(entity_type)
 
 
+def is_read_only_projection() -> bool:
+    """INV-1: expose read-only configuration for invariant checks."""
+    return _READ_ONLY_PROJECTION
+
+
 _PROOF_STATE_ZH = {
     ProofState.RED.value: "关键证明缺口",
     ProofState.YELLOW.value: "尚需补强",

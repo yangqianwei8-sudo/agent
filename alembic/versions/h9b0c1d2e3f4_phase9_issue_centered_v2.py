@@ -87,6 +87,10 @@ def upgrade() -> None:
             "(opponent_material_ref IS NOT NULL AND btrim(opponent_material_ref) <> '')",
             name="ck_issue_positions_formal_defense_ref",
         ),
+        sa.CheckConstraint(
+            "(position_type <> 'FORMAL_DEFENSE') OR (side = 'OPPONENT')",
+            name="ck_issue_positions_formal_defense_side",
+        ),
     )
     op.create_index("ix_issue_positions_case", "issue_positions", ["case_id"])
     op.create_index(

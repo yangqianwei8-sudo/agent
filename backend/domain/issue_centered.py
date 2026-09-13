@@ -61,6 +61,7 @@ __all__ = [
     "IssueCenteredDomainMixin",
     "_guard_explicit_proof_task_fact_versions",
     "_guard_formal_defense_opponent_material_ref",
+    "_guard_formal_defense_side",
     "_require_structure_mutation_audit",
 ]
 
@@ -88,6 +89,12 @@ def _guard_formal_defense_opponent_material_ref(
     if position_type == PositionType.FORMAL_DEFENSE.value:
         if not opponent_material_ref or not str(opponent_material_ref).strip():
             raise ValidationError("FORMAL_DEFENSE requires opponent material reference")
+
+
+def _guard_formal_defense_side(position_type: str, side: str) -> None:
+    """INV-3: FORMAL_DEFENSE positions must be recorded on the OPPONENT side."""
+    if position_type == PositionType.FORMAL_DEFENSE.value and side != PositionSide.OPPONENT.value:
+        raise ValidationError("FORMAL_DEFENSE must be on OPPONENT side")
 
 
 def _resolve_proof_task_and_fact_for_link(
@@ -256,6 +263,7 @@ class IssueCenteredDomainMixin:
         if issue.case_id != case_id:
             raise ValidationError("issue case_id mismatch")
         _guard_formal_defense_opponent_material_ref(position_type, opponent_material_ref)
+        _guard_formal_defense_side(position_type, side)
         if position_type == PositionType.FORMAL_DEFENSE.value:
             source = PositionSourceType.OPPONENT_MATERIAL.value
         else:
@@ -538,7 +546,7 @@ class IssueCenteredDomainMixin:
         actor_id: UUID,
     ) -> ProofTaskFactLink:
         self._require_case(case_id)
-        _resolve_proof_task_and_fact_for_link(
+        task, fact = _resolve_proof_task_and_fact_for_link(
             self,
             case_id=case_id,
             proof_task_key=proof_task_key,
@@ -546,6 +554,8 @@ class IssueCenteredDomainMixin:
             fact_key=fact_key,
             fact_version=fact_version,
         )
+        if task.case_id != fact.case_id:
+            raise ValidationError("cross-case proof task fact link rejected")
         if role not in {r.value for r in ProofTaskFactLinkRole}:
             raise ValidationError(f"invalid proof task fact link role: {role}")
         link = ProofTaskFactLink(
@@ -1061,6 +1071,7 @@ class IssueCenteredDomainMixin:
             after={
                 "issue_key": str(merged.issue_key),
                 "merged_from": [str(k) for k in source_issue_keys],
+                "decision_id": str(decision.id),
             },
         )
         _require_structure_mutation_audit(
@@ -1143,6 +1154,7 @@ class IssueCenteredDomainMixin:
             after={
                 "source_key": str(source_issue_key),
                 "new_keys": [str(i.issue_key) for i in created],
+                "decision_id": str(decision.id),
             },
         )
         _require_structure_mutation_audit(
