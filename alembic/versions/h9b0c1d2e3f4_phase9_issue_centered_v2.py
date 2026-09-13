@@ -1,6 +1,6 @@
 """phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 
-Issue #83 SSOT: includes proof_gaps and lawyer_assessments with every CheckConstraint:
+Issue #80 repair SSOT / #73: includes proof_gaps and lawyer_assessments with every CheckConstraint:
 - proof_gaps: ck_proof_gaps_type, ck_proof_gaps_status, ck_proof_gaps_source
 - lawyer_assessments: ck_lawyer_assessments_status
 - issue_positions: ck_issue_positions_side/type/source/status/formal_defense_ref
@@ -16,7 +16,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-# INV SSOT (#83): canonical allowed-value sets for CheckConstraints (used in upgrade()).
+# INV SSOT (#80): canonical allowed-value sets for CheckConstraints (used in upgrade()).
 _PROOF_GAP_TYPES = ("FACT", "EVIDENCE", "SOURCE", "LEGAL_RESEARCH")
 _PROOF_GAP_STATUSES = ("OPEN", "RESOLVED", "WAIVED", "SUPERSEDED")
 _PROOF_GAP_SOURCES = ("AI_DETECTED", "LAWYER_CREATED")

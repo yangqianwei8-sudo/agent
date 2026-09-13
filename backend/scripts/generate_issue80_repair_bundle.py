@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,10 +44,60 @@ def _git_head() -> str:
     return _git_short("HEAD")
 
 
+def _git_full(rev: str = "HEAD") -> str:
+    return subprocess.check_output(
+        ["git", "rev-parse", rev], cwd=ROOT, text=True
+    ).strip()
+
+
+def _capture_header(repair_full: str, ts: datetime) -> str:
+    return (
+        f"# Issue #80 repair capture | commit={repair_full} | "
+        f"timestamp={ts.isoformat()}\n\n"
+    )
+
+
+def _capture_test_outputs(ts: datetime, repair_full: str) -> None:
+    """Run pytest + live acceptance and write evidence stdout files."""
+    header = _capture_header(repair_full, ts)
+    test_db = subprocess.check_output(
+        ["bash", "-c", 'echo "${DATABASE_URL%/*}/litigation_case_agent_test"'],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    env = {**os.environ, "TEST_DATABASE_URL": test_db, "LLM_MODE": "deterministic"}
+    pytest_out = subprocess.check_output(
+        [
+            str(ROOT / ".venv/bin/python"),
+            "-m",
+            "pytest",
+            "backend/tests/integration/test_issue_centered_v2.py",
+            "backend/tests/integration/test_issue_centered_v2_invariants.py",
+            "-v",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stderr=subprocess.STDOUT,
+    )
+    live_out = subprocess.check_output(
+        [
+            str(ROOT / ".venv/bin/python"),
+            "backend/scripts/live_issue_centered_v2_acceptance.py",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stderr=subprocess.STDOUT,
+    )
+    OUTPUT_FILES["pytest"].write_text(header + pytest_out, encoding="utf-8")
+    OUTPUT_FILES["live"].write_text(header + live_out, encoding="utf-8")
+
+
 def _generate_production_patch() -> str:
     rel_paths = [str(p.relative_to(ROOT)) for p in PRODUCTION_FILES.values()]
     return subprocess.check_output(
-        ["git", "diff", f"{PATCH_BASE}..HEAD", "--", *rel_paths],
+        ["git", "diff", PATCH_BASE, "--", *rel_paths],
         cwd=ROOT,
         text=True,
     )
@@ -70,12 +121,22 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 **Domain enforcement** (`link_fact_to_proof_task`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); cross-case → `ValidationError("cross-case ...")`.
 
+**Read projection guard** (`IssueWorkProductService.guard_write_attempt`): raises `RuntimeError` on mutation attempts.
+
+**Test:** `test_invariant_guard_functions_reject_invalid_inputs`
+- `_reject_claim_direction_production_mutation(_legacy_compat=False)` → `ValidationError`
+- `assert_read_only_projection("claim_directions")` → `RuntimeError(match="read-only")`
+- `IssueWorkProductService.guard_write_attempt("claim_directions")` → `RuntimeError`
+
 **Test:** `test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case`
 - `proof_task_version=0` → `ValidationError(match="explicit positive")`
 - `proof_task_version+99` → `NotFoundError("proof task version not found")`
 - `fact_version+99` → `NotFoundError("fact version not found")`
 - cross-case fact → `ValidationError(match="cross-case fact link rejected")`
 - cross-case proof task → `ValidationError(match="cross-case proof task link rejected")`
+
+**DB constraint:** `test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions`
+- direct insert with `proof_task_version=0` → `IntegrityError`
 — **PASSED**
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
@@ -85,11 +146,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 **Test:** `test_invariant_3_formal_defense_requires_opponent_material_ref`
 - without ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
 - with ref → `assert pos.opponent_material_ref == "material:answer-001"`
+
+**DB constraint:** `test_invariant_3_db_rejects_formal_defense_without_material_ref`
+- direct insert without ref → `IntegrityError` (ck_issue_positions_formal_defense_ref)
 — **PASSED**
 
 ### A4. merge/split emit HumanDecision + AuditLog
 
-**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`.
+**Domain enforcement:** `_persist_issue_structure_decision` flushes HumanDecision before mutation; `_require_structure_mutation_audit` verifies AuditLog(entity_type="issues") before return.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
 - `assert len(merge_decisions) == 1` and `assert merge_decisions[0].id is not None`
@@ -135,7 +199,7 @@ SSOT copies (identical to production): `sources/migration_h9b0c1d2e3f4.py`, `sou
 
     patch_section = f"""## (G) Untruncated production diff — all four files ({patch_lines} lines)
 
-Generated: `git diff {PATCH_BASE}..HEAD -- <four production paths>`
+Generated: `git diff {PATCH_BASE} -- <four production paths>`
 
 Full raw patch (NOT truncated, ends at last line of invariant tests):
 
@@ -189,7 +253,7 @@ Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py
 
 {_fence("python", invariants)}
 
-Verified by: all 19 pytest tests + live acceptance 30 steps — **PASSED**."""
+Verified by: all 22 pytest tests + live acceptance 30 steps — **PASSED**."""
 
     return "\n\n".join(
         [
@@ -293,7 +357,7 @@ All four invariant tests **PASSED** — see section (A) in `{bundle_rel}`.
 
 File: `issue80_repair_production.patch`
 
-Generated: `git diff {PATCH_BASE}..HEAD -- <four production paths>`
+Generated: `git diff {PATCH_BASE} -- <four production paths>`
 
 {_fence("diff", patch)}
 """
@@ -316,7 +380,9 @@ def main() -> None:
     ts = datetime.now(UTC)
     patch_base = _git_short(PATCH_BASE)
     repair_head = _git_head()
+    repair_full = _git_full("HEAD")
     EVIDENCE.mkdir(parents=True, exist_ok=True)
+    _capture_test_outputs(ts, repair_full)
     sync_sources()
     patch = _generate_production_patch()
     patch_path = EVIDENCE / "issue80_repair_production.patch"

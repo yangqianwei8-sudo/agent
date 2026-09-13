@@ -40,6 +40,7 @@ from backend.domain.enums import (
 )
 from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.models import (
+    AuditLog,
     ConflictFactLink,
     Issue,
     IssueConflict,
@@ -54,6 +55,13 @@ from backend.models import (
 
 if TYPE_CHECKING:
     from backend.domain.services import DomainService
+
+__all__ = [
+    "IssueCenteredDomainMixin",
+    "_guard_explicit_proof_task_fact_versions",
+    "_guard_formal_defense_opponent_material_ref",
+    "_require_structure_mutation_audit",
+]
 
 
 def _now() -> datetime:
@@ -129,6 +137,29 @@ def _persist_issue_structure_decision(
     if decision.id is None:
         raise ConflictError(f"{decision_type} decision failed to persist")
     return decision
+
+
+def _require_structure_mutation_audit(
+    svc: DomainService,
+    *,
+    case_id: UUID,
+    action: str,
+) -> None:
+    """INV-4: merge/split must emit AuditLog (entity_type=issues) before returning."""
+    from sqlalchemy import select
+
+    audit = svc.session.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.case_id == case_id,
+            AuditLog.action == action,
+            AuditLog.entity_type == "issues",
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(1)
+    ).first()
+    if audit is None:
+        raise ConflictError(f"{action} must emit AuditLog before completing")
 
 
 class IssueCenteredDomainMixin:
@@ -1019,6 +1050,9 @@ class IssueCenteredDomainMixin:
                 "merged_from": [str(k) for k in source_issue_keys],
             },
         )
+        _require_structure_mutation_audit(
+            self, case_id=case_id, action="merge_issues"
+        )
         return merged
 
     def split_issue(
@@ -1094,6 +1128,9 @@ class IssueCenteredDomainMixin:
                 "source_key": str(source_issue_key),
                 "new_keys": [str(i.issue_key) for i in created],
             },
+        )
+        _require_structure_mutation_audit(
+            self, case_id=case_id, action="split_issue"
         )
         return created
 
