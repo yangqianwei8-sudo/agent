@@ -3138,7 +3138,7 @@ def test_issue75_repair_ensure_golden_fixtures_blocks_marker_on_drift() -> None:
 
     from autonomous_dev.p0_acceptance import ensure_golden_fixtures_stable
 
-    from backend.fixtures.deterministic import FIXTURE_NAMES, generate
+    from backend.fixtures.deterministic import generate
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
