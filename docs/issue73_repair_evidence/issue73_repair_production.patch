@@ -1016,7 +1016,7 @@ index 0000000..0c255bc
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..e1ef937
+index 0000000..ec7932b
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
 @@ -0,0 +1,1293 @@
@@ -1098,7 +1098,7 @@ index 0000000..e1ef937
 +
 +
 +def list_issue_centered_v2_invariant_ids() -> tuple[str, ...]:
-+    """Return the four Issue #73 repair invariants enforced in this module."""
++    """Return the four Issue #73 repair invariants enforced in this module (#60)."""
 +    return ISSUE_CENTERED_V2_INVARIANT_IDS
 +
 +

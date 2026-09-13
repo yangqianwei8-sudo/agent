@@ -425,26 +425,48 @@ def _repair_sha_from_argv() -> str | None:
     return None
 
 
+def _marker_repair_sha(marker_path: Path) -> str | None:
+    if not marker_path.exists():
+        return None
+    for line in marker_path.read_text(encoding="utf-8").splitlines():
+        if "repair=" in line:
+            return line.split("repair=", 1)[1].split()[0]
+    return None
+
+
+def _parse_capture_timestamp(content: str) -> datetime | None:
+    for line in content.splitlines():
+        if line.startswith("# Issue #73 repair capture |") and "timestamp=" in line:
+            raw = line.split("timestamp=", 1)[1].strip()
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    return None
+
+
 def main() -> None:
     align_only = "--align-only" in sys.argv
     ts = datetime.now(UTC)
     patch_base = _git_full(PATCH_BASE)
     repair_override = _repair_sha_from_argv()
     repair_full = repair_override or _git_full("HEAD")
-    repair_head = repair_full[:7] if repair_override else _git_short("HEAD")
+    repair_head = repair_full[:7] if len(repair_full) >= 7 else repair_full
+    marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
+    if align_only and repair_override and _marker_repair_sha(marker) == repair_full:
+        print(f"Repair SHA already aligned to {repair_head}; skipping regeneration")
+        return
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     if not align_only:
         _capture_test_outputs(ts, repair_full)
     else:
         for path in OUTPUT_FILES.values():
             if path.exists():
-                _apply_capture_header(path, repair_full, ts)
+                existing_ts = _parse_capture_timestamp(_read(path)) or ts
+                _apply_capture_header(path, repair_full, existing_ts)
+        ts = _parse_capture_timestamp(_read(OUTPUT_FILES["pytest"])) or ts
     sync_sources()
     patch = _generate_production_patch()
     patch_path = EVIDENCE / "issue73_repair_production.patch"
     patch_path.write_text(patch, encoding="utf-8")
     _write_bundle(ts, patch_base, repair_head, patch)
-    marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
     marker.write_text(
         f"worker-run issue=73 lineage=60 repair={repair_full} at={ts.isoformat()}\n",
         encoding="utf-8",

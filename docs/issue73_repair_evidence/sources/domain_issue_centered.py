@@ -76,7 +76,7 @@ ISSUE_CENTERED_V2_INVARIANT_IDS: tuple[str, ...] = ("INV-1", "INV-2", "INV-3", "
 
 
 def list_issue_centered_v2_invariant_ids() -> tuple[str, ...]:
-    """Return the four Issue #73 repair invariants enforced in this module."""
+    """Return the four Issue #73 repair invariants enforced in this module (#60)."""
     return ISSUE_CENTERED_V2_INVARIANT_IDS
 
 

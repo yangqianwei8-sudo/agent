@@ -1,6 +1,6 @@
 # Issue #73 Resubmit — Issue-Centered V2 (#60 repair)
 
-Generated: 2026-09-13T11:08:38.720795Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `2850f40`
+Generated: 2026-09-13T11:09:35.116515Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `f0669a7`
 
 **SSOT:** `docs/issue73_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated). Repair SHA equals submitted commit SHA.
 
@@ -24,7 +24,7 @@ SSOT copies (identical to production): `sources/migration_h9b0c1d2e3f4.py`, `sou
 | Repair chain | #60 → #73 (issue-centered V2) |
 | Base commit | `f84972a213c44ba602b07ae3801637dc5c045f16` (pre issue-centered v2; parent of c19379b) |
 
-This bundle regenerates the #73 repair SSOT with untruncated production artifacts and live PASS evidence at 2026-09-13T11:08:38.720795Z. Repair SHA equals submitted commit SHA (see marker `repair=` field).
+This bundle regenerates the #73 repair SSOT with untruncated production artifacts and live PASS evidence at 2026-09-13T11:09:35.116515Z. Repair SHA equals submitted commit SHA (see marker `repair=` field).
 
 ## (A) Four required invariants — explicit code-level assertions
 
@@ -80,14 +80,14 @@ Production registry: `list_issue_centered_v2_invariant_ids()` → `("INV-1", "IN
 **Test:** `test_invariant_4_guard_rejects_audit_without_decision_id_linkage`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T11:08:38.720795Z
+## (B) Test output — actual run 2026-09-13T11:09:35.116515Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #73 repair capture | commit=2850f40a21780bec8913042fe48e0a2aea98113a | timestamp=2026-09-13T11:08:38.720795+00:00
+# Issue #73 repair capture | commit=f0669a74f138defe1c5f4e675bc58bb9ac28773a | timestamp=2026-09-13T11:09:35.116515+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -141,7 +141,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 31 passed, 4 warnings in 1.79s ========================
+======================== 31 passed, 4 warnings in 2.71s ========================
 ```
 
 Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py`
@@ -149,7 +149,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #73 repair capture | commit=2850f40a21780bec8913042fe48e0a2aea98113a | timestamp=2026-09-13T11:08:38.720795+00:00
+# Issue #73 repair capture | commit=f0669a74f138defe1c5f4e675bc58bb9ac28773a | timestamp=2026-09-13T11:09:35.116515+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -725,7 +725,7 @@ ISSUE_CENTERED_V2_INVARIANT_IDS: tuple[str, ...] = ("INV-1", "INV-2", "INV-3", "
 
 
 def list_issue_centered_v2_invariant_ids() -> tuple[str, ...]:
-    """Return the four Issue #73 repair invariants enforced in this module."""
+    """Return the four Issue #73 repair invariants enforced in this module (#60)."""
     return ISSUE_CENTERED_V2_INVARIANT_IDS
 
 
@@ -4215,7 +4215,7 @@ index 0000000..0c255bc
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..e1ef937
+index 0000000..ec7932b
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
 @@ -0,0 +1,1293 @@
@@ -4297,7 +4297,7 @@ index 0000000..e1ef937
 +
 +
 +def list_issue_centered_v2_invariant_ids() -> tuple[str, ...]:
-+    """Return the four Issue #73 repair invariants enforced in this module."""
++    """Return the four Issue #73 repair invariants enforced in this module (#60)."""
 +    return ISSUE_CENTERED_V2_INVARIANT_IDS
 +
 +
