@@ -1,6 +1,6 @@
 # Issue #83 Resubmit — Issue-Centered V2 (#80 repair)
 
-Generated: 2026-09-13T09:57:43.813875Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `acf6fbb`
+Generated: 2026-09-13T09:58:02.344395Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `9e0c217`
 
 **SSOT:** `docs/issue83_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -61,14 +61,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `assert len(split_audits) >= 1` and `assert split_audits[0].entity_type == "issues"`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T09:57:43.813875Z
+## (B) Test output — actual run 2026-09-13T09:58:02.344395Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=acf6fbb6d037d81da5ed156e9fd21f1ab47f22d1 | timestamp=2026-09-13T09:57:43.813875+00:00
+# Issue #83 repair capture | commit=9e0c217e3a604ff8e7e1e0f1f9b4ac4cf757a82b | timestamp=2026-09-13T09:58:02.344395+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -121,7 +121,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=acf6fbb6d037d81da5ed156e9fd21f1ab47f22d1 | timestamp=2026-09-13T09:57:43.813875+00:00
+# Issue #83 repair capture | commit=9e0c217e3a604ff8e7e1e0f1f9b4ac4cf757a82b | timestamp=2026-09-13T09:58:02.344395+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
