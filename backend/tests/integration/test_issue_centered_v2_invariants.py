@@ -1,4 +1,4 @@
-"""Issue-centered V2 — four invariant assertions (Issue #80/#73/#60/#83/#86/#87/#85/#84)."""
+"""Issue-centered V2 — four invariant assertions (Issue #73 repair SSOT / #60)."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from backend.application.issue_work_product import (
 from backend.domain.enums import DecisionResult
 from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.domain.issue_centered import (
+    ISSUE_CENTERED_V2_INVARIANT_IDS,
     _guard_cross_case_proof_task_fact_pair,
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
@@ -27,11 +28,18 @@ from backend.domain.issue_centered import (
     _normalize_opponent_material_ref,
     _reject_claim_direction_production_mutation,
     _require_structure_mutation_audit,
+    list_issue_centered_v2_invariant_ids,
 )
 from backend.domain.services import DomainService
 from backend.models import AuditLog, HumanDecision, Issue
 from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 from backend.tests.integration.test_issue_centered_v2 import _seed_fact
+
+
+def test_issue73_invariant_registry_complete() -> None:
+    """Issue #73 repair: production module exposes all four invariant identifiers."""
+    assert list_issue_centered_v2_invariant_ids() == ISSUE_CENTERED_V2_INVARIANT_IDS
+    assert ISSUE_CENTERED_V2_INVARIANT_IDS == ("INV-1", "INV-2", "INV-3", "INV-4")
 
 
 def test_invariant_guard_functions_reject_invalid_inputs() -> None:

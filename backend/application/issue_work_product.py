@@ -1,6 +1,6 @@
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #80/#73/#60/#83/#86/#87/#84 repair SSOT).
+Issue #73 repair SSOT (#60): read-only projection over Issue-centered V2 domain.
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 invariant enforcement remains in backend/domain/issue_centered.py.
 """

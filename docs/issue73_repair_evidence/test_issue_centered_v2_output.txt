@@ -1,4 +1,4 @@
-# Issue #73 repair capture | commit=dbe453d184ce7a8f899063eff1292dae6ff5b66f | timestamp=2026-09-13T10:34:02.742172+00:00
+# Issue #73 repair capture | commit=4187d9961f8c13589b80197b6bd2233cc130b0e5 | timestamp=2026-09-13T11:08:28.509710+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -6,32 +6,37 @@ cachedir: .pytest_cache
 rootdir: /home/devbox/project
 configfile: pyproject.toml
 plugins: anyio-4.15.1
-collecting ... collected 26 items
+collecting ... collected 31 items
 
 backend/tests/integration/test_issue_centered_v2.py::test_position_ai_candidate_lawyer_confirm PASSED [  3%]
-backend/tests/integration/test_issue_centered_v2.py::test_position_formal_defense_requires_material PASSED [  7%]
-backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_fact_link PASSED [ 11%]
-backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_rejects_implicit_version PASSED [ 15%]
-backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_cross_case_rejected PASSED [ 19%]
-backend/tests/integration/test_issue_centered_v2.py::test_conflict_and_gap_lawyer_actions PASSED [ 23%]
-backend/tests/integration/test_issue_centered_v2.py::test_lawyer_assessment_ai_blocked PASSED [ 26%]
-backend/tests/integration/test_issue_centered_v2.py::test_issue_merge_and_split PASSED [ 30%]
-backend/tests/integration/test_issue_centered_v2.py::test_claim_direction_production_disabled PASSED [ 34%]
-backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_proof_state PASSED [ 38%]
-backend/tests/integration/test_issue_centered_v2.py::test_green_issue_not_auto_ready PASSED [ 42%]
-backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_api PASSED [ 46%]
-backend/tests/integration/test_issue_centered_v2.py::test_workspace_includes_issue_work_product PASSED [ 50%]
-backend/tests/integration/test_issue_centered_v2.py::test_agent_issue_object_context PASSED [ 53%]
-backend/tests/integration/test_issue_centered_v2.py::test_structural_gap_renamed PASSED [ 57%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_guard_functions_reject_invalid_inputs PASSED [ 61%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_1_no_production_claim_direction_creation PASSED [ 65%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case PASSED [ 69%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_requires_opponent_material_ref PASSED [ 73%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_rejects_whitespace_only_material_ref PASSED [ 76%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_merge_split_emit_human_decision_and_audit_log PASSED [ 80%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_cross_case_pair_guard_rejects_mismatched_cases PASSED [ 84%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_rejects_wrong_side PASSED [ 88%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_guard_rejects_missing_human_decision_or_audit PASSED [ 92%]
+backend/tests/integration/test_issue_centered_v2.py::test_position_formal_defense_requires_material PASSED [  6%]
+backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_fact_link PASSED [  9%]
+backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_rejects_implicit_version PASSED [ 12%]
+backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_cross_case_rejected PASSED [ 16%]
+backend/tests/integration/test_issue_centered_v2.py::test_conflict_and_gap_lawyer_actions PASSED [ 19%]
+backend/tests/integration/test_issue_centered_v2.py::test_lawyer_assessment_ai_blocked PASSED [ 22%]
+backend/tests/integration/test_issue_centered_v2.py::test_issue_merge_and_split PASSED [ 25%]
+backend/tests/integration/test_issue_centered_v2.py::test_claim_direction_production_disabled PASSED [ 29%]
+backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_proof_state PASSED [ 32%]
+backend/tests/integration/test_issue_centered_v2.py::test_green_issue_not_auto_ready PASSED [ 35%]
+backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_api PASSED [ 38%]
+backend/tests/integration/test_issue_centered_v2.py::test_workspace_includes_issue_work_product PASSED [ 41%]
+backend/tests/integration/test_issue_centered_v2.py::test_agent_issue_object_context PASSED [ 45%]
+backend/tests/integration/test_issue_centered_v2.py::test_structural_gap_renamed PASSED [ 48%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_issue73_invariant_registry_complete PASSED [ 51%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_guard_functions_reject_invalid_inputs PASSED [ 54%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_1_no_production_claim_direction_creation PASSED [ 58%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_1_amend_claim_direction_blocked_without_legacy_compat PASSED [ 61%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case PASSED [ 64%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_link_fact_to_proof_task_never_uses_current_resolution PASSED [ 67%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_requires_opponent_material_ref PASSED [ 70%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_rejects_whitespace_only_material_ref PASSED [ 74%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_merge_split_emit_human_decision_and_audit_log PASSED [ 77%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_merge_persists_decision_and_audit_before_issue_mutation PASSED [ 80%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_cross_case_pair_guard_rejects_mismatched_cases PASSED [ 83%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_rejects_wrong_side PASSED [ 87%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_guard_rejects_missing_human_decision_or_audit PASSED [ 90%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_guard_rejects_audit_without_decision_id_linkage PASSED [ 93%]
 backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions PASSED [ 96%]
 backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_db_rejects_formal_defense_without_material_ref PASSED [100%]
 
@@ -47,4 +52,4 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 26 passed, 4 warnings in 1.61s ========================
+======================== 31 passed, 4 warnings in 1.79s ========================

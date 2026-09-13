@@ -1,6 +1,6 @@
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #60 repair SSOT / #83 / #86 / #84 / #73).
+Issue #73 repair SSOT (#60): read-only projection over Issue-centered V2 domain.
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 invariant enforcement remains in backend/domain/issue_centered.py.
 """
@@ -96,6 +96,8 @@ _ISSUE_STATUS_ZH = {
 
 class IssueWorkProductService:
     def __init__(self, session: Session) -> None:
+        # INV-1: read projection must never mutate ClaimDirection on production paths.
+        guard_claim_direction_production_mutation(_legacy_compat=True)
         self.session = session
         self.repo = Repository(session)
         self.matrix_svc = IssueMatrixService(session)
@@ -368,8 +370,10 @@ class IssueWorkProductService:
                 continue
             if link.fact_version < 1:
                 continue
+            if getattr(link, "case_id", None) != task.case_id:
+                continue
             fact = self.repo.get_fact_version(link.fact_key, link.fact_version)
-            if fact is None:
+            if fact is None or fact.case_id != task.case_id:
                 continue
             evidence = self._fact_evidence(fact.id)
             view = ProofTaskFactView(

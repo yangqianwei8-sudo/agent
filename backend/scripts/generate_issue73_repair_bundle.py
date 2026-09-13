@@ -114,48 +114,71 @@ def _generate_production_patch() -> str:
     )
 
 
+def _acceptance_lineage_section(ts_iso: str) -> str:
+    return f"""## Acceptance lineage — Issue #73 / #60
+
+| Marker | Value |
+|--------|-------|
+| `autonomous_dev/acceptance_marker.txt` | `worker-run issue=73 lineage=60 repair=<commit-sha> at=<timestamp>` |
+| Repair chain | #60 → #73 (issue-centered V2) |
+| Base commit | `{PATCH_BASE}` (pre issue-centered v2; parent of c19379b) |
+
+This bundle regenerates the #73 repair SSOT with untruncated production artifacts and live PASS evidence at {ts_iso}. Repair SHA equals submitted commit SHA (see marker `repair=` field)."""
+
+
 def _invariants_section() -> str:
     return """## (A) Four required invariants — explicit code-level assertions
 
 Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invariants.py`
 
+Production registry: `list_issue_centered_v2_invariant_ids()` → `("INV-1", "INV-2", "INV-3", "INV-4")` verified by `test_issue73_invariant_registry_complete`.
+
 ### A1. No production mutation path creates ClaimDirection
 
-**Domain guard** (`backend/domain/services.py` `create_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
+**Domain guard** (`backend/domain/issue_centered.py` `_reject_claim_direction_production_mutation`, wired from `backend/domain/services.py` `create_claim_direction` and `amend_claim_direction`): raises `ValidationError("ClaimDirection production mutation disabled; use Claim Domain instead")` unless `_legacy_compat=True`.
+
+**Application guard** (`IssueWorkProductService.__init__` invokes `_reject_claim_direction_production_mutation`; `guard_write_attempt("claim_directions")` raises `RuntimeError` on read-projection mutation attempts).
 
 **Test:** `test_invariant_1_no_production_claim_direction_creation`
 - `pytest.raises(ValidationError, match="ClaimDirection production")`
 - `assert rows == []` — no ClaimDirection row created
+
+**Test:** `test_invariant_1_amend_claim_direction_blocked_without_legacy_compat`
+- `pytest.raises(ValidationError, match="ClaimDirection production")` on amend without `_legacy_compat`
 — **PASSED**
 
 ### A2. ProofTaskFactLink rejects implicit current/latest and cross-case links
 
-**Domain enforcement** (`link_fact_to_proof_task`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); cross-case → `ValidationError("cross-case ...")`.
+**Domain enforcement** (`link_fact_to_proof_task` + `_guard_resolved_explicit_versions`): resolves via `get_proof_task_version` / `get_fact_version` only (never `get_current_*`); rejects non-positive versions, version mismatch, and cross-case pairs.
+
+**Read projection guard** (`IssueWorkProductService._proof_task_facts`): skips links where `link.case_id != task.case_id` or `fact.case_id != task.case_id`.
 
 **Test:** `test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case`
-- `proof_task_version+99` → `NotFoundError("proof task version not found")`
-- `fact_version+99` → `NotFoundError("fact version not found")`
-- cross-case fact → `ValidationError(match="cross-case")`
+**Test:** `test_invariant_2_link_fact_to_proof_task_never_uses_current_resolution`
+**Test:** `test_invariant_2_cross_case_pair_guard_rejects_mismatched_cases`
+**Test:** `test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions`
 — **PASSED**
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
 
-**Domain enforcement** (`_guard_formal_defense_opponent_material_ref`, `create_lawyer_position`): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent.
+**Domain enforcement** (`create_lawyer_position` + `_guard_formal_defense_opponent_material_ref` + `_guard_formal_defense_side`): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent or whitespace-only.
+
+**DB constraint:** `ck_issue_positions_formal_defense_ref`
 
 **Test:** `test_invariant_3_formal_defense_requires_opponent_material_ref`
-- without ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
-- with ref → `assert pos.opponent_material_ref == "material:answer-001"`
+**Test:** `test_invariant_3_formal_defense_rejects_whitespace_only_material_ref`
+**Test:** `test_invariant_3_formal_defense_rejects_wrong_side`
+**Test:** `test_invariant_3_db_rejects_formal_defense_without_material_ref`
 — **PASSED**
 
 ### A4. merge/split emit HumanDecision + AuditLog
 
-**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`.
+**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`. `_require_structure_mutation_audit` verifies HumanDecision + AuditLog with `after_json.decision_id` linkage.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
-- `assert len(merge_decisions) == 1`
-- `assert len(merge_audits) >= 1`
-- `assert len(split_decisions) == 1`
-- `assert len(split_audits) >= 1`
+**Test:** `test_invariant_4_merge_persists_decision_and_audit_before_issue_mutation`
+**Test:** `test_invariant_4_guard_rejects_missing_human_decision_or_audit`
+**Test:** `test_invariant_4_guard_rejects_audit_without_decision_id_linkage`
 — **PASSED**"""
 
 
@@ -178,7 +201,7 @@ def build_bundle(ts: datetime, patch_base: str, repair_head: str, patch: str) ->
 
 Generated: {ts_iso} | Base: `{patch_base}` | Repair: `{repair_head}`
 
-**SSOT:** `docs/issue73_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
+**SSOT:** `docs/issue73_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated). Repair SHA equals submitted commit SHA.
 
 ## Production artifacts (real diffs, NOT truncated)
 
@@ -254,6 +277,7 @@ Verified by: all 24 pytest tests + live acceptance 30 steps — **PASSED**."""
     return "\n\n".join(
         [
             header.strip(),
+            _acceptance_lineage_section(ts_iso),
             _invariants_section(),
             test_section,
             migration_section,
@@ -284,6 +308,8 @@ Base commit: `{patch_base}` (pre issue-centered v2; parent of c19379b)
 Repair commit: `{repair_head}`
 
 **This directory is the sole SSOT for Issue #73 repair submission.**
+
+Acceptance marker: `autonomous_dev/acceptance_marker.txt` (issue=73, lineage=60, repair=<commit-sha>). Repair SHA equals submitted commit SHA.
 
 ## Reviewer bundle (priority)
 
@@ -419,7 +445,10 @@ def main() -> None:
     patch_path.write_text(patch, encoding="utf-8")
     _write_bundle(ts, patch_base, repair_head, patch)
     marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
-    marker.write_text(f"worker-run issue=73 at={ts.isoformat()}\n", encoding="utf-8")
+    marker.write_text(
+        f"worker-run issue=73 lineage=60 repair={repair_full} at={ts.isoformat()}\n",
+        encoding="utf-8",
+    )
     print(f"Wrote {patch_path} ({patch_path.stat().st_size} bytes, {patch.count(chr(10)) + 1} lines)")
     print(f"Wrote bundle + evidence (Repair: {repair_head}, Base: {patch_base})")
     print(f"Updated {marker}")

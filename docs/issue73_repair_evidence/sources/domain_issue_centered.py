@@ -1,9 +1,9 @@
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #60 repair SSOT / #83 / #86 / #85 / #84 / #73):
+Issue #73 repair SSOT (#60): four invariants enforced in production mutation paths:
   INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
-  INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
-         (no get_current_*); rejects implicit current/latest and cross-case links.
+  INV-2: link_fact_to_proof_task resolves via get_proof_task_version/get_fact_version
+         only (never get_current_*); rejects non-positive versions and cross-case links.
   INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
   INV-4: merge_issues and split_issue persist HumanDecision + AuditLog before mutation.
 """
@@ -59,15 +59,25 @@ if TYPE_CHECKING:
 
 __all__ = [
     "IssueCenteredDomainMixin",
+    "ISSUE_CENTERED_V2_INVARIANT_IDS",
+    "list_issue_centered_v2_invariant_ids",
     "_guard_cross_case_proof_task_fact_pair",
     "_guard_explicit_proof_task_fact_versions",
+    "_guard_resolved_explicit_versions",
     "_guard_formal_defense_opponent_material_ref",
     "_guard_formal_defense_side",
-    "_guard_resolved_explicit_versions",
     "_normalize_opponent_material_ref",
     "_reject_claim_direction_production_mutation",
     "_require_structure_mutation_audit",
 ]
+
+# Issue #73 repair SSOT — canonical invariant identifiers for verification.
+ISSUE_CENTERED_V2_INVARIANT_IDS: tuple[str, ...] = ("INV-1", "INV-2", "INV-3", "INV-4")
+
+
+def list_issue_centered_v2_invariant_ids() -> tuple[str, ...]:
+    """Return the four Issue #73 repair invariants enforced in this module."""
+    return ISSUE_CENTERED_V2_INVARIANT_IDS
 
 
 def _now() -> datetime:
@@ -101,6 +111,26 @@ def _guard_explicit_proof_task_fact_versions(
         )
 
 
+def _guard_resolved_explicit_versions(
+    *,
+    proof_task_version: int,
+    fact_version: int,
+    task: ProofTask,
+    fact: Any,
+) -> None:
+    """INV-2: resolved rows must match requested versions (no implicit current/latest)."""
+    if task.version != proof_task_version:
+        raise ValidationError(
+            "ProofTaskFactLink requires explicit proof_task_version; "
+            "implicit current/latest rejected"
+        )
+    if fact.version != fact_version:
+        raise ValidationError(
+            "ProofTaskFactLink requires explicit fact_version; "
+            "implicit current/latest rejected"
+        )
+
+
 def _guard_formal_defense_opponent_material_ref(
     position_type: str,
     opponent_material_ref: str | None,
@@ -123,25 +153,6 @@ def _guard_cross_case_proof_task_fact_pair(task: ProofTask, fact: Any) -> None:
         raise ValidationError("cross-case proof task fact link rejected")
 
 
-def _guard_resolved_explicit_versions(
-    *,
-    proof_task_version: int,
-    fact_version: int,
-    task: ProofTask,
-    fact: Any,
-) -> None:
-    """INV-2: resolved rows must match requested versions (no implicit current/latest)."""
-    if task.version != proof_task_version:
-        raise ValidationError(
-            "ProofTaskFactLink requires explicit proof_task_version; "
-            "implicit current/latest rejected"
-        )
-    if fact.version != fact_version:
-        raise ValidationError(
-            "ProofTaskFactLink requires explicit fact_version; implicit current/latest rejected"
-        )
-
-
 def _resolve_proof_task_and_fact_for_link(
     svc: DomainService,
     *,
@@ -151,7 +162,7 @@ def _resolve_proof_task_and_fact_for_link(
     fact_key: UUID,
     fact_version: int,
 ) -> tuple[ProofTask, Any]:
-    """INV-2: resolve explicit proof-task/fact versions; reject cross-case links."""
+    """INV-2: resolve only via explicit version lookups (never get_current_*)."""
     _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
     task = svc.repo.get_proof_task_version(proof_task_key, proof_task_version)
     if task is None:
@@ -198,6 +209,29 @@ def _persist_issue_structure_decision(
     return decision
 
 
+def _persist_structure_mutation_audit(
+    svc: DomainService,
+    *,
+    case_id: UUID,
+    actor_id: UUID,
+    action: str,
+    entity_id: UUID,
+    decision: Any,
+    after: dict[str, Any],
+) -> None:
+    """INV-4: AuditLog must be flushed before merge/split mutations proceed."""
+    payload = {**after, "decision_id": str(decision.id)}
+    svc._audit(
+        actor_id,
+        action,
+        "issues",
+        entity_id,
+        case_id=case_id,
+        after=payload,
+    )
+    svc.repo.flush()
+
+
 def _require_structure_mutation_audit(
     svc: DomainService,
     *,
@@ -231,6 +265,12 @@ def _require_structure_mutation_audit(
     ).first()
     if audit is None:
         raise ConflictError(f"{action} must emit AuditLog before completing")
+    decision_id = str(decision.id)
+    after = audit.after_json or {}
+    if after.get("decision_id") != decision_id:
+        raise ConflictError(
+            f"{action} AuditLog.after_json must reference HumanDecision decision_id"
+        )
 
 
 class IssueCenteredDomainMixin:
@@ -1071,6 +1111,18 @@ class IssueCenteredDomainMixin:
                 "merged_statement": merged_statement,
             },
         )
+        _persist_structure_mutation_audit(
+            self,
+            case_id=case_id,
+            actor_id=actor_id,
+            action="merge_issues",
+            entity_id=decision.target_id,
+            decision=decision,
+            after={
+                "source_keys": [str(k) for k in source_issue_keys],
+                "merged_statement": merged_statement,
+            },
+        )
 
         new_key = uuid.uuid4()
         merged = Issue(
@@ -1115,18 +1167,6 @@ class IssueCenteredDomainMixin:
             src.updated_at = _now()
             _sync_issue_layer(src)
         self.repo.flush()
-        self._audit(
-            actor_id,
-            "merge_issues",
-            "issues",
-            merged.id,
-            case_id=case_id,
-            after={
-                "issue_key": str(merged.issue_key),
-                "merged_from": [str(k) for k in source_issue_keys],
-                "decision_id": str(decision.id),
-            },
-        )
         _require_structure_mutation_audit(
             self,
             case_id=case_id,
@@ -1159,6 +1199,18 @@ class IssueCenteredDomainMixin:
             decision_type="SPLIT_ISSUE",
             target_id=source.issue_key,
             payload={"source_key": str(source_issue_key), "target_count": len(targets)},
+        )
+        _persist_structure_mutation_audit(
+            self,
+            case_id=case_id,
+            actor_id=actor_id,
+            action="split_issue",
+            entity_id=source.issue_key,
+            decision=decision,
+            after={
+                "source_key": str(source_issue_key),
+                "target_count": len(targets),
+            },
         )
 
         from backend.domain.services import _sync_issue_layer
@@ -1198,18 +1250,6 @@ class IssueCenteredDomainMixin:
         source.updated_at = _now()
         _sync_issue_layer(source)
         self.repo.flush()
-        self._audit(
-            actor_id,
-            "split_issue",
-            "issues",
-            source.id,
-            case_id=case_id,
-            after={
-                "source_key": str(source_issue_key),
-                "new_keys": [str(i.issue_key) for i in created],
-                "decision_id": str(decision.id),
-            },
-        )
         _require_structure_mutation_audit(
             self,
             case_id=case_id,

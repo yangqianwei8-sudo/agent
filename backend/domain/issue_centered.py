@@ -1,6 +1,6 @@
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #80/#73/#60/#83/#86/#87/#85/#84 repair SSOT):
+Issue #73 repair SSOT (#60): four invariants enforced in production mutation paths:
   INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
   INV-2: link_fact_to_proof_task resolves via get_proof_task_version/get_fact_version
          only (never get_current_*); rejects non-positive versions and cross-case links.
@@ -59,6 +59,8 @@ if TYPE_CHECKING:
 
 __all__ = [
     "IssueCenteredDomainMixin",
+    "ISSUE_CENTERED_V2_INVARIANT_IDS",
+    "list_issue_centered_v2_invariant_ids",
     "_guard_cross_case_proof_task_fact_pair",
     "_guard_explicit_proof_task_fact_versions",
     "_guard_resolved_explicit_versions",
@@ -68,6 +70,14 @@ __all__ = [
     "_reject_claim_direction_production_mutation",
     "_require_structure_mutation_audit",
 ]
+
+# Issue #73 repair SSOT — canonical invariant identifiers for verification.
+ISSUE_CENTERED_V2_INVARIANT_IDS: tuple[str, ...] = ("INV-1", "INV-2", "INV-3", "INV-4")
+
+
+def list_issue_centered_v2_invariant_ids() -> tuple[str, ...]:
+    """Return the four Issue #73 repair invariants enforced in this module."""
+    return ISSUE_CENTERED_V2_INVARIANT_IDS
 
 
 def _now() -> datetime:

@@ -1,6 +1,6 @@
 """phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 
-Issue #80/#73/#60/#83/#86/#84 repair SSOT: four invariants enforced at DB + domain layers:
+Issue #73 repair SSOT (#60): four invariants enforced at DB + domain layers:
 - INV-1: ClaimDirection production mutation blocked in domain/application (not this migration)
 - INV-2: proof_task_fact_links version positivity (ck_*_version_pos) rejects implicit 0/latest
 - INV-3: issue_positions FORMAL_DEFENSE ref + side constraints (ck_*_formal_defense_*)
@@ -22,7 +22,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-# INV SSOT (#80): canonical allowed-value sets for CheckConstraints (used in upgrade()).
+# INV SSOT (#73): canonical allowed-value sets for CheckConstraints (used in upgrade()).
 _INV2_MIN_EXPLICIT_VERSION = 1
 _PROOF_GAP_TYPES = ("FACT", "EVIDENCE", "SOURCE", "LEGAL_RESEARCH")
 _PROOF_GAP_STATUSES = ("OPEN", "RESOLVED", "WAIVED", "SUPERSEDED")
