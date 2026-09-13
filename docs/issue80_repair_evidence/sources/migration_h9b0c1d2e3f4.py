@@ -1,6 +1,6 @@
 """phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 
-Issue #60 / #73 SSOT: includes proof_gaps and lawyer_assessments with every CheckConstraint:
+Issue #60 / #73 / #80 SSOT: includes proof_gaps and lawyer_assessments with every CheckConstraint:
 - proof_gaps: ck_proof_gaps_type, ck_proof_gaps_status, ck_proof_gaps_source
 - lawyer_assessments: ck_lawyer_assessments_status
 - issue_positions: ck_issue_positions_side/type/source/status
@@ -15,6 +15,18 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+
+# INV SSOT (#73): canonical allowed-value sets for CheckConstraints (used in upgrade()).
+_PROOF_GAP_TYPES = ("FACT", "EVIDENCE", "SOURCE", "LEGAL_RESEARCH")
+_PROOF_GAP_STATUSES = ("OPEN", "RESOLVED", "WAIVED", "SUPERSEDED")
+_PROOF_GAP_SOURCES = ("AI_DETECTED", "LAWYER_CREATED")
+_LAWYER_ASSESSMENT_STATUSES = ("ACTIVE", "SUPERSEDED", "WITHDRAWN")
+
+
+def _in_check(name: str, column: str, values: tuple[str, ...]) -> sa.CheckConstraint:
+    quoted = ", ".join(f"'{v}'" for v in values)
+    return sa.CheckConstraint(f"{column} IN ({quoted})", name=name)
+
 
 revision: str = "h9b0c1d2e3f4"
 down_revision: str | Sequence[str] | None = "g8a9b0c1d2e3"
@@ -293,18 +305,9 @@ def upgrade() -> None:
             name="fk_proof_gaps_proof_task",
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.CheckConstraint(
-            "gap_type IN ('FACT','EVIDENCE','SOURCE','LEGAL_RESEARCH')",
-            name="ck_proof_gaps_type",
-        ),
-        sa.CheckConstraint(
-            "status IN ('OPEN','RESOLVED','WAIVED','SUPERSEDED')",
-            name="ck_proof_gaps_status",
-        ),
-        sa.CheckConstraint(
-            "source_type IN ('AI_DETECTED','LAWYER_CREATED')",
-            name="ck_proof_gaps_source",
-        ),
+        _in_check("ck_proof_gaps_type", "gap_type", _PROOF_GAP_TYPES),
+        _in_check("ck_proof_gaps_status", "status", _PROOF_GAP_STATUSES),
+        _in_check("ck_proof_gaps_source", "source_type", _PROOF_GAP_SOURCES),
     )
     op.create_index("ix_proof_gaps_case", "proof_gaps", ["case_id"])
     op.create_index("ix_proof_gaps_issue", "proof_gaps", ["issue_key", "issue_version"])
@@ -338,10 +341,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["supersedes_id"], ["lawyer_assessments.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("assessment_key", "version", name="uq_lawyer_assessments_key_version"),
-        sa.CheckConstraint(
-            "status IN ('ACTIVE','SUPERSEDED','WITHDRAWN')",
-            name="ck_lawyer_assessments_status",
-        ),
+        _in_check("ck_lawyer_assessments_status", "status", _LAWYER_ASSESSMENT_STATUSES),
     )
     op.create_index("ix_lawyer_assessments_case", "lawyer_assessments", ["case_id"])
     op.create_index(

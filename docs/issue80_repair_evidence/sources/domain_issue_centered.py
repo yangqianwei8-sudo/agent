@@ -1,6 +1,6 @@
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #60 / #73):
+Explicit invariants enforced in this module (Issue #60 / #73 / #80):
   INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
          (no get_current_*); rejects cross-case links.
   INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
@@ -58,6 +58,77 @@ if TYPE_CHECKING:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _guard_explicit_proof_task_fact_versions(
+    proof_task_version: int,
+    fact_version: int,
+) -> None:
+    """INV-2: reject zero/negative versions that could alias implicit current/latest."""
+    if proof_task_version < 1 or fact_version < 1:
+        raise ValidationError(
+            "ProofTaskFactLink requires explicit positive proof_task_version and fact_version"
+        )
+
+
+def _guard_formal_defense_opponent_material_ref(
+    position_type: str,
+    opponent_material_ref: str | None,
+) -> None:
+    """INV-3: FORMAL_DEFENSE must cite opponent source material."""
+    if position_type == PositionType.FORMAL_DEFENSE.value:
+        if not opponent_material_ref or not str(opponent_material_ref).strip():
+            raise ValidationError("FORMAL_DEFENSE requires opponent material reference")
+
+
+def _resolve_proof_task_and_fact_for_link(
+    svc: DomainService,
+    *,
+    case_id: UUID,
+    proof_task_key: UUID,
+    proof_task_version: int,
+    fact_key: UUID,
+    fact_version: int,
+) -> tuple[ProofTask, Any]:
+    """INV-2: resolve explicit proof-task/fact versions; reject cross-case links."""
+    _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
+    task = svc.repo.get_proof_task_version(proof_task_key, proof_task_version)
+    if task is None:
+        raise NotFoundError("proof task version not found")
+    if task.case_id != case_id:
+        raise ValidationError("cross-case proof task link rejected")
+    fact = svc.repo.get_fact_version(fact_key, fact_version)
+    if fact is None:
+        raise NotFoundError("fact version not found")
+    if fact.case_id != case_id:
+        raise ValidationError("cross-case fact link rejected")
+    return task, fact
+
+
+def _persist_issue_structure_decision(
+    svc: DomainService,
+    *,
+    case_id: UUID,
+    actor_id: UUID,
+    decision_type: str,
+    target_id: UUID,
+    payload: dict[str, Any],
+) -> Any:
+    """INV-4: HumanDecision must be flushed before merge/split mutations proceed."""
+    decision = svc._new_decision(
+        case_id=case_id,
+        actor_id=actor_id,
+        decision_type=decision_type,
+        target_type="Issue",
+        target_id=target_id,
+        result=DecisionResult.CONFIRMED.value,
+        payload=payload,
+    )
+    svc.repo.add_decision(decision)
+    svc.repo.flush()
+    if decision.id is None:
+        raise ConflictError(f"{decision_type} decision failed to persist")
+    return decision
 
 
 class IssueCenteredDomainMixin:
@@ -140,9 +211,8 @@ class IssueCenteredDomainMixin:
         issue = self._require_issue_version(issue_key, issue_version)
         if issue.case_id != case_id:
             raise ValidationError("issue case_id mismatch")
+        _guard_formal_defense_opponent_material_ref(position_type, opponent_material_ref)
         if position_type == PositionType.FORMAL_DEFENSE.value:
-            if not opponent_material_ref:
-                raise ValidationError("FORMAL_DEFENSE requires opponent material reference")
             source = PositionSourceType.OPPONENT_MATERIAL.value
         else:
             source = PositionSourceType.LAWYER_CREATED.value
@@ -424,16 +494,14 @@ class IssueCenteredDomainMixin:
         actor_id: UUID,
     ) -> ProofTaskFactLink:
         self._require_case(case_id)
-        task = self.repo.get_proof_task_version(proof_task_key, proof_task_version)
-        if task is None:
-            raise NotFoundError("proof task version not found")
-        if task.case_id != case_id:
-            raise ValidationError("cross-case proof task link rejected")
-        fact = self.repo.get_fact_version(fact_key, fact_version)
-        if fact is None:
-            raise NotFoundError("fact version not found")
-        if fact.case_id != case_id:
-            raise ValidationError("cross-case fact link rejected")
+        _resolve_proof_task_and_fact_for_link(
+            self,
+            case_id=case_id,
+            proof_task_key=proof_task_key,
+            proof_task_version=proof_task_version,
+            fact_key=fact_key,
+            fact_version=fact_version,
+        )
         if role not in {r.value for r in ProofTaskFactLinkRole}:
             raise ValidationError(f"invalid proof task fact link role: {role}")
         link = ProofTaskFactLink(
@@ -885,20 +953,17 @@ class IssueCenteredDomainMixin:
                 raise ValidationError("only CONFIRMED issues can be merged")
             sources.append(issue)
 
-        decision = self._new_decision(
+        decision = _persist_issue_structure_decision(
+            self,
             case_id=case_id,
             actor_id=actor_id,
             decision_type="MERGE_ISSUES",
-            target_type="Issue",
             target_id=uuid.uuid4(),
-            result=DecisionResult.CONFIRMED.value,
             payload={
                 "source_keys": [str(k) for k in source_issue_keys],
                 "merged_statement": merged_statement,
             },
         )
-        self.repo.add_decision(decision)
-        self.repo.flush()
 
         new_key = uuid.uuid4()
         merged = Issue(
@@ -973,17 +1038,14 @@ class IssueCenteredDomainMixin:
         if source.status != IssueStatus.CONFIRMED.value:
             raise ValidationError("only CONFIRMED issues can be split")
 
-        decision = self._new_decision(
+        decision = _persist_issue_structure_decision(
+            self,
             case_id=case_id,
             actor_id=actor_id,
             decision_type="SPLIT_ISSUE",
-            target_type="Issue",
             target_id=source.issue_key,
-            result=DecisionResult.CONFIRMED.value,
             payload={"source_key": str(source_issue_key), "target_count": len(targets)},
         )
-        self.repo.add_decision(decision)
-        self.repo.flush()
 
         from backend.domain.services import _sync_issue_layer
 

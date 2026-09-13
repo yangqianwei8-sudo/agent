@@ -1,15 +1,40 @@
-"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 SSOT)."""
+"""Issue-centered V2 — explicit code-level assertions for four invariants (Issue #73 / #60 / #83 SSOT)."""
 
 from __future__ import annotations
 
 import pytest
 from sqlalchemy import select
 
+from backend.application.issue_work_product import assert_read_only_projection
 from backend.domain.errors import NotFoundError, ValidationError
-from backend.domain.services import DomainService
+from backend.domain.issue_centered import (
+    _guard_explicit_proof_task_fact_versions,
+    _guard_formal_defense_opponent_material_ref,
+)
+from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
 from backend.models import AuditLog, HumanDecision
 from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 from backend.tests.integration.test_issue_centered_v2 import _seed_fact
+
+
+def test_invariant_guard_functions_reject_invalid_inputs() -> None:
+    """Direct unit checks on INV-1/2/3 guard helpers (executed code, not prose)."""
+    with pytest.raises(ValidationError, match="ClaimDirection production"):
+        _reject_claim_direction_production_mutation(_legacy_compat=False)
+    _reject_claim_direction_production_mutation(_legacy_compat=True)
+    with pytest.raises(ValidationError, match="explicit positive"):
+        _guard_explicit_proof_task_fact_versions(0, 1)
+    with pytest.raises(ValidationError, match="explicit positive"):
+        _guard_explicit_proof_task_fact_versions(1, -1)
+    with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
+        _guard_formal_defense_opponent_material_ref("FORMAL_DEFENSE", None)
+    with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
+        _guard_formal_defense_opponent_material_ref("FORMAL_DEFENSE", "   ")
+    _guard_formal_defense_opponent_material_ref(
+        "FORMAL_DEFENSE", "material:answer-001"
+    )
+    with pytest.raises(RuntimeError, match="read-only"):
+        assert_read_only_projection("claim_directions")
 
 
 def test_invariant_1_no_production_claim_direction_creation(
