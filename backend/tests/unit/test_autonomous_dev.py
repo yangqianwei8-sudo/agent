@@ -2836,6 +2836,68 @@ def test_roadmap_materialize_accept_includes_reviewer_markers(infra_env, _mock_g
     assert "roadmap-issue:37:" in (resolution.body or "")
 
 
+def test_worker_deterministic_acceptance_marker_records_issue_number(
+    infra_env, monkeypatch: pytest.MonkeyPatch
+):
+    """Issue #38 P0 chain: worker writes a parseable marker for the active issue."""
+    from autonomous_dev.acceptance_marker import parse_marker_issue_number, read_marker
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    worker = Worker(settings, store, repo_root=repo)
+
+    monkeypatch.setattr(worker, "_run_tests", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "_git_fetch", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "_ensure_clean_or_resolve", lambda: None)
+
+    issue_body = (
+        f"{REVIEWER_ACCEPTANCE_MARKER}\n"
+        "[P0-LIVE-ACCEPTANCE]\n"
+        "Harmless marker-only change for [ACCEPT] Restart B 747cb2ef.\n"
+        "Update autonomous_dev/acceptance_marker.txt only."
+    )
+    task = store.create_task(issue_number=38, delivery_id="p0-accept")
+    store.try_acquire_lock(38, task.id)
+    worker.run_task(task, issue_body=issue_body)
+
+    content = read_marker(repo)
+    assert parse_marker_issue_number(content) == 38
+    assert "worker-run issue=38" in content
+
+
+def test_issue38_restart_b_reviewer_passes_on_marker_diff(
+    infra_env, monkeypatch: pytest.MonkeyPatch
+):
+    """Materialized Restart B body plus marker diff satisfies deterministic reviewer."""
+    from autonomous_dev.acceptance_marker import write_marker
+    from autonomous_dev.next_task_resolver import build_roadmap_issue_body
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    body = build_roadmap_issue_body(
+        source_issue_number=37,
+        stable_key="roadmap-issue:37:e0bff02d3b4a8815",
+        next_title="[ACCEPT] Restart B 747cb2ef",
+        source_body=f"{REVIEWER_ACCEPTANCE_MARKER}\n[P0-LIVE-ACCEPTANCE]",
+    )
+    write_marker(repo, issue_number=38)
+
+    svc = ReviewerService(settings, repo_root=repo)
+    monkeypatch.setattr(
+        svc,
+        "_git_diff",
+        lambda _sha: (
+            "diff --git a/autonomous_dev/acceptance_marker.txt "
+            "b/autonomous_dev/acceptance_marker.txt"
+        ),
+    )
+    ctx = svc.gather_context(issue_number=38, issue_body=body, commit_sha="abc123")
+    result = svc.review(ctx)
+    assert result.verdict == "PASS"
+    assert "Harmless acceptance marker updated as required" in result.reason
+
+
 def test_handoff_pass_activates_queued_next_task_once(infra_env, _mock_github_client):
     from autonomous_dev.state import HandoffStatus
     from autonomous_dev.task_handoff import TaskHandoffEngine
