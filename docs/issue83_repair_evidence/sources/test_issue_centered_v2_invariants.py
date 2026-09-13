@@ -13,10 +13,11 @@ from backend.application.issue_work_product import (
     assert_read_only_projection,
     enforce_inv1_read_only,
 )
-from backend.domain.errors import NotFoundError, ValidationError
+from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
+    _require_structure_mutation_audit,
 )
 from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
 from backend.models import AuditLog, HumanDecision
@@ -228,6 +229,7 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     )
     assert len(merge_decisions) == 1
     assert merge_decisions[0].id is not None
+    assert merge_decisions[0].decision_type == "MERGE_ISSUES"
     assert merge_decisions[0].result == "CONFIRMED"
     merge_audits = list(
         db_session.scalars(
@@ -260,6 +262,7 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     )
     assert len(split_decisions) == 1
     assert split_decisions[0].id is not None
+    assert split_decisions[0].decision_type == "SPLIT_ISSUE"
     assert split_decisions[0].result == "CONFIRMED"
     split_audits = list(
         db_session.scalars(
@@ -271,6 +274,21 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     )
     assert len(split_audits) >= 1
     assert split_audits[0].entity_type == "issues"
+
+
+def test_invariant_4_guard_rejects_missing_human_decision_or_audit(
+    db_session, owner_id, actor_id
+) -> None:
+    """INV-4: _require_structure_mutation_audit fails closed without HumanDecision or AuditLog."""
+    svc = DomainService(db_session)
+    case = svc.create_case(title="INV4-guard", owner_user_id=owner_id)
+    with pytest.raises(ConflictError, match="HumanDecision"):
+        _require_structure_mutation_audit(
+            svc,
+            case_id=case.id,
+            action="merge_issues",
+            decision_type="MERGE_ISSUES",
+        )
 
 
 def test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions(

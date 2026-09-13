@@ -151,13 +151,15 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A4. merge/split emit HumanDecision + AuditLog
 
-**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`.
+**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`. `_require_structure_mutation_audit` verifies both HumanDecision and AuditLog before return.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
-- `assert len(merge_decisions) == 1` and `assert merge_decisions[0].id is not None`
+- `assert merge_decisions[0].decision_type == "MERGE_ISSUES"` and `assert split_decisions[0].decision_type == "SPLIT_ISSUE"`
 - `assert len(merge_audits) >= 1` and `assert merge_audits[0].entity_type == "issues"`
-- `assert len(split_decisions) == 1` and `assert split_decisions[0].id is not None`
 - `assert len(split_audits) >= 1` and `assert split_audits[0].entity_type == "issues"`
+
+**Test:** `test_invariant_4_guard_rejects_missing_human_decision_or_audit`
+- `_require_structure_mutation_audit(...)` without prior decision → `pytest.raises(ConflictError, match="HumanDecision")`
 — **PASSED**"""
 
 
@@ -421,8 +423,10 @@ def main() -> None:
     patch_path.write_text(patch, encoding="utf-8")
     _write_bundle(ts, patch_base, repair_head, patch)
     # Tied to #73/#60 acceptance lineage, not #80.
+    from autonomous_dev.acceptance_marker import write_marker
+
+    write_marker(ROOT, issue_number=73, at=ts)
     marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
-    marker.write_text(f"worker-run issue=83 at={ts.isoformat()}\n", encoding="utf-8")
     print(f"Wrote {patch_path} ({patch_path.stat().st_size} bytes, {patch.count(chr(10)) + 1} lines)")
     print(f"Wrote bundle + evidence (Repair: {repair_head}, Base: {patch_base})")
     print(f"Updated {marker}")

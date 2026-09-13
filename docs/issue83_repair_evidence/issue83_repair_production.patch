@@ -972,10 +972,10 @@ index 0000000..5f9053d
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..637ebe5
+index 0000000..274f0ed
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
-@@ -0,0 +1,1169 @@
+@@ -0,0 +1,1188 @@
 +"""Issue-centered V2 domain mutations — mixed into DomainService.
 +
 +Explicit invariants enforced in this module (Issue #83 repair SSOT / #80 / #73 / #60):
@@ -1020,6 +1020,7 @@ index 0000000..637ebe5
 +from backend.models import (
 +    AuditLog,
 +    ConflictFactLink,
++    HumanDecision,
 +    Issue,
 +    IssueConflict,
 +    IssueFactLink,
@@ -1122,10 +1123,22 @@ index 0000000..637ebe5
 +    *,
 +    case_id: UUID,
 +    action: str,
++    decision_type: str,
 +) -> None:
-+    """INV-4: merge/split must emit AuditLog (entity_type=issues) before returning."""
++    """INV-4: merge/split must emit HumanDecision + AuditLog before returning."""
 +    from sqlalchemy import select
 +
++    decision = svc.session.scalars(
++        select(HumanDecision)
++        .where(
++            HumanDecision.case_id == case_id,
++            HumanDecision.decision_type == decision_type,
++        )
++        .order_by(HumanDecision.created_at.desc())
++        .limit(1)
++    ).first()
++    if decision is None:
++        raise ConflictError(f"{action} must emit HumanDecision before completing")
 +    audit = svc.session.scalars(
 +        select(AuditLog)
 +        .where(
@@ -2029,7 +2042,10 @@ index 0000000..637ebe5
 +            },
 +        )
 +        _require_structure_mutation_audit(
-+            self, case_id=case_id, action="merge_issues"
++            self,
++            case_id=case_id,
++            action="merge_issues",
++            decision_type="MERGE_ISSUES",
 +        )
 +        return merged
 +
@@ -2108,7 +2124,10 @@ index 0000000..637ebe5
 +            },
 +        )
 +        _require_structure_mutation_audit(
-+            self, case_id=case_id, action="split_issue"
++            self,
++            case_id=case_id,
++            action="split_issue",
++            decision_type="SPLIT_ISSUE",
 +        )
 +        return created
 +
@@ -2147,10 +2166,10 @@ index 0000000..637ebe5
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..337f2c8
+index 0000000..17ed594
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
-@@ -0,0 +1,346 @@
+@@ -0,0 +1,364 @@
 +"""Issue-centered V2 — four invariant assertions (Issue #83 / #80 / #73 SSOT repair)."""
 +
 +from __future__ import annotations
@@ -2166,10 +2185,11 @@ index 0000000..337f2c8
 +    assert_read_only_projection,
 +    enforce_inv1_read_only,
 +)
-+from backend.domain.errors import NotFoundError, ValidationError
++from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 +from backend.domain.issue_centered import (
 +    _guard_explicit_proof_task_fact_versions,
 +    _guard_formal_defense_opponent_material_ref,
++    _require_structure_mutation_audit,
 +)
 +from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
 +from backend.models import AuditLog, HumanDecision
@@ -2381,6 +2401,7 @@ index 0000000..337f2c8
 +    )
 +    assert len(merge_decisions) == 1
 +    assert merge_decisions[0].id is not None
++    assert merge_decisions[0].decision_type == "MERGE_ISSUES"
 +    assert merge_decisions[0].result == "CONFIRMED"
 +    merge_audits = list(
 +        db_session.scalars(
@@ -2413,6 +2434,7 @@ index 0000000..337f2c8
 +    )
 +    assert len(split_decisions) == 1
 +    assert split_decisions[0].id is not None
++    assert split_decisions[0].decision_type == "SPLIT_ISSUE"
 +    assert split_decisions[0].result == "CONFIRMED"
 +    split_audits = list(
 +        db_session.scalars(
@@ -2424,6 +2446,21 @@ index 0000000..337f2c8
 +    )
 +    assert len(split_audits) >= 1
 +    assert split_audits[0].entity_type == "issues"
++
++
++def test_invariant_4_guard_rejects_missing_human_decision_or_audit(
++    db_session, owner_id, actor_id
++) -> None:
++    """INV-4: _require_structure_mutation_audit fails closed without HumanDecision or AuditLog."""
++    svc = DomainService(db_session)
++    case = svc.create_case(title="INV4-guard", owner_user_id=owner_id)
++    with pytest.raises(ConflictError, match="HumanDecision"):
++        _require_structure_mutation_audit(
++            svc,
++            case_id=case.id,
++            action="merge_issues",
++            decision_type="MERGE_ISSUES",
++        )
 +
 +
 +def test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions(

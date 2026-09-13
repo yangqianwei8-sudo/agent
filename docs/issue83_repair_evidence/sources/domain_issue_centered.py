@@ -42,6 +42,7 @@ from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.models import (
     AuditLog,
     ConflictFactLink,
+    HumanDecision,
     Issue,
     IssueConflict,
     IssueFactLink,
@@ -144,10 +145,22 @@ def _require_structure_mutation_audit(
     *,
     case_id: UUID,
     action: str,
+    decision_type: str,
 ) -> None:
-    """INV-4: merge/split must emit AuditLog (entity_type=issues) before returning."""
+    """INV-4: merge/split must emit HumanDecision + AuditLog before returning."""
     from sqlalchemy import select
 
+    decision = svc.session.scalars(
+        select(HumanDecision)
+        .where(
+            HumanDecision.case_id == case_id,
+            HumanDecision.decision_type == decision_type,
+        )
+        .order_by(HumanDecision.created_at.desc())
+        .limit(1)
+    ).first()
+    if decision is None:
+        raise ConflictError(f"{action} must emit HumanDecision before completing")
     audit = svc.session.scalars(
         select(AuditLog)
         .where(
@@ -1051,7 +1064,10 @@ class IssueCenteredDomainMixin:
             },
         )
         _require_structure_mutation_audit(
-            self, case_id=case_id, action="merge_issues"
+            self,
+            case_id=case_id,
+            action="merge_issues",
+            decision_type="MERGE_ISSUES",
         )
         return merged
 
@@ -1130,7 +1146,10 @@ class IssueCenteredDomainMixin:
             },
         )
         _require_structure_mutation_audit(
-            self, case_id=case_id, action="split_issue"
+            self,
+            case_id=case_id,
+            action="split_issue",
+            decision_type="SPLIT_ISSUE",
         )
         return created
 

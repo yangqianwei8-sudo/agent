@@ -1,6 +1,6 @@
 # Issue #83 Resubmit — Issue-Centered V2 (#80 repair)
 
-Generated: 2026-09-13T09:58:02.344395Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `9e0c217`
+Generated: 2026-09-13T10:02:58.753371Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `6b7153e`
 
 **SSOT:** `docs/issue83_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -9,10 +9,10 @@ Generated: 2026-09-13T09:58:02.344395Z | Base: `f84972a213c44ba602b07ae3801637dc
 | Artifact | Lines | Production path |
 |----------|-------|-----------------|
 | Full migration | 419 | `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` |
-| Full domain | 1170 | `backend/domain/issue_centered.py` |
+| Full domain | 1189 | `backend/domain/issue_centered.py` |
 | Full application | 543 | `backend/application/issue_work_product.py` |
-| Invariant tests | 347 | `backend/tests/integration/test_issue_centered_v2_invariants.py` |
-| Production patch | 2499 | `issue83_repair_production.patch` |
+| Invariant tests | 365 | `backend/tests/integration/test_issue_centered_v2_invariants.py` |
+| Production patch | 2536 | `issue83_repair_production.patch` |
 
 SSOT copies (identical to production): `sources/migration_h9b0c1d2e3f4.py`, `sources/domain_issue_centered.py`, `sources/application_issue_work_product.py`, `sources/test_issue_centered_v2_invariants.py`.
 
@@ -52,23 +52,25 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A4. merge/split emit HumanDecision + AuditLog
 
-**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`.
+**Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`. `_require_structure_mutation_audit` verifies both HumanDecision and AuditLog before return.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
-- `assert len(merge_decisions) == 1` and `assert merge_decisions[0].id is not None`
+- `assert merge_decisions[0].decision_type == "MERGE_ISSUES"` and `assert split_decisions[0].decision_type == "SPLIT_ISSUE"`
 - `assert len(merge_audits) >= 1` and `assert merge_audits[0].entity_type == "issues"`
-- `assert len(split_decisions) == 1` and `assert split_decisions[0].id is not None`
 - `assert len(split_audits) >= 1` and `assert split_audits[0].entity_type == "issues"`
+
+**Test:** `test_invariant_4_guard_rejects_missing_human_decision_or_audit`
+- `_require_structure_mutation_audit(...)` without prior decision → `pytest.raises(ConflictError, match="HumanDecision")`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T09:58:02.344395Z
+## (B) Test output — actual run 2026-09-13T10:02:58.753371Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=9e0c217e3a604ff8e7e1e0f1f9b4ac4cf757a82b | timestamp=2026-09-13T09:58:02.344395+00:00
+# Issue #83 repair capture | commit=6b7153e5cc3ec88b84fa4634842cab88fde745b0 | timestamp=2026-09-13T10:02:58.753371+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -76,28 +78,29 @@ cachedir: .pytest_cache
 rootdir: /home/devbox/project
 configfile: pyproject.toml
 plugins: anyio-4.15.1
-collecting ... collected 22 items
+collecting ... collected 23 items
 
 backend/tests/integration/test_issue_centered_v2.py::test_position_ai_candidate_lawyer_confirm PASSED [  4%]
-backend/tests/integration/test_issue_centered_v2.py::test_position_formal_defense_requires_material PASSED [  9%]
+backend/tests/integration/test_issue_centered_v2.py::test_position_formal_defense_requires_material PASSED [  8%]
 backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_fact_link PASSED [ 13%]
-backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_rejects_implicit_version PASSED [ 18%]
-backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_cross_case_rejected PASSED [ 22%]
-backend/tests/integration/test_issue_centered_v2.py::test_conflict_and_gap_lawyer_actions PASSED [ 27%]
-backend/tests/integration/test_issue_centered_v2.py::test_lawyer_assessment_ai_blocked PASSED [ 31%]
-backend/tests/integration/test_issue_centered_v2.py::test_issue_merge_and_split PASSED [ 36%]
-backend/tests/integration/test_issue_centered_v2.py::test_claim_direction_production_disabled PASSED [ 40%]
-backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_proof_state PASSED [ 45%]
-backend/tests/integration/test_issue_centered_v2.py::test_green_issue_not_auto_ready PASSED [ 50%]
-backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_api PASSED [ 54%]
-backend/tests/integration/test_issue_centered_v2.py::test_workspace_includes_issue_work_product PASSED [ 59%]
-backend/tests/integration/test_issue_centered_v2.py::test_agent_issue_object_context PASSED [ 63%]
-backend/tests/integration/test_issue_centered_v2.py::test_structural_gap_renamed PASSED [ 68%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_guard_functions_reject_invalid_inputs PASSED [ 72%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_1_no_production_claim_direction_creation PASSED [ 77%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case PASSED [ 81%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_requires_opponent_material_ref PASSED [ 86%]
-backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_merge_split_emit_human_decision_and_audit_log PASSED [ 90%]
+backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_rejects_implicit_version PASSED [ 17%]
+backend/tests/integration/test_issue_centered_v2.py::test_proof_task_fact_link_cross_case_rejected PASSED [ 21%]
+backend/tests/integration/test_issue_centered_v2.py::test_conflict_and_gap_lawyer_actions PASSED [ 26%]
+backend/tests/integration/test_issue_centered_v2.py::test_lawyer_assessment_ai_blocked PASSED [ 30%]
+backend/tests/integration/test_issue_centered_v2.py::test_issue_merge_and_split PASSED [ 34%]
+backend/tests/integration/test_issue_centered_v2.py::test_claim_direction_production_disabled PASSED [ 39%]
+backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_proof_state PASSED [ 43%]
+backend/tests/integration/test_issue_centered_v2.py::test_green_issue_not_auto_ready PASSED [ 47%]
+backend/tests/integration/test_issue_centered_v2.py::test_issue_work_product_api PASSED [ 52%]
+backend/tests/integration/test_issue_centered_v2.py::test_workspace_includes_issue_work_product PASSED [ 56%]
+backend/tests/integration/test_issue_centered_v2.py::test_agent_issue_object_context PASSED [ 60%]
+backend/tests/integration/test_issue_centered_v2.py::test_structural_gap_renamed PASSED [ 65%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_guard_functions_reject_invalid_inputs PASSED [ 69%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_1_no_production_claim_direction_creation PASSED [ 73%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case PASSED [ 78%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_formal_defense_requires_opponent_material_ref PASSED [ 82%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_merge_split_emit_human_decision_and_audit_log PASSED [ 86%]
+backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_4_guard_rejects_missing_human_decision_or_audit PASSED [ 91%]
 backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions PASSED [ 95%]
 backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3_db_rejects_formal_defense_without_material_ref PASSED [100%]
 
@@ -113,7 +116,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 22 passed, 4 warnings in 1.52s ========================
+======================== 23 passed, 4 warnings in 2.95s ========================
 ```
 
 Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py`
@@ -121,7 +124,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=9e0c217e3a604ff8e7e1e0f1f9b4ac4cf757a82b | timestamp=2026-09-13T09:58:02.344395+00:00
+# Issue #83 repair capture | commit=6b7153e5cc3ec88b84fa4634842cab88fde745b0 | timestamp=2026-09-13T10:02:58.753371+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -596,7 +599,7 @@ def downgrade() -> None:
 
 ## (D) Domain — backend/domain/issue_centered.py (complete, untruncated, inlined)
 
-Production path: `backend/domain/issue_centered.py` (1170 lines)
+Production path: `backend/domain/issue_centered.py` (1189 lines)
 
 ```python
 """Issue-centered V2 domain mutations — mixed into DomainService.
@@ -643,6 +646,7 @@ from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.models import (
     AuditLog,
     ConflictFactLink,
+    HumanDecision,
     Issue,
     IssueConflict,
     IssueFactLink,
@@ -745,10 +749,22 @@ def _require_structure_mutation_audit(
     *,
     case_id: UUID,
     action: str,
+    decision_type: str,
 ) -> None:
-    """INV-4: merge/split must emit AuditLog (entity_type=issues) before returning."""
+    """INV-4: merge/split must emit HumanDecision + AuditLog before returning."""
     from sqlalchemy import select
 
+    decision = svc.session.scalars(
+        select(HumanDecision)
+        .where(
+            HumanDecision.case_id == case_id,
+            HumanDecision.decision_type == decision_type,
+        )
+        .order_by(HumanDecision.created_at.desc())
+        .limit(1)
+    ).first()
+    if decision is None:
+        raise ConflictError(f"{action} must emit HumanDecision before completing")
     audit = svc.session.scalars(
         select(AuditLog)
         .where(
@@ -1652,7 +1668,10 @@ class IssueCenteredDomainMixin:
             },
         )
         _require_structure_mutation_audit(
-            self, case_id=case_id, action="merge_issues"
+            self,
+            case_id=case_id,
+            action="merge_issues",
+            decision_type="MERGE_ISSUES",
         )
         return merged
 
@@ -1731,7 +1750,10 @@ class IssueCenteredDomainMixin:
             },
         )
         _require_structure_mutation_audit(
-            self, case_id=case_id, action="split_issue"
+            self,
+            case_id=case_id,
+            action="split_issue",
+            decision_type="SPLIT_ISSUE",
         )
         return created
 
@@ -2321,7 +2343,7 @@ class IssueWorkProductService:
 
 ## (F) Invariant tests — backend/tests/integration/test_issue_centered_v2_invariants.py (complete, untruncated, inlined)
 
-Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py` (347 lines)
+Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py` (365 lines)
 
 ```python
 """Issue-centered V2 — four invariant assertions (Issue #83 / #80 / #73 SSOT repair)."""
@@ -2339,10 +2361,11 @@ from backend.application.issue_work_product import (
     assert_read_only_projection,
     enforce_inv1_read_only,
 )
-from backend.domain.errors import NotFoundError, ValidationError
+from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
+    _require_structure_mutation_audit,
 )
 from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
 from backend.models import AuditLog, HumanDecision
@@ -2554,6 +2577,7 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     )
     assert len(merge_decisions) == 1
     assert merge_decisions[0].id is not None
+    assert merge_decisions[0].decision_type == "MERGE_ISSUES"
     assert merge_decisions[0].result == "CONFIRMED"
     merge_audits = list(
         db_session.scalars(
@@ -2586,6 +2610,7 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     )
     assert len(split_decisions) == 1
     assert split_decisions[0].id is not None
+    assert split_decisions[0].decision_type == "SPLIT_ISSUE"
     assert split_decisions[0].result == "CONFIRMED"
     split_audits = list(
         db_session.scalars(
@@ -2597,6 +2622,21 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     )
     assert len(split_audits) >= 1
     assert split_audits[0].entity_type == "issues"
+
+
+def test_invariant_4_guard_rejects_missing_human_decision_or_audit(
+    db_session, owner_id, actor_id
+) -> None:
+    """INV-4: _require_structure_mutation_audit fails closed without HumanDecision or AuditLog."""
+    svc = DomainService(db_session)
+    case = svc.create_case(title="INV4-guard", owner_user_id=owner_id)
+    with pytest.raises(ConflictError, match="HumanDecision"):
+        _require_structure_mutation_audit(
+            svc,
+            case_id=case.id,
+            action="merge_issues",
+            decision_type="MERGE_ISSUES",
+        )
 
 
 def test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions(
@@ -2674,7 +2714,7 @@ def test_invariant_3_db_rejects_formal_defense_without_material_ref(
 
 Verified by: all 19 pytest tests + live acceptance 30 steps — **PASSED**.
 
-## (G) Untruncated production diff — all four files (2499 lines)
+## (G) Untruncated production diff — all four files (2536 lines)
 
 Generated: `git diff f84972a213c44ba602b07ae3801637dc5c045f16 -- <four production paths>`
 
@@ -3655,10 +3695,10 @@ index 0000000..5f9053d
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..637ebe5
+index 0000000..274f0ed
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
-@@ -0,0 +1,1169 @@
+@@ -0,0 +1,1188 @@
 +"""Issue-centered V2 domain mutations — mixed into DomainService.
 +
 +Explicit invariants enforced in this module (Issue #83 repair SSOT / #80 / #73 / #60):
@@ -3703,6 +3743,7 @@ index 0000000..637ebe5
 +from backend.models import (
 +    AuditLog,
 +    ConflictFactLink,
++    HumanDecision,
 +    Issue,
 +    IssueConflict,
 +    IssueFactLink,
@@ -3805,10 +3846,22 @@ index 0000000..637ebe5
 +    *,
 +    case_id: UUID,
 +    action: str,
++    decision_type: str,
 +) -> None:
-+    """INV-4: merge/split must emit AuditLog (entity_type=issues) before returning."""
++    """INV-4: merge/split must emit HumanDecision + AuditLog before returning."""
 +    from sqlalchemy import select
 +
++    decision = svc.session.scalars(
++        select(HumanDecision)
++        .where(
++            HumanDecision.case_id == case_id,
++            HumanDecision.decision_type == decision_type,
++        )
++        .order_by(HumanDecision.created_at.desc())
++        .limit(1)
++    ).first()
++    if decision is None:
++        raise ConflictError(f"{action} must emit HumanDecision before completing")
 +    audit = svc.session.scalars(
 +        select(AuditLog)
 +        .where(
@@ -4712,7 +4765,10 @@ index 0000000..637ebe5
 +            },
 +        )
 +        _require_structure_mutation_audit(
-+            self, case_id=case_id, action="merge_issues"
++            self,
++            case_id=case_id,
++            action="merge_issues",
++            decision_type="MERGE_ISSUES",
 +        )
 +        return merged
 +
@@ -4791,7 +4847,10 @@ index 0000000..637ebe5
 +            },
 +        )
 +        _require_structure_mutation_audit(
-+            self, case_id=case_id, action="split_issue"
++            self,
++            case_id=case_id,
++            action="split_issue",
++            decision_type="SPLIT_ISSUE",
 +        )
 +        return created
 +
@@ -4830,10 +4889,10 @@ index 0000000..637ebe5
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..337f2c8
+index 0000000..17ed594
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
-@@ -0,0 +1,346 @@
+@@ -0,0 +1,364 @@
 +"""Issue-centered V2 — four invariant assertions (Issue #83 / #80 / #73 SSOT repair)."""
 +
 +from __future__ import annotations
@@ -4849,10 +4908,11 @@ index 0000000..337f2c8
 +    assert_read_only_projection,
 +    enforce_inv1_read_only,
 +)
-+from backend.domain.errors import NotFoundError, ValidationError
++from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 +from backend.domain.issue_centered import (
 +    _guard_explicit_proof_task_fact_versions,
 +    _guard_formal_defense_opponent_material_ref,
++    _require_structure_mutation_audit,
 +)
 +from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
 +from backend.models import AuditLog, HumanDecision
@@ -5064,6 +5124,7 @@ index 0000000..337f2c8
 +    )
 +    assert len(merge_decisions) == 1
 +    assert merge_decisions[0].id is not None
++    assert merge_decisions[0].decision_type == "MERGE_ISSUES"
 +    assert merge_decisions[0].result == "CONFIRMED"
 +    merge_audits = list(
 +        db_session.scalars(
@@ -5096,6 +5157,7 @@ index 0000000..337f2c8
 +    )
 +    assert len(split_decisions) == 1
 +    assert split_decisions[0].id is not None
++    assert split_decisions[0].decision_type == "SPLIT_ISSUE"
 +    assert split_decisions[0].result == "CONFIRMED"
 +    split_audits = list(
 +        db_session.scalars(
@@ -5107,6 +5169,21 @@ index 0000000..337f2c8
 +    )
 +    assert len(split_audits) >= 1
 +    assert split_audits[0].entity_type == "issues"
++
++
++def test_invariant_4_guard_rejects_missing_human_decision_or_audit(
++    db_session, owner_id, actor_id
++) -> None:
++    """INV-4: _require_structure_mutation_audit fails closed without HumanDecision or AuditLog."""
++    svc = DomainService(db_session)
++    case = svc.create_case(title="INV4-guard", owner_user_id=owner_id)
++    with pytest.raises(ConflictError, match="HumanDecision"):
++        _require_structure_mutation_audit(
++            svc,
++            case_id=case.id,
++            action="merge_issues",
++            decision_type="MERGE_ISSUES",
++        )
 +
 +
 +def test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions(
