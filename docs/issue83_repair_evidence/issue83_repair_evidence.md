@@ -1,8 +1,8 @@
 # Issue #83 Repair Evidence — Issue-Centered V2 (#80)
 
-Generated: 2026-09-13T10:02:58.753371Z
+Generated: 2026-09-13T10:07:02.819823Z
 Base commit: `f84972a213c44ba602b07ae3801637dc5c045f16` (pre issue-centered v2; parent of c19379b)
-Repair commit: `6b7153e`
+Repair commit: `9ec267f`
 
 **This directory is the sole SSOT for Issue #83 repair submission.**
 
@@ -2571,7 +2571,7 @@ Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/
 Also saved to: `test_issue_centered_v2_output.txt`
 
 ```
-# Issue #83 repair capture | commit=6b7153e5cc3ec88b84fa4634842cab88fde745b0 | timestamp=2026-09-13T10:02:58.753371+00:00
+# Issue #83 repair capture | commit=9ec267f7fbd98720a3b6e01136adf944afad9d93 | timestamp=2026-09-13T10:07:02.819823+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -2617,7 +2617,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 23 passed, 4 warnings in 2.95s ========================
+======================== 23 passed, 4 warnings in 1.51s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py
@@ -2627,7 +2627,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Also saved to: `live_issue_centered_v2_acceptance_output.txt`
 
 ```
-# Issue #83 repair capture | commit=6b7153e5cc3ec88b84fa4634842cab88fde745b0 | timestamp=2026-09-13T10:02:58.753371+00:00
+# Issue #83 repair capture | commit=9ec267f7fbd98720a3b6e01136adf944afad9d93 | timestamp=2026-09-13T10:07:02.819823+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
