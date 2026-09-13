@@ -3,17 +3,32 @@
 Issue #38 materializes as a roadmap task that updates only
 ``autonomous_dev/acceptance_marker.txt``.  The worker must commit that path
 alone; the reviewer verifies the marker appears in the git diff.
+
+Golden PDF/DOCX fixtures are validated before marker-only commits so
+CreationDate/ModDate and /ID pinning in ``backend.fixtures.deterministic``
+prevents binary churn from being staged alongside the marker.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
-from autonomous_dev.acceptance_marker import MARKER_GIT_PATH, write_marker
+from autonomous_dev.acceptance_marker import MARKER_GIT_PATH, diff_includes_marker, write_marker
 from autonomous_dev.reviewer_service import REVIEWER_ACCEPTANCE_MARKER
 
 P0_LIVE_ACCEPTANCE_MARKER = "[P0-LIVE-ACCEPTANCE]"
 _MARKER_ONLY_INSTRUCTION = "Update autonomous_dev/acceptance_marker.txt only."
+
+
+@dataclass(frozen=True)
+class MarkerOnlyReviewVerdict:
+    """Deterministic reviewer outcome for issue #38 marker-only tasks."""
+
+    verdict: str
+    reason: str
+    fail_repair_summary: str | None = None
 
 
 def is_marker_only_acceptance(issue_body: str) -> bool:
@@ -33,3 +48,41 @@ def marker_commit_paths() -> list[str]:
 def apply_harmless_marker_change(repo_root: Path, issue_number: int) -> Path:
     """Write the acceptance marker for *issue_number* and return its path."""
     return write_marker(repo_root, issue_number=issue_number)
+
+
+def ensure_golden_fixtures_stable() -> None:
+    """Validate committed golden fixtures match the deterministic generator."""
+    from backend.fixtures import ensure_fixtures
+
+    ensure_fixtures()
+
+
+def evaluate_marker_only_review(diff: str, issue_body: str) -> MarkerOnlyReviewVerdict | None:
+    """Production reviewer gate for issue #38 Restart-B marker-only acceptance."""
+    if not is_marker_only_acceptance(issue_body):
+        return None
+    if diff_includes_marker(diff):
+        return MarkerOnlyReviewVerdict(
+            verdict="PASS",
+            reason="Harmless acceptance marker updated as required",
+        )
+    return MarkerOnlyReviewVerdict(
+        verdict="FAIL",
+        reason="Expected acceptance_marker.txt change not found in diff",
+        fail_repair_summary="Ensure worker updates autonomous_dev/acceptance_marker.txt",
+    )
+
+
+def execute_marker_only_acceptance(
+    repo_root: Path,
+    issue_number: int,
+    *,
+    run_gate_tests: Callable[[], None],
+    commit_paths: Callable[[list[str]], str],
+) -> tuple[Path, str]:
+    """Production worker flow: stable fixtures, marker write, gate tests, path-scoped commit."""
+    ensure_golden_fixtures_stable()
+    marker_path = apply_harmless_marker_change(repo_root, issue_number)
+    run_gate_tests()
+    commit_sha = commit_paths(marker_commit_paths())
+    return marker_path, commit_sha

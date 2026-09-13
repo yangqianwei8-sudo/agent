@@ -2978,6 +2978,75 @@ def test_p0_acceptance_apply_harmless_marker_change(infra_env):
     assert "worker-run issue=81" in path.read_text(encoding="utf-8")
 
 
+def test_p0_acceptance_evaluate_marker_only_review_pass_and_fail():
+    from autonomous_dev.next_task_resolver import build_roadmap_issue_body
+    from autonomous_dev.p0_acceptance import evaluate_marker_only_review
+
+    body = build_roadmap_issue_body(
+        source_issue_number=37,
+        stable_key="roadmap-issue:37:e0bff02d3b4a8815",
+        next_title="[ACCEPT] Restart B 747cb2ef",
+        source_body=f"{REVIEWER_ACCEPTANCE_MARKER}\n[P0-LIVE-ACCEPTANCE]",
+    )
+    marker_diff = (
+        "diff --git a/autonomous_dev/acceptance_marker.txt "
+        "b/autonomous_dev/acceptance_marker.txt\n"
+        "+++ b/autonomous_dev/acceptance_marker.txt\n"
+    )
+    passed = evaluate_marker_only_review(marker_diff, body)
+    assert passed is not None
+    assert passed.verdict == "PASS"
+    assert passed.reason == "Harmless acceptance marker updated as required"
+
+    failed = evaluate_marker_only_review("diff --git a/README.md b/README.md\n", body)
+    assert failed is not None
+    assert failed.verdict == "FAIL"
+    assert "Expected acceptance_marker.txt change not found in diff" in failed.reason
+
+    assert evaluate_marker_only_review(marker_diff, "unrelated task body") is None
+
+
+def test_p0_acceptance_execute_marker_only_acceptance_commits_marker_only(infra_env):
+    """Production execute_marker_only_acceptance must stage only the marker path."""
+    from autonomous_dev.next_task_resolver import build_roadmap_issue_body
+    from autonomous_dev.p0_acceptance import execute_marker_only_acceptance, marker_commit_paths
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    worker = Worker(settings, store, repo_root=repo)
+
+    gate_ran = {"ok": False}
+
+    def gate() -> None:
+        gate_ran["ok"] = True
+
+    def commit(paths: list[str]) -> str:
+        worker._ensure_git_identity()
+        worker._run(["git", "add", *paths])
+        worker._run(["git", "commit", "-m", "issue #38 marker-only"])
+        return worker._run(["git", "rev-parse", "HEAD"], check=True).stdout.strip()
+
+    marker_path, commit_sha = execute_marker_only_acceptance(
+        repo,
+        38,
+        run_gate_tests=gate,
+        commit_paths=commit,
+    )
+    assert gate_ran["ok"]
+    assert marker_path.name == "acceptance_marker.txt"
+    assert "worker-run issue=38" in marker_path.read_text(encoding="utf-8")
+    show = subprocess.run(
+        ["git", "show", "--name-only", "--pretty=format:", commit_sha],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    changed = [line.strip() for line in show.stdout.splitlines() if line.strip()]
+    assert changed == marker_commit_paths()
+
+
 def test_p0_acceptance_detects_marker_only_issue_body():
     from autonomous_dev.next_task_resolver import build_roadmap_issue_body
     from autonomous_dev.p0_acceptance import is_marker_only_acceptance, marker_commit_paths

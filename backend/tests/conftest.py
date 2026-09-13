@@ -29,6 +29,14 @@ def _deterministic_llm_mode() -> None:
     clear_llm_caches()
     assert get_settings().llm_mode == "deterministic"
 
+
+@pytest.fixture(scope="session", autouse=True)
+def _validate_golden_fixtures() -> None:
+    """Ensure committed PDF/DOCX golden files match the deterministic generator."""
+    from backend.fixtures import ensure_fixtures
+
+    ensure_fixtures()
+
 @pytest.fixture(scope="session")
 def database_url() -> str:
     settings = get_settings()

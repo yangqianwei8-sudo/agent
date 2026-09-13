@@ -26,7 +26,8 @@ from autonomous_dev.github_client import (  # noqa: E402
     LABEL_READY_FOR_REVIEW,
 )
 from autonomous_dev.state import StateStore, TaskStatus  # noqa: E402
-from autonomous_dev.worker import P0_LIVE_ACCEPTANCE_MARKER, PRODUCT_DECISION_MARKER  # noqa: E402
+from autonomous_dev.p0_acceptance import P0_LIVE_ACCEPTANCE_MARKER  # noqa: E402
+from autonomous_dev.worker import PRODUCT_DECISION_MARKER  # noqa: E402
 
 VENV_PYTHON = ROOT / ".venv" / "bin" / "python"
 BASE = os.environ.get("AUTONOMOUS_ACCEPTANCE_BASE", "http://127.0.0.1:8000")

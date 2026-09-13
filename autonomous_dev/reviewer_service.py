@@ -105,6 +105,16 @@ class ReviewerService:
                         f"Add `{REVIEWER_FAIL_REQUIRED_MAGIC}` to autonomous_dev/acceptance_marker.txt"
                     ),
                 )
+        from autonomous_dev.p0_acceptance import evaluate_marker_only_review
+
+        marker_only = evaluate_marker_only_review(ctx.diff, body)
+        if marker_only is not None:
+            return ReviewResult(
+                verdict=marker_only.verdict,
+                reason=marker_only.reason,
+                invocation_id=inv_id,
+                fail_repair_summary=marker_only.fail_repair_summary,
+            )
         if REVIEWER_ACCEPTANCE_MARKER in body or "[P0-LIVE-ACCEPTANCE]" in body:
             if diff_includes_marker(ctx.diff):
                 return ReviewResult(

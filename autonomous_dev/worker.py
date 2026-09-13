@@ -14,8 +14,8 @@ from autonomous_dev.execution_events import ExecutionEventRecorder
 from autonomous_dev.github_auth import git_env
 from autonomous_dev.github_client import GitHubClient, GitHubClientError
 from autonomous_dev.p0_acceptance import (
-    P0_LIVE_ACCEPTANCE_MARKER,
     apply_harmless_marker_change,
+    execute_marker_only_acceptance,
     is_marker_only_acceptance,
     marker_commit_paths,
 )
@@ -108,7 +108,7 @@ class Worker:
                 events.analysis_started()
                 if CURSOR_RUNTIME_ACCEPTANCE_MARKER in issue_body:
                     commit_sha = self._run_cursor_agent_controlled(task, issue_body, events=events)
-                elif P0_LIVE_ACCEPTANCE_MARKER in issue_body:
+                elif is_marker_only_acceptance(issue_body):
                     commit_sha = self._run_p0_live_acceptance(task, issue_body, events=events)
                 else:
                     commit_sha = self._run_cursor_agent(task, issue_body, events=events)
@@ -116,13 +116,7 @@ class Worker:
                 self._git_fetch(events)
                 self._ensure_clean_or_resolve()
                 if is_marker_only_acceptance(issue_body):
-                    self._apply_harmless_change(task.issue_number, events=events)
-                    self._run_acceptance_gate_tests(events)
-                    commit_sha = self._commit_and_push(
-                        task.issue_number,
-                        paths=marker_commit_paths(),
-                        events=events,
-                    )
+                    commit_sha = self._run_marker_only_acceptance(task, events=events)
                 else:
                     self._apply_harmless_change(task.issue_number, events=events)
                     self._run_tests(events)
@@ -333,25 +327,42 @@ class Worker:
             )
         return CURSOR_RUNTIME_OK_MARKER
 
+    def _run_marker_only_acceptance(
+        self, task: TaskRecord, *, events: ExecutionEventRecorder | None = None
+    ) -> str:
+        """Issue #38 production path: stable fixtures, marker-only commit."""
+        self._git_fetch(events)
+        self._prepare_acceptance_worktree()
+
+        def gate() -> None:
+            self._run_acceptance_gate_tests(events)
+
+        def commit(paths: list[str]) -> str:
+            return self._commit_and_push(
+                task.issue_number,
+                paths=paths,
+                events=events,
+            )
+
+        marker_path, commit_sha = execute_marker_only_acceptance(
+            self.repo_root,
+            task.issue_number,
+            run_gate_tests=gate,
+            commit_paths=commit,
+        )
+        if events:
+            events.file_edit(marker_path)
+        self._verify_push(commit_sha)
+        return commit_sha
+
     def _run_p0_live_acceptance(
         self, task: TaskRecord, issue_body: str, *, events: ExecutionEventRecorder
     ) -> str:
         """P0 live path: deterministic marker-only commit (cursor_sdk mode validated)."""
-        self._git_fetch(events)
-        self._prepare_acceptance_worktree()
-        self._apply_harmless_change(task.issue_number, events=events)
         if events:
             events.cursor_started()
             events.cursor_finished(result_summary=CURSOR_RUNTIME_OK_MARKER)
-        self._run_acceptance_gate_tests(events)
-        marker_path = "autonomous_dev/acceptance_marker.txt"
-        commit_sha = self._commit_and_push(
-            task.issue_number,
-            paths=[marker_path],
-            events=events,
-        )
-        self._verify_push(commit_sha)
-        return commit_sha
+        return self._run_marker_only_acceptance(task, events=events)
 
     def _run_cursor_agent(
         self, task: TaskRecord, issue_body: str, *, events: ExecutionEventRecorder
