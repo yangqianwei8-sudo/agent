@@ -2969,6 +2969,76 @@ def test_issue38_reviewer_fails_when_diff_lacks_marker(infra_env):
     assert "Expected acceptance_marker.txt change not found in diff" in result.reason
 
 
+def test_p0_acceptance_detects_marker_only_issue_body():
+    from autonomous_dev.next_task_resolver import build_roadmap_issue_body
+    from autonomous_dev.p0_acceptance import is_marker_only_acceptance, marker_commit_paths
+
+    body = build_roadmap_issue_body(
+        source_issue_number=37,
+        stable_key="roadmap-issue:37:e0bff02d3b4a8815",
+        next_title="[ACCEPT] Restart B 747cb2ef",
+        source_body=f"{REVIEWER_ACCEPTANCE_MARKER}\n[P0-LIVE-ACCEPTANCE]",
+    )
+    assert is_marker_only_acceptance(body)
+    assert marker_commit_paths() == ["autonomous_dev/acceptance_marker.txt"]
+    assert not is_marker_only_acceptance("Regular engineering task without markers.")
+
+
+def test_worker_deterministic_marker_only_commits_marker_path_only(
+    infra_env, monkeypatch: pytest.MonkeyPatch
+):
+    """Issue #38 deterministic worker path stages only the acceptance marker."""
+    from autonomous_dev.acceptance_marker import read_marker
+    from autonomous_dev.next_task_resolver import build_roadmap_issue_body
+    from autonomous_dev.p0_acceptance import marker_commit_paths
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    worker = Worker(settings, store, repo_root=repo)
+
+    monkeypatch.setattr(worker, "_run_acceptance_gate_tests", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "_git_fetch", lambda *a, **k: None)
+    monkeypatch.setattr(worker, "_ensure_clean_or_resolve", lambda: None)
+    monkeypatch.setattr(worker, "_verify_push", lambda *a, **k: None)
+
+    staged_paths: list[list[str] | None] = []
+
+    def capture_commit(issue_number, *, paths=None, events=None):
+        staged_paths.append(paths)
+        worker._ensure_git_identity()
+        if paths:
+            worker._run(["git", "add", *paths])
+        else:
+            worker._run(["git", "add", "-A"])
+        worker._run(["git", "commit", "-m", f"issue #{issue_number} marker"])
+        return worker._run(["git", "rev-parse", "HEAD"], check=True).stdout.strip()
+
+    monkeypatch.setattr(worker, "_commit_and_push", capture_commit)
+
+    issue_body = build_roadmap_issue_body(
+        source_issue_number=37,
+        stable_key="roadmap-issue:37:e0bff02d3b4a8815",
+        next_title="[ACCEPT] Restart B 747cb2ef",
+        source_body=f"{REVIEWER_ACCEPTANCE_MARKER}\n[P0-LIVE-ACCEPTANCE]",
+    )
+    task = store.create_task(issue_number=38, delivery_id="p0-deterministic")
+    store.try_acquire_lock(38, task.id)
+    worker.run_task(task, issue_body=issue_body)
+
+    assert staged_paths == [marker_commit_paths()]
+    assert "worker-run issue=38" in read_marker(repo)
+    show = subprocess.run(
+        ["git", "show", "--name-only", "--pretty=format:", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    changed = [line.strip() for line in show.stdout.splitlines() if line.strip()]
+    assert changed == marker_commit_paths()
+
+
 def test_handoff_pass_activates_queued_next_task_once(infra_env, _mock_github_client):
     from autonomous_dev.state import HandoffStatus
     from autonomous_dev.task_handoff import TaskHandoffEngine

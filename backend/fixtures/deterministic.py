@@ -8,6 +8,8 @@ worker commits do not pick up timestamp churn.
 
 from __future__ import annotations
 
+import re
+import tempfile
 from pathlib import Path
 
 DEFAULT_FIXTURES_DIR = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
@@ -17,11 +19,42 @@ DETERMINISTIC_PDF_EPOCH = "20000101000000+00'00'"
 
 FIXTURE_NAMES = ("sample_text.pdf", "sample_scanned.pdf", "sample.docx", "sample_image.png")
 
+_PDF_DATE_RE = re.compile(r"(CreationDate|ModDate) \(D:([^)]+)\)")
+_PDF_ID_RE = re.compile(r"/ID\s*\[<([0-9a-f]+)><\1>\]")
+
+
+def pdf_has_deterministic_metadata(pdf_bytes: bytes) -> bool:
+    """Return True when PDF bytes carry pinned CreationDate/ModDate and stable /ID."""
+    text = pdf_bytes.decode("latin-1")
+    dates = _PDF_DATE_RE.findall(text)
+    if not dates:
+        return False
+    if any(value != DETERMINISTIC_PDF_EPOCH for _, value in dates):
+        return False
+    return _PDF_ID_RE.search(text) is not None
+
+
+def validate_fixtures(root: Path) -> None:
+    """Raise ValueError when committed fixtures drift from deterministic generation."""
+    missing = [name for name in FIXTURE_NAMES if not (root / name).is_file()]
+    if missing:
+        raise ValueError(f"missing fixtures: {', '.join(missing)}")
+    with tempfile.TemporaryDirectory() as tmp:
+        expected = generate(output_dir=Path(tmp))
+        drifted = [
+            name
+            for name in FIXTURE_NAMES
+            if (root / name).read_bytes() != (expected / name).read_bytes()
+        ]
+    if drifted:
+        raise ValueError(f"fixture drift detected: {', '.join(drifted)}")
+
 
 def ensure_fixtures(*, output_dir: Path | None = None) -> Path:
-    """Return fixture directory, generating golden files only when any are missing."""
+    """Return fixture directory, generating when missing and validating when present."""
     root = output_dir if output_dir is not None else DEFAULT_FIXTURES_DIR
     if all((root / name).is_file() for name in FIXTURE_NAMES):
+        validate_fixtures(root)
         return root
     return generate(output_dir=output_dir)
 

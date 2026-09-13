@@ -13,6 +13,12 @@ from autonomous_dev.config import AutonomousDevSettings
 from autonomous_dev.execution_events import ExecutionEventRecorder
 from autonomous_dev.github_auth import git_env
 from autonomous_dev.github_client import GitHubClient, GitHubClientError
+from autonomous_dev.p0_acceptance import (
+    P0_LIVE_ACCEPTANCE_MARKER,
+    apply_harmless_marker_change,
+    is_marker_only_acceptance,
+    marker_commit_paths,
+)
 from autonomous_dev.product_decision import ProductDecisionPacket
 from autonomous_dev.review_bridge import ReviewBridge
 from autonomous_dev.review_handoff import transition_ready_for_review
@@ -22,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 PRODUCT_DECISION_MARKER = "[PRODUCT-DECISION]"
 CURSOR_RUNTIME_ACCEPTANCE_MARKER = "[CURSOR-RUNTIME-ACCEPTANCE]"
-P0_LIVE_ACCEPTANCE_MARKER = "[P0-LIVE-ACCEPTANCE]"
 CURSOR_RUNTIME_OK_MARKER = "CURSOR_AGENT_RUNTIME_OK"
 
 
@@ -110,9 +115,18 @@ class Worker:
             else:
                 self._git_fetch(events)
                 self._ensure_clean_or_resolve()
-                self._apply_harmless_change(task.issue_number, events=events)
-                self._run_tests(events)
-                commit_sha = self._commit_and_push(task.issue_number, events=events)
+                if is_marker_only_acceptance(issue_body):
+                    self._apply_harmless_change(task.issue_number, events=events)
+                    self._run_acceptance_gate_tests(events)
+                    commit_sha = self._commit_and_push(
+                        task.issue_number,
+                        paths=marker_commit_paths(),
+                        events=events,
+                    )
+                else:
+                    self._apply_harmless_change(task.issue_number, events=events)
+                    self._run_tests(events)
+                    commit_sha = self._commit_and_push(task.issue_number, events=events)
                 self._verify_push(commit_sha)
 
             if self._should_handoff_after_push(commit_sha):
@@ -406,9 +420,7 @@ class Worker:
             events.command_finished(reset, output="reset to origin/main", ok=True, phase="git")
 
     def _apply_harmless_change(self, issue_number: int, *, events: ExecutionEventRecorder | None = None) -> None:
-        from autonomous_dev.acceptance_marker import write_marker
-
-        marker = write_marker(self.repo_root, issue_number=issue_number)
+        marker = apply_harmless_marker_change(self.repo_root, issue_number=issue_number)
         if events:
             events.file_edit(marker)
 

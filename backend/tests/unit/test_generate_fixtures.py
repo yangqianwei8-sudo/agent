@@ -13,6 +13,8 @@ from backend.fixtures.deterministic import (
     DETERMINISTIC_PDF_EPOCH,
     ensure_fixtures,
     generate,
+    pdf_has_deterministic_metadata,
+    validate_fixtures,
 )
 
 _PDF_FIXTURES = ("sample_text.pdf", "sample_scanned.pdf")
@@ -88,8 +90,8 @@ def test_ensure_fixtures_generates_when_missing() -> None:
             assert (root / name).is_file(), f"missing fixture after ensure: {name}"
 
 
-def test_ensure_fixtures_does_not_overwrite_existing_files() -> None:
-    """Integration tests must not rewrite committed golden files each session."""
+def test_ensure_fixtures_validates_without_overwriting() -> None:
+    """Integration tests must validate golden files without rewriting them."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         generate(output_dir=root)
@@ -99,13 +101,27 @@ def test_ensure_fixtures_does_not_overwrite_existing_files() -> None:
         assert before == after
 
 
+def test_validate_fixtures_detects_drift() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        generate(output_dir=root)
+        (root / "sample_text.pdf").write_bytes(b"corrupt")
+        try:
+            validate_fixtures(root)
+        except ValueError as exc:
+            assert "sample_text.pdf" in str(exc)
+        else:
+            raise AssertionError("expected drift validation to fail")
+
+
+def test_pdf_has_deterministic_metadata() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = generate(output_dir=Path(tmp))
+        for name in _PDF_FIXTURES:
+            assert pdf_has_deterministic_metadata((root / name).read_bytes())
+        assert not pdf_has_deterministic_metadata(b"%PDF-1.4\nnot-a-real-fixture")
+
+
 def test_committed_fixtures_match_deterministic_generator() -> None:
     """Committed golden files must match fresh deterministic generation."""
-    with tempfile.TemporaryDirectory() as tmp:
-        generated = generate(output_dir=Path(tmp))
-        for name in _ALL_FIXTURES:
-            committed = FIXTURES / name
-            assert committed.is_file(), f"missing committed fixture: {name}"
-            assert committed.read_bytes() == (generated / name).read_bytes(), (
-                f"{name} drifted from deterministic generator output"
-            )
+    validate_fixtures(FIXTURES)
