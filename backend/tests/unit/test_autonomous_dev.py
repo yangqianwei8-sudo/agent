@@ -3645,3 +3645,153 @@ def test_report_worker_failure_posts_exactly_one_comment(
     assert store.get_execution_failure(execution_key) is not None
     assert store.get_execution_failure(execution_key).comment_posted_at is not None
 
+
+def test_github_label_sync_retry_on_eventual_consistency(
+    infra_env, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression fix: GitHub label sync retries when verification initially fails due to eventual consistency."""
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    
+    call_count = {"get": 0}
+    original_labels = {"cursor-task"}
+    
+    class _MockGitHubClientRetry(GitHubClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._labels = original_labels.copy()
+        
+        def _request_with_retry(self, method, url, **kwargs):
+            import httpx
+            if method == "PUT" and "/labels" in url:
+                self._labels.update(kwargs.get("json", {}).get("labels", []))
+                return httpx.Response(200, json={})
+            if method == "GET" and "/issues/" in url:
+                call_count["get"] += 1
+                labels_list = [{"name": n} for n in self._labels]
+                if call_count["get"] == 1:
+                    labels_list = [{"name": "cursor-task"}]
+                return httpx.Response(200, json={"labels": labels_list})
+            raise RuntimeError(f"unexpected request: {method} {url}")
+    
+    github = _MockGitHubClientRetry(settings)
+    github.set_issue_labels(32, {"cursor-task", "ready-for-review"})
+    assert "ready-for-review" in github.get_issue_labels(32)
+
+
+def test_worker_failure_retry_count_respects_max_attempts(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression fix: execution_failures retry_count should not exceed max_attempts."""
+    from autonomous_dev.worker_failure import report_worker_failure
+    
+    repo, db = infra_env
+    settings = AutonomousDevSettings(worker_retry_max_attempts=5)
+    store = StateStore(db)
+    issue_num = 999
+    
+    for i in range(10):
+        execution_key = f"{settings.github_repo}#{issue_num}#gen-{i}"
+        task = store.create_task(
+            issue_number=issue_num,
+            delivery_id=f"failure-{i}",
+            execution_key=execution_key,
+        )
+        store.update_task(task.id, status=TaskStatus.NEEDS_FIX, error="test failure")
+        exc = RuntimeError(f"failure {i}")
+        report_worker_failure(settings, store, _mock_github_client, task, exc=exc)
+        
+        failure = store.get_execution_failure(execution_key)
+        assert failure is not None
+        assert failure.retry_count <= settings.worker_retry_max_attempts, (
+            f"retry_count={failure.retry_count} exceeded max_attempts={settings.worker_retry_max_attempts}"
+        )
+
+
+def test_reviewer_exhausted_recovers_after_cooldown(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression fix: reviewer exhausted status can recover after cooldown period."""
+    from autonomous_dev.reviewer_self_heal import kick_reviewer_reactivation
+    from autonomous_dev.state import ReviewerReactivationStatus
+    
+    repo, db = infra_env
+    settings = AutonomousDevSettings(review_max_attempts=3)
+    store = StateStore(db)
+    
+    issue_num = 888
+    task = store.create_task(
+        issue_number=issue_num,
+        delivery_id="exhausted-test",
+        execution_key=f"{settings.github_repo}#{issue_num}#gen-exhausted",
+    )
+    store.update_task(task.id, status=TaskStatus.READY_FOR_REVIEW, commit_sha="abc123")
+    
+    now = datetime.now(UTC)
+    hour_ago = (now - timedelta(hours=2)).isoformat()
+    store.upsert_reviewer_reactivation(
+        issue_number=issue_num,
+        task_id=task.id,
+        attempt_count=10,
+        next_retry_at=None,
+        last_error="exhausted",
+        status=ReviewerReactivationStatus.EXHAUSTED,
+        last_kick_at=hour_ago,
+    )
+    
+    result = kick_reviewer_reactivation(
+        settings,
+        store,
+        task,
+        reason="test recovery after cooldown",
+    )
+    
+    assert result["status"] != "skipped"
+    record = store.get_reviewer_reactivation(issue_num)
+    assert record.status != ReviewerReactivationStatus.EXHAUSTED
+    assert record.attempt_count == 1
+
+
+def test_handoff_skips_closed_issues(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression fix: handoff should not try to activate closed issues."""
+    from autonomous_dev.task_handoff import TaskHandoffEngine
+    
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+    
+    closed_issue = 777
+    _mock_github_client.closed.append(closed_issue)
+    _mock_github_client.labels[closed_issue] = {"cursor-task", "completed"}
+    _mock_github_client.titles[closed_issue] = "Closed Task"
+    
+    task = store.create_task(
+        issue_number=666,
+        delivery_id="handoff-closed",
+        execution_key=f"{settings.github_repo}#666#handoff-test",
+    )
+    store.update_task(task.id, status=TaskStatus.COMPLETED, commit_sha="def456")
+    
+    engine = TaskHandoffEngine(settings, store, github=_mock_github_client)
+    handoff = store.create_handoff(
+        idempotency_key="test-closed-handoff",
+        source_task_id=task.id,
+        source_issue_number=task.issue_number,
+        commit_sha="def456",
+        status="pending",
+        next_issue_number=closed_issue,
+        reason="test",
+    )
+    
+    engine._kick_worker_for_issue(closed_issue, handoff=handoff)
+    
+    queued_tasks = [
+        d for d in store._conn().execute(
+            "SELECT * FROM deliveries WHERE event_type = 'issues' AND json_extract(payload, '$.issue.number') = ?",
+            (closed_issue,)
+        ).fetchall()
+    ]
+    assert len(queued_tasks) == 0, "should not create worker delivery for closed issue"
+
