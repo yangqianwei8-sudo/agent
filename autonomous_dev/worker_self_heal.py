@@ -149,6 +149,23 @@ def kick_worker_reactivation(
     except GitHubClientError as exc:
         return {"status": "failed", "reason": str(exc)[:200]}
 
+    try:
+        issues = github.list_open_issues_with_label("", limit=100, state="open")
+        issue_still_open = any(int(iss.get("number", -1)) == issue_number for iss in issues)
+        if not issue_still_open:
+            logger.warning(
+                "self-heal worker kick skipped issue=#%s — issue is closed/not found",
+                issue_number
+            )
+            return {"status": "skipped", "reason": "issue closed"}
+    except GitHubClientError as exc:
+        logger.warning(
+            "self-heal worker kick failed to verify issue=#%s state: %s — aborting kick",
+            issue_number,
+            exc
+        )
+        return {"status": "failed", "reason": f"state verification failed: {exc}"[:200]}
+
     record = store.get_worker_reactivation(issue_number)
     has_pending_reactivation = record is not None and record.status in {
         WorkerReactivationStatus.PENDING,
@@ -312,6 +329,20 @@ def reconcile_technical_needs_fix(
     for record in store.list_due_worker_reactivations(limit=20):
         num = record.issue_number
         seen.add(num)
+        
+        if getattr(github, "configured", True):
+            try:
+                issues = github.list_open_issues_with_label("", limit=100, state="open")
+                issue_still_open = any(int(iss.get("number", -1)) == num for iss in issues)
+                if not issue_still_open:
+                    logger.info(
+                        "self-heal reconcile skipped issue=#%s — issue is closed/not found",
+                        num
+                    )
+                    continue
+            except GitHubClientError:
+                pass
+        
         try:
             body = github.get_issue_body(num) if getattr(github, "configured", True) else ""
             labels = (

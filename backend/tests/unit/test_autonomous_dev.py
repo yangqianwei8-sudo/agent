@@ -3782,3 +3782,90 @@ def test_handoff_skips_closed_issues(
 
     labels_on_closed = _mock_github_client.labels.get(closed_issue, set())
     assert "current-task" not in labels_on_closed
+
+
+def test_self_heal_skips_closed_issues(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression fix: self-heal should not try to reactivate closed issues."""
+    from autonomous_dev.state import WorkerReactivationStatus
+    from autonomous_dev.worker_self_heal import kick_worker_reactivation
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+
+    closed_issue = 888
+    _mock_github_client.closed.append(closed_issue)
+    _mock_github_client.labels[closed_issue] = {"cursor-task", "needs-fix"}
+    _mock_github_client.bodies[closed_issue] = "Test body"
+    _mock_github_client.titles[closed_issue] = "Closed Needs-Fix Task"
+
+    task = store.create_task(
+        issue_number=closed_issue,
+        delivery_id="self-heal-closed",
+        execution_key=f"{settings.github_repo}#{closed_issue}#self-heal-test",
+    )
+    store.update_task(task.id, status=TaskStatus.NEEDS_FIX, error="test error")
+    store.upsert_worker_reactivation(
+        issue_number=closed_issue,
+        task_id=task.id,
+        attempt_count=1,
+        next_retry_at=datetime.now(UTC).isoformat(),
+        last_error="test error",
+        status=WorkerReactivationStatus.PENDING,
+    )
+
+    result = kick_worker_reactivation(
+        settings,
+        store,
+        _mock_github_client,
+        closed_issue,
+        reason="test self-heal on closed issue",
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "issue closed"
+    labels_on_closed = _mock_github_client.labels.get(closed_issue, set())
+    assert "current-task" not in labels_on_closed
+    assert "worker-running" not in labels_on_closed
+
+
+def test_reconcile_technical_needs_fix_skips_closed_issues(
+    infra_env, _mock_github_client, monkeypatch: pytest.MonkeyPatch
+):
+    """Regression fix: reconcile should not reactivate closed issues from DB."""
+    from autonomous_dev.state import WorkerReactivationStatus
+    from autonomous_dev.worker_self_heal import reconcile_technical_needs_fix
+
+    repo, db = infra_env
+    settings = AutonomousDevSettings()
+    store = StateStore(db)
+
+    closed_issue = 999
+    _mock_github_client.closed.append(closed_issue)
+    _mock_github_client.labels[closed_issue] = {"cursor-task", "needs-fix"}
+    _mock_github_client.bodies[closed_issue] = "Test body"
+    _mock_github_client.titles[closed_issue] = "Closed Needs-Fix Task"
+
+    task = store.create_task(
+        issue_number=closed_issue,
+        delivery_id="reconcile-closed",
+        execution_key=f"{settings.github_repo}#{closed_issue}#reconcile-test",
+    )
+    store.update_task(task.id, status=TaskStatus.NEEDS_FIX, error="test error")
+    store.upsert_worker_reactivation(
+        issue_number=closed_issue,
+        task_id=task.id,
+        attempt_count=1,
+        next_retry_at=datetime.now(UTC).isoformat(),
+        last_error="test error",
+        status=WorkerReactivationStatus.PENDING,
+    )
+
+    reactivated = reconcile_technical_needs_fix(settings, store, _mock_github_client)
+
+    assert reactivated == 0
+    labels_on_closed = _mock_github_client.labels.get(closed_issue, set())
+    assert "current-task" not in labels_on_closed
+    assert "worker-running" not in labels_on_closed
