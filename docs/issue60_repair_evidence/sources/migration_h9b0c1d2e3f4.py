@@ -1,4 +1,15 @@
-"""phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment."""
+"""phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
+
+Issue #60 / #73 SSOT: includes proof_gaps and lawyer_assessments with every CheckConstraint:
+- proof_gaps: ck_proof_gaps_type, ck_proof_gaps_status, ck_proof_gaps_source
+- lawyer_assessments: ck_lawyer_assessments_status
+- issue_positions: ck_issue_positions_side/type/source/status
+- proof_tasks: ck_proof_tasks_status, ck_proof_tasks_source
+- proof_task_fact_links: ck_proof_task_fact_link_role, ck_proof_task_fact_link_status
+- issue_conflicts: ck_issue_conflicts_status, ck_issue_conflicts_source
+- conflict_fact_links: ck_conflict_fact_link_role
+- issue_legal_theory_links: ck_issue_legal_theory_link_role, ck_issue_legal_theory_link_status
+"""
 
 from collections.abc import Sequence
 

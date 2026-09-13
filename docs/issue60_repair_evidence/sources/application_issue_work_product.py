@@ -1,4 +1,9 @@
-"""Issue Work Product — canonical issue-centered read projection."""
+"""Issue Work Product — canonical issue-centered read projection.
+
+Read-only projection over Issue-centered V2 domain (Issue #60 / #73).
+Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
+invariant enforcement remains in backend/domain/issue_centered.py and services.py.
+"""
 
 from __future__ import annotations
 
