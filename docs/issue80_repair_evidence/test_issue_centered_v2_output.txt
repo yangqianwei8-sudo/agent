@@ -1,4 +1,4 @@
-# Issue #80 repair capture | commit=5076a560135204bae1ad077dc43f29f01c81ad70 | timestamp=2026-09-13T10:40:10.633724+00:00
+# Issue #80 repair capture | commit=a0c74b74fe9d7cd5ec129499e80efb0c8c8effeb | timestamp=2026-09-13T10:44:37.825397+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -48,4 +48,4 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 27 passed, 4 warnings in 3.88s ========================
+======================== 27 passed, 4 warnings in 2.18s ========================

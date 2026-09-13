@@ -16,6 +16,7 @@ PATCH_BASE = "f84972a213c44ba602b07ae3801637dc5c045f16"
 
 PRODUCTION_FILES = {
     "migration": ROOT / "alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py",
+    "services": ROOT / "backend/domain/services.py",
     "domain": ROOT / "backend/domain/issue_centered.py",
     "application": ROOT / "backend/application/issue_work_product.py",
     "invariants": ROOT / "backend/tests/integration/test_issue_centered_v2_invariants.py",
@@ -185,17 +186,19 @@ def build_bundle(ts: datetime, patch_base: str, repair_head: str, patch: str) ->
     pytest_out = _read(OUTPUT_FILES["pytest"])
     live_out = _read(OUTPUT_FILES["live"])
     migration = _read(PRODUCTION_FILES["migration"])
+    services = _read(PRODUCTION_FILES["services"])
     domain = _read(PRODUCTION_FILES["domain"])
     application = _read(PRODUCTION_FILES["application"])
     invariants = _read(PRODUCTION_FILES["invariants"])
 
     mig_lines = migration.count("\n") + 1
+    svc_lines = services.count("\n") + 1
     dom_lines = domain.count("\n") + 1
     app_lines = application.count("\n") + 1
     inv_lines = invariants.count("\n") + 1
     patch_lines = patch.count("\n") + (0 if patch.endswith("\n") or not patch else 1)
 
-    header = f"""# Issue #80 Resubmit — Issue-Centered V2 (#73 repair)
+    header = f"""# Issue #80 Resubmit — Issue-Centered V2 (#73 / #86 repair)
 
 Generated: {ts_iso} | Base: `{patch_base}` | Repair: `{repair_head}`
 
@@ -206,19 +209,20 @@ Generated: {ts_iso} | Base: `{patch_base}` | Repair: `{repair_head}`
 | Artifact | Lines | Production path |
 |----------|-------|-----------------|
 | Full migration | {mig_lines} | `alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py` |
+| Full services | {svc_lines} | `backend/domain/services.py` |
 | Full domain | {dom_lines} | `backend/domain/issue_centered.py` |
 | Full application | {app_lines} | `backend/application/issue_work_product.py` |
 | Invariant tests | {inv_lines} | `backend/tests/integration/test_issue_centered_v2_invariants.py` |
 | Production patch | {patch_lines} | `issue80_repair_production.patch` |
 
-SSOT copies (identical to production): `sources/migration_h9b0c1d2e3f4.py`, `sources/domain_issue_centered.py`, `sources/application_issue_work_product.py`, `sources/test_issue_centered_v2_invariants.py`.
+SSOT copies (identical to production): `sources/migration_h9b0c1d2e3f4.py`, `sources/domain_services.py`, `sources/domain_issue_centered.py`, `sources/application_issue_work_product.py`, `sources/test_issue_centered_v2_invariants.py`.
 """
 
-    patch_section = f"""## (G) Untruncated production diff — all four files ({patch_lines} lines)
+    patch_section = f"""## (H) Untruncated production diff — all five files ({patch_lines} lines)
 
-Generated: `git diff {PATCH_BASE} -- <four production paths>`
+Generated: `git diff {PATCH_BASE} -- <five production paths>`
 
-Full raw patch (NOT truncated, ends at last line of invariant tests):
+Full raw patch (NOT truncated, includes services.py INV-1 wiring):
 
 {_fence("diff", patch)}"""
 
@@ -254,19 +258,27 @@ Also: `issue_positions`, `proof_tasks`, `proof_task_fact_links`, `issue_conflict
 
 {_fence("python", migration)}"""
 
-    domain_section = f"""## (D) Domain — backend/domain/issue_centered.py (complete, untruncated, inlined)
+    services_section = f"""## (D) Services — backend/domain/services.py (complete, untruncated, inlined)
+
+Production path: `backend/domain/services.py` ({svc_lines} lines)
+
+INV-1: `create_claim_direction` wires `_reject_claim_direction_production_mutation` before any mutation.
+
+{_fence("python", services)}"""
+
+    domain_section = f"""## (E) Domain — backend/domain/issue_centered.py (complete, untruncated, inlined)
 
 Production path: `backend/domain/issue_centered.py` ({dom_lines} lines)
 
 {_fence("python", domain)}"""
 
-    application_section = f"""## (E) Application — backend/application/issue_work_product.py (complete, untruncated, inlined)
+    application_section = f"""## (F) Application — backend/application/issue_work_product.py (complete, untruncated, inlined)
 
 Production path: `backend/application/issue_work_product.py` ({app_lines} lines)
 
 {_fence("python", application)}"""
 
-    invariants_section = f"""## (F) Invariant tests — backend/tests/integration/test_issue_centered_v2_invariants.py (complete, untruncated, inlined)
+    invariants_section = f"""## (G) Invariant tests — backend/tests/integration/test_issue_centered_v2_invariants.py (complete, untruncated, inlined)
 
 Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py` ({inv_lines} lines)
 
@@ -280,6 +292,7 @@ Verified by: all 27 pytest tests + live acceptance 30 steps — **PASSED**."""
             _invariants_section(),
             test_section,
             migration_section,
+            services_section,
             domain_section,
             application_section,
             invariants_section,
@@ -296,11 +309,12 @@ def build_evidence_md(
     live_out = _read(OUTPUT_FILES["live"])
     patch_lines = patch.count("\n") + (0 if patch.endswith("\n") or not patch else 1)
     migration = _read(PRODUCTION_FILES["migration"])
+    services = _read(PRODUCTION_FILES["services"])
     domain = _read(PRODUCTION_FILES["domain"])
     application = _read(PRODUCTION_FILES["application"])
     invariants = _read(PRODUCTION_FILES["invariants"])
 
-    return f"""# Issue #80 Repair Evidence — Issue-Centered V2 (#73)
+    return f"""# Issue #80 Repair Evidence — Issue-Centered V2 (#73 / #86)
 
 Generated: {ts_iso}
 Base commit: `{patch_base}` (pre issue-centered v2; parent of c19379b)
@@ -310,7 +324,7 @@ Repair commit: `{repair_head}`
 
 ## Reviewer bundle (priority)
 
-See `{bundle_rel}` for compact submission with all four invariants, full inline code, full raw diff, and full raw test PASS output.
+See `{bundle_rel}` for compact submission with all four invariants, full inline code (including services.py), full raw diff, and full raw test PASS output.
 
 ## (1) Full alembic migration h9b0c1d2e3f4 — untruncated (production path modified, inlined below)
 
@@ -332,25 +346,33 @@ See `{bundle_rel}` for compact submission with all four invariants, full inline 
 
 {_fence("python", migration)}
 
-## (2) Full backend/domain/issue_centered.py — untruncated (production path modified, inlined below)
+## (2) Full backend/domain/services.py — untruncated (production path modified, inlined below)
+
+Production: `backend/domain/services.py` ({services.count(chr(10)) + 1} lines) | SSOT: `sources/domain_services.py`
+
+INV-1: `create_claim_direction` wires `_reject_claim_direction_production_mutation`.
+
+{_fence("python", services)}
+
+## (3) Full backend/domain/issue_centered.py — untruncated (production path modified, inlined below)
 
 Production: `backend/domain/issue_centered.py` ({domain.count(chr(10)) + 1} lines) | SSOT: `sources/domain_issue_centered.py`
 
 {_fence("python", domain)}
 
-## (3) Full backend/application/issue_work_product.py — untruncated (production path modified, inlined below)
+## (4) Full backend/application/issue_work_product.py — untruncated (production path modified, inlined below)
 
 Production: `backend/application/issue_work_product.py` ({application.count(chr(10)) + 1} lines) | SSOT: `sources/application_issue_work_product.py`
 
 {_fence("python", application)}
 
-## (4) Full backend/tests/integration/test_issue_centered_v2_invariants.py — untruncated (inlined below)
+## (5) Full backend/tests/integration/test_issue_centered_v2_invariants.py — untruncated (inlined below)
 
 Production: `backend/tests/integration/test_issue_centered_v2_invariants.py` ({invariants.count(chr(10)) + 1} lines) | SSOT: `sources/test_issue_centered_v2_invariants.py`
 
 {_fence("python", invariants)}
 
-## (5) Captured test output — PASS (full raw stdout, untruncated)
+## (6) Captured test output — PASS (full raw stdout, untruncated)
 
 ### pytest test_issue_centered_v2.py + test_issue_centered_v2_invariants.py
 
@@ -368,17 +390,17 @@ Also saved to: `live_issue_centered_v2_acceptance_output.txt`
 
 {_fence("", live_out)}
 
-## (6) Explicit assertions/verification for four invariants
+## (7) Explicit assertions/verification for four invariants
 
 Dedicated module: `backend/tests/integration/test_issue_centered_v2_invariants.py`
 
 All four invariant tests **PASSED** — see section (A) in `{bundle_rel}`.
 
-## (7) Untruncated production diff — all four files ({patch_lines} lines)
+## (8) Untruncated production diff — all five files ({patch_lines} lines)
 
 File: `issue80_repair_production.patch`
 
-Generated: `git diff {PATCH_BASE} -- <four production paths>`
+Generated: `git diff {PATCH_BASE} -- <five production paths>`
 
 {_fence("diff", patch)}
 """
@@ -389,6 +411,7 @@ def sync_sources() -> None:
     sources.mkdir(parents=True, exist_ok=True)
     mapping = {
         "migration_h9b0c1d2e3f4.py": PRODUCTION_FILES["migration"],
+        "domain_services.py": PRODUCTION_FILES["services"],
         "domain_issue_centered.py": PRODUCTION_FILES["domain"],
         "application_issue_work_product.py": PRODUCTION_FILES["application"],
         "test_issue_centered_v2_invariants.py": PRODUCTION_FILES["invariants"],
@@ -444,7 +467,7 @@ def main() -> None:
     patch_path.write_text(patch, encoding="utf-8")
     _write_bundle(ts, patch_base, repair_head, patch)
     marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
-    marker.write_text(f"worker-run issue=80 at={ts.isoformat()}\n", encoding="utf-8")
+    marker.write_text(f"worker-run issue=86 at={ts.isoformat()}\n", encoding="utf-8")
     print(f"Wrote {patch_path} ({patch_path.stat().st_size} bytes, {patch.count(chr(10)) + 1} lines)")
     print(f"Wrote bundle + evidence (Repair: {repair_head}, Base: {patch_base})")
     print(f"Updated {marker}")
