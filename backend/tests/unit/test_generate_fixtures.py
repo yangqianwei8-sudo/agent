@@ -7,8 +7,10 @@ import tempfile
 from pathlib import Path
 
 from backend.fixtures.deterministic import (
-    DETERMINISTIC_PDF_EPOCH,
     DEFAULT_FIXTURES_DIR as FIXTURES,
+)
+from backend.fixtures.deterministic import (
+    DETERMINISTIC_PDF_EPOCH,
     generate,
 )
 

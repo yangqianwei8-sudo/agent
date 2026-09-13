@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from backend.domain.errors import ConflictError, NotFoundError, ValidationError
+from backend.domain.errors import NotFoundError, ValidationError
 from backend.domain.services import DomainService
 from backend.models import AuditLog, HumanDecision
 from backend.tests.integration.test_case_analyst import _seed_accepted_evidence

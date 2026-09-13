@@ -1001,7 +1001,9 @@ def test_push_triggers_reviewer_bridge(infra_env, _mock_github_client):
 def test_reviewer_service_deterministic_pass(infra_env):
     repo, db = infra_env
     settings = AutonomousDevSettings()
-    commit_sha = _commit_acceptance_marker(repo, issue_number=1, message="acceptance marker for issue #1")
+    commit_sha = _commit_acceptance_marker(
+        repo, issue_number=1, message="acceptance marker for issue #1"
+    )
     svc = ReviewerService(settings, repo_root=repo)
     ctx = svc.gather_context(
         issue_number=1,

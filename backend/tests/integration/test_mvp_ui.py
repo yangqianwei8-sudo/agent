@@ -14,10 +14,10 @@ from sqlalchemy.orm import Session
 
 from backend.application.material_upload import sanitize_filename
 from backend.domain.errors import ValidationError
+from backend.fixtures import generate as generate_fixtures
 from backend.infrastructure.db import get_db_session
 from backend.main import app
 from backend.models import CaseMaterial
-from backend.fixtures import generate as generate_fixtures
 from backend.tools.storage import ObjectStorage
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]

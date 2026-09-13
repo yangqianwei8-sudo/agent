@@ -19,10 +19,10 @@ from backend.application.pleading_writer import PleadingWriterService
 from backend.application.workspace import WorkspaceQueryService
 from backend.domain.errors import ValidationError
 from backend.domain.services import DomainService
+from backend.fixtures import generate as generate_fixtures
 from backend.models import CaseMaterial, EvidenceItem, ExtractedContent, SourceSpan
 from backend.schemas.evidence_proposal import EvidenceItemProposal
 from backend.skills.evidence_organizer import ScriptedOrganizerEngine
-from backend.fixtures import generate as generate_fixtures
 from backend.tools.storage import ObjectStorage
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"

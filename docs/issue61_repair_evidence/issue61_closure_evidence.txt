@@ -6,7 +6,7 @@
     from starlette.testclient import TestClient as TestClient  # noqa
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-8 passed, 142 deselected, 1 warning in 2.40s
+8 passed, 146 deselected, 1 warning in 4.16s
 
 === ruff ===
 [1;32mAll checks passed![0m
