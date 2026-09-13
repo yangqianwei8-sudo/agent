@@ -77,6 +77,11 @@ class IssuePosition(Base):
             "status IN ('CANDIDATE','CONFIRMED','REJECTED','SUPERSEDED')",
             name="ck_issue_positions_status",
         ),
+        CheckConstraint(
+            "(position_type <> 'FORMAL_DEFENSE') OR "
+            "(opponent_material_ref IS NOT NULL AND btrim(opponent_material_ref) <> '')",
+            name="ck_issue_positions_formal_defense_ref",
+        ),
         Index("ix_issue_positions_case", "case_id"),
         Index(
             "uq_issue_positions_current",
@@ -184,6 +189,14 @@ class ProofTaskFactLink(Base):
         CheckConstraint(
             "status IN ('ACTIVE','VOID')",
             name="ck_proof_task_fact_link_status",
+        ),
+        CheckConstraint(
+            "proof_task_version >= 1",
+            name="ck_proof_task_fact_links_task_version_pos",
+        ),
+        CheckConstraint(
+            "fact_version >= 1",
+            name="ck_proof_task_fact_links_fact_version_pos",
         ),
         Index("ix_proof_task_fact_links_case", "case_id"),
     )

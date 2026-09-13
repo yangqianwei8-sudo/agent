@@ -1,11 +1,18 @@
-"""Issue-centered V2 — four invariant assertions (Issue #73 / #60 SSOT repair)."""
+"""Issue-centered V2 — four invariant assertions (Issue #83 / #73 SSOT repair)."""
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
-from backend.application.issue_work_product import assert_read_only_projection
+from backend.application.issue_work_product import (
+    IssueWorkProductService,
+    assert_read_only_projection,
+    enforce_inv1_read_only,
+)
 from backend.domain.errors import NotFoundError, ValidationError
 from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
@@ -35,6 +42,10 @@ def test_invariant_guard_functions_reject_invalid_inputs() -> None:
     )
     with pytest.raises(RuntimeError, match="read-only"):
         assert_read_only_projection("claim_directions")
+    with pytest.raises(RuntimeError, match="read-only"):
+        enforce_inv1_read_only("issues")
+    with pytest.raises(RuntimeError, match="read-only"):
+        IssueWorkProductService.guard_write_attempt("claim_directions")
 
 
 def test_invariant_1_no_production_claim_direction_creation(
@@ -260,3 +271,76 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     )
     assert len(split_audits) >= 1
     assert split_audits[0].entity_type == "issues"
+
+
+def test_invariant_2_db_rejects_nonpositive_proof_task_fact_versions(
+    db_session, owner_id, actor_id
+) -> None:
+    """INV-2: DB check constraints reject proof_task_version/fact_version < 1."""
+    from backend.models import ProofTaskFactLink
+
+    svc = DomainService(db_session)
+    case = svc.create_case(title="INV2-DB", owner_user_id=owner_id)
+    issue = svc.confirm_issue(
+        svc.propose_issue(case_id=case.id, statement="DB约束焦点").issue_key,
+        actor_id=actor_id,
+    )
+    task = svc.create_lawyer_proof_task(
+        case_id=case.id,
+        issue_key=issue.issue_key,
+        issue_version=issue.version,
+        description="DB约束任务",
+        actor_id=actor_id,
+    )
+    *_, item = _seed_accepted_evidence(
+        db_session, owner_id=owner_id, actor_id=actor_id, case=case
+    )
+    fact = _seed_fact(svc, case.id, actor_id, item)
+    with pytest.raises(IntegrityError):
+        db_session.add(
+            ProofTaskFactLink(
+                case_id=case.id,
+                proof_task_key=task.proof_task_key,
+                proof_task_version=0,
+                fact_key=fact.fact_key,
+                fact_version=fact.version,
+                role="SUPPORT",
+                status="ACTIVE",
+                created_by=actor_id,
+            )
+        )
+        db_session.flush()
+    db_session.rollback()
+
+
+def test_invariant_3_db_rejects_formal_defense_without_material_ref(
+    db_session, owner_id, actor_id
+) -> None:
+    """INV-3: DB check constraint rejects FORMAL_DEFENSE without opponent_material_ref."""
+    from backend.models import IssuePosition
+
+    svc = DomainService(db_session)
+    case = svc.create_case(title="INV3-DB", owner_user_id=owner_id)
+    issue = svc.confirm_issue(
+        svc.propose_issue(case_id=case.id, statement="DB抗辩焦点").issue_key,
+        actor_id=actor_id,
+    )
+    with pytest.raises(IntegrityError):
+        db_session.add(
+            IssuePosition(
+                position_key=uuid.uuid4(),
+                case_id=case.id,
+                issue_key=issue.issue_key,
+                issue_version=issue.version,
+                side="OPPONENT",
+                position_type="FORMAL_DEFENSE",
+                source_type="OPPONENT_MATERIAL",
+                status="CONFIRMED",
+                statement="无材料引用",
+                opponent_material_ref=None,
+                version=1,
+                is_current=True,
+            )
+        )
+        db_session.flush()
+    db_session.rollback()
