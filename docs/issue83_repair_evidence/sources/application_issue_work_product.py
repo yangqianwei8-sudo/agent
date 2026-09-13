@@ -32,6 +32,20 @@ from backend.schemas.issue_work_product import (
     StructuralWarningView,
 )
 
+# INV-1 (#73): read projection — must never mutate ClaimDirection or issue-centered writes.
+_FORBIDDEN_MUTATION_ENTITY_TYPES = frozenset(
+    {"claim_directions", "issue_positions", "proof_tasks", "proof_task_fact_links", "issues"}
+)
+
+
+def assert_read_only_projection(entity_type: str) -> None:
+    """Guard invoked before any would-be write from this read-only service."""
+    if entity_type in _FORBIDDEN_MUTATION_ENTITY_TYPES:
+        raise RuntimeError(
+            f"IssueWorkProductService is read-only; cannot mutate {entity_type}"
+        )
+
+
 _PROOF_STATE_ZH = {
     ProofState.RED.value: "关键证明缺口",
     ProofState.YELLOW.value: "尚需补强",
