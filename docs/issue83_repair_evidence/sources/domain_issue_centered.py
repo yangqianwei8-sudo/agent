@@ -81,6 +81,30 @@ def _guard_formal_defense_opponent_material_ref(
             raise ValidationError("FORMAL_DEFENSE requires opponent material reference")
 
 
+def _resolve_proof_task_and_fact_for_link(
+    svc: DomainService,
+    *,
+    case_id: UUID,
+    proof_task_key: UUID,
+    proof_task_version: int,
+    fact_key: UUID,
+    fact_version: int,
+) -> tuple[ProofTask, Any]:
+    """INV-2: resolve explicit proof-task/fact versions; reject cross-case links."""
+    _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
+    task = svc.repo.get_proof_task_version(proof_task_key, proof_task_version)
+    if task is None:
+        raise NotFoundError("proof task version not found")
+    if task.case_id != case_id:
+        raise ValidationError("cross-case proof task link rejected")
+    fact = svc.repo.get_fact_version(fact_key, fact_version)
+    if fact is None:
+        raise NotFoundError("fact version not found")
+    if fact.case_id != case_id:
+        raise ValidationError("cross-case fact link rejected")
+    return task, fact
+
+
 def _persist_issue_structure_decision(
     svc: DomainService,
     *,
@@ -470,17 +494,14 @@ class IssueCenteredDomainMixin:
         actor_id: UUID,
     ) -> ProofTaskFactLink:
         self._require_case(case_id)
-        _guard_explicit_proof_task_fact_versions(proof_task_version, fact_version)
-        task = self.repo.get_proof_task_version(proof_task_key, proof_task_version)
-        if task is None:
-            raise NotFoundError("proof task version not found")
-        if task.case_id != case_id:
-            raise ValidationError("cross-case proof task link rejected")
-        fact = self.repo.get_fact_version(fact_key, fact_version)
-        if fact is None:
-            raise NotFoundError("fact version not found")
-        if fact.case_id != case_id:
-            raise ValidationError("cross-case fact link rejected")
+        _resolve_proof_task_and_fact_for_link(
+            self,
+            case_id=case_id,
+            proof_task_key=proof_task_key,
+            proof_task_version=proof_task_version,
+            fact_key=fact_key,
+            fact_version=fact_version,
+        )
         if role not in {r.value for r in ProofTaskFactLinkRole}:
             raise ValidationError(f"invalid proof task fact link role: {role}")
         link = ProofTaskFactLink(

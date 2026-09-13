@@ -11,14 +11,17 @@ from backend.domain.issue_centered import (
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
 )
-from backend.domain.services import DomainService
+from backend.domain.services import DomainService, _reject_claim_direction_production_mutation
 from backend.models import AuditLog, HumanDecision
 from backend.tests.integration.test_case_analyst import _seed_accepted_evidence
 from backend.tests.integration.test_issue_centered_v2 import _seed_fact
 
 
 def test_invariant_guard_functions_reject_invalid_inputs() -> None:
-    """Direct unit checks on INV-2/INV-3 guard helpers (executed code, not prose)."""
+    """Direct unit checks on INV-1/2/3 guard helpers (executed code, not prose)."""
+    with pytest.raises(ValidationError, match="ClaimDirection production"):
+        _reject_claim_direction_production_mutation(_legacy_compat=False)
+    _reject_claim_direction_production_mutation(_legacy_compat=True)
     with pytest.raises(ValidationError, match="explicit positive"):
         _guard_explicit_proof_task_fact_versions(0, 1)
     with pytest.raises(ValidationError, match="explicit positive"):
