@@ -1,6 +1,6 @@
 # Issue #83 Resubmit — Issue-Centered V2 (#80 repair)
 
-Generated: 2026-09-13T10:30:39.571220Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `fe74b49`
+Generated: 2026-09-13T10:31:02.356623Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `66ff235`
 
 **SSOT:** `docs/issue83_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -63,14 +63,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `_require_structure_mutation_audit(...)` without prior decision → `pytest.raises(ConflictError, match="HumanDecision")`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T10:30:39.571220Z
+## (B) Test output — actual run 2026-09-13T10:31:02.356623Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=fe74b495770a916bcc6cd0045dc75a849a645283 | timestamp=2026-09-13T10:30:39.571220+00:00
+# Issue #83 repair capture | commit=66ff235 | timestamp=2026-09-13T10:31:02.356623+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -127,7 +127,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=fe74b495770a916bcc6cd0045dc75a849a645283 | timestamp=2026-09-13T10:30:39.571220+00:00
+# Issue #83 repair capture | commit=66ff235 | timestamp=2026-09-13T10:31:02.356623+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
