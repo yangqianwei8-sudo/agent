@@ -173,23 +173,12 @@ def handle_technical_worker_failure(
     issue_body: str = "",
     stage: str | None = None,
 ) -> None:
-    """Persist structured failure, emit deduplicated comment, record bounded retry state."""
+    """Persist structured failure, emit deduplicated comment."""
     if PRODUCT_DECISION_MARKER in issue_body:
         return
 
     stage_name, error_class, message = (
         classify_worker_failure(exc) if stage is None else (stage, type(exc).__name__, summarize_error(str(exc)) or type(exc).__name__)
-    )
-    structured = structured_error_text(stage_name, error_class, message or error_class)
-
-    from autonomous_dev.worker_self_heal import record_technical_failure
-
-    record_technical_failure(
-        store,
-        store.get_task(task.id) or task,
-        error=structured,
-        max_attempts=settings.worker_retry_max_attempts,
-        backoff_seconds=settings.worker_retry_backoff_seconds,
     )
 
     report_worker_failure(
@@ -208,51 +197,20 @@ def trigger_post_failure_recovery(
     github: GitHubClient,
     issue_number: int,
 ) -> None:
-    """Make retry due immediately and invoke loop recovery (watchdog/self-heal path)."""
+    """Invoke unified recovery after failure."""
     if issue_number in _recovery_guard:
         return
     _recovery_guard.add(issue_number)
     try:
-        _trigger_post_failure_recovery_impl(settings, store, github, issue_number)
-    finally:
-        _recovery_guard.discard(issue_number)
-
-
-def _trigger_post_failure_recovery_impl(
-    settings: AutonomousDevSettings,
-    store: StateStore,
-    github: GitHubClient,
-    issue_number: int,
-) -> None:
-    now_iso = datetime.now(UTC).isoformat()
-    record = store.get_worker_reactivation(issue_number)
-    if record is not None and record.status == WorkerReactivationStatus.EXHAUSTED:
-        return
-
-    if record is not None:
-        store.upsert_worker_reactivation(
-            issue_number=issue_number,
-            next_retry_at=now_iso,
-            status=WorkerReactivationStatus.PENDING,
+        from autonomous_dev.recovery_simple import (
+            reconcile_needs_fix_and_stalled_reviews,
         )
-    else:
-        latest = store.get_task_by_issue(issue_number)
-        if latest is not None and latest.status in {TaskStatus.NEEDS_FIX, TaskStatus.FAILED}:
-            store.upsert_worker_reactivation(
-                issue_number=issue_number,
-                task_id=latest.id,
-                attempt_count=0,
-                next_retry_at=now_iso,
-                last_error=latest.error,
-                status=WorkerReactivationStatus.PENDING,
-            )
 
-    try:
-        from autonomous_dev.worker_self_heal import reconcile_technical_needs_fix
-
-        reconcile_technical_needs_fix(settings, store, github)
+        reconcile_needs_fix_and_stalled_reviews(settings, store, github)
     except Exception:
         logger.exception("post-failure recovery failed issue=#%s", issue_number)
+    finally:
+        _recovery_guard.discard(issue_number)
 
 
 def defer_same_generation_to_self_heal(

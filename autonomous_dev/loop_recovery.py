@@ -78,22 +78,15 @@ def run_loop_recovery_tick(settings: AutonomousDevSettings, store: StateStore) -
         logger.exception("stale running DB reconcile failed")
 
     try:
-        from autonomous_dev.worker_self_heal import reconcile_technical_needs_fix
-
-        counts["technical_needs_fix"] = reconcile_technical_needs_fix(
-            settings, store, github
+        from autonomous_dev.recovery_simple import (
+            reconcile_needs_fix_and_stalled_reviews,
         )
-    except Exception:
-        logger.exception("technical needs-fix self-heal failed")
 
-    try:
-        from autonomous_dev.reviewer_self_heal import reconcile_stalled_ready_for_review
-
-        counts["stalled_ready_for_review"] = reconcile_stalled_ready_for_review(
-            settings, store
-        )
+        recovered = reconcile_needs_fix_and_stalled_reviews(settings, store, github)
+        counts["technical_needs_fix"] = recovered["needs_fix"]
+        counts["stalled_ready_for_review"] = recovered["reviewer"]
     except Exception:
-        logger.exception("reviewer stall self-heal failed")
+        logger.exception("unified recovery failed")
     return counts
 
 

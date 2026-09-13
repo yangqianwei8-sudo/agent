@@ -350,6 +350,9 @@ class StateStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_task_handoffs_status
                     ON task_handoffs(status, created_at DESC);
+                -- DEPRECATED: worker_reactivations/reviewer_reactivations tables
+                -- Retry state now derived from task_executions history (see recovery_simple.py)
+                -- Tables preserved for backward compatibility; read-only access only
                 CREATE TABLE IF NOT EXISTS worker_reactivations (
                     issue_number INTEGER PRIMARY KEY,
                     task_id INTEGER,
