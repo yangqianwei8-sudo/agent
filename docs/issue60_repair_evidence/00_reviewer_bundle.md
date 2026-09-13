@@ -1,6 +1,6 @@
 # Issue #60 Resubmit — Issue-Centered V2 (#57 repair)
 
-Generated: 2026-09-13T06:16:00Z | Base: 375c282 | Implementation: c19379b (on main)
+Generated: 2026-09-13T06:22:24Z | Base: 1cb66f6 | Implementation: c19379b (on main)
 Full untruncated copies: docs/issue60_repair_evidence/sources/{migration_h9b0c1d2e3f4.py,domain_issue_centered.py,application_issue_work_product.py}
 Production paths: alembic/versions/h9b0c1d2e3f4_phase9_issue_centered_v2.py (394L), backend/domain/issue_centered.py (1062L), backend/application/issue_work_product.py (501L)
 
@@ -26,9 +26,11 @@ merge_issues() creates HumanDecision decision_type="MERGE_ISSUES" before mutatio
 split_issue() creates HumanDecision decision_type="SPLIT_ISSUE" before mutation, then _audit(...,"split_issue",...).
 TEST: test_issue_merge_and_split asserts len(merge_decisions)==1, merge_audits present, len(split_decisions)==1, split_audits present — PASSED.
 
-## (B) Test output — actual run 2026-09-13T06:15:56Z
+## (B) Test output — actual run 2026-09-13T06:22:24Z
 
-pytest backend/tests/integration/test_issue_centered_v2.py -v → 15 passed, 2 warnings in 1.37s
+Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py -v`
+
+pytest backend/tests/integration/test_issue_centered_v2.py -v → 15 passed, 2 warnings in 3.26s
   test_position_ai_candidate_lawyer_confirm PASSED
   test_position_formal_defense_requires_material PASSED
   test_proof_task_adopt_and_fact_link PASSED
