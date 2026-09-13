@@ -2305,7 +2305,7 @@ index 0000000..26f3665
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..7091b10
+index 0000000..91d2af9
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
 @@ -0,0 +1,658 @@
@@ -2332,9 +2332,9 @@ index 0000000..7091b10
 +from backend.domain.issue_centered import (
 +    _guard_cross_case_proof_task_fact_pair,
 +    _guard_explicit_proof_task_fact_versions,
-+    _guard_resolved_explicit_versions,
 +    _guard_formal_defense_opponent_material_ref,
 +    _guard_formal_defense_side,
++    _guard_resolved_explicit_versions,
 +    _normalize_opponent_material_ref,
 +    _reject_claim_direction_production_mutation,
 +    _require_structure_mutation_audit,

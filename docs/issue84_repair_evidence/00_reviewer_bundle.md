@@ -1,6 +1,6 @@
 # Issue #84 Resubmit — Issue-Centered V2 (#80 repair)
 
-Generated: 2026-09-13T10:50:05.063141Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `d905c45`
+Generated: 2026-09-13T10:50:24.213571Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `688dd83`
 
 **SSOT:** `docs/issue84_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -66,14 +66,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `_require_structure_mutation_audit(...)` without prior decision → `pytest.raises(ConflictError, match="HumanDecision")`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T10:50:05.063141Z
+## (B) Test output — actual run 2026-09-13T10:50:24.213571Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #84 repair capture | commit=d905c45b4f0df2c91b412411b135d193dfea107d | timestamp=2026-09-13T10:50:05.063141+00:00
+# Issue #84 repair capture | commit=688dd83dae005d4261a8e430946f0928221b8d68 | timestamp=2026-09-13T10:50:24.213571+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -134,7 +134,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #84 repair capture | commit=d905c45b4f0df2c91b412411b135d193dfea107d | timestamp=2026-09-13T10:50:05.063141+00:00
+# Issue #84 repair capture | commit=688dd83dae005d4261a8e430946f0928221b8d68 | timestamp=2026-09-13T10:50:24.213571+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -2518,9 +2518,9 @@ from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.domain.issue_centered import (
     _guard_cross_case_proof_task_fact_pair,
     _guard_explicit_proof_task_fact_versions,
-    _guard_resolved_explicit_versions,
     _guard_formal_defense_opponent_material_ref,
     _guard_formal_defense_side,
+    _guard_resolved_explicit_versions,
     _normalize_opponent_material_ref,
     _reject_claim_direction_production_mutation,
     _require_structure_mutation_audit,
@@ -5471,7 +5471,7 @@ index 0000000..26f3665
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..7091b10
+index 0000000..91d2af9
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
 @@ -0,0 +1,658 @@
@@ -5498,9 +5498,9 @@ index 0000000..7091b10
 +from backend.domain.issue_centered import (
 +    _guard_cross_case_proof_task_fact_pair,
 +    _guard_explicit_proof_task_fact_versions,
-+    _guard_resolved_explicit_versions,
 +    _guard_formal_defense_opponent_material_ref,
 +    _guard_formal_defense_side,
++    _guard_resolved_explicit_versions,
 +    _normalize_opponent_material_ref,
 +    _reject_claim_direction_production_mutation,
 +    _require_structure_mutation_audit,

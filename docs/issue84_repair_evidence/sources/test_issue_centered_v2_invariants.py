@@ -21,9 +21,9 @@ from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.domain.issue_centered import (
     _guard_cross_case_proof_task_fact_pair,
     _guard_explicit_proof_task_fact_versions,
-    _guard_resolved_explicit_versions,
     _guard_formal_defense_opponent_material_ref,
     _guard_formal_defense_side,
+    _guard_resolved_explicit_versions,
     _normalize_opponent_material_ref,
     _reject_claim_direction_production_mutation,
     _require_structure_mutation_audit,
