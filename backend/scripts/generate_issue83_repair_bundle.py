@@ -133,9 +133,11 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 **Domain enforcement** (`link_fact_to_proof_task`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); cross-case → `ValidationError("cross-case ...")`.
 
 **Test:** `test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case`
+- `proof_task_version=0` → `ValidationError(match="explicit positive")`
 - `proof_task_version+99` → `NotFoundError("proof task version not found")`
 - `fact_version+99` → `NotFoundError("fact version not found")`
-- cross-case fact → `ValidationError(match="cross-case")`
+- cross-case fact → `ValidationError(match="cross-case fact link rejected")`
+- cross-case proof task → `ValidationError(match="cross-case proof task link rejected")`
 — **PASSED**
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
@@ -152,10 +154,10 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 **Domain enforcement:** `merge_issues` creates `HumanDecision(decision_type="MERGE_ISSUES")` + `_audit(..., "merge_issues")`; `split_issue` creates `HumanDecision(decision_type="SPLIT_ISSUE")` + `_audit(..., "split_issue")`.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
-- `assert len(merge_decisions) == 1`
-- `assert len(merge_audits) >= 1`
-- `assert len(split_decisions) == 1`
-- `assert len(split_audits) >= 1`
+- `assert len(merge_decisions) == 1` and `assert merge_decisions[0].id is not None`
+- `assert len(merge_audits) >= 1` and `assert merge_audits[0].entity_type == "issues"`
+- `assert len(split_decisions) == 1` and `assert split_decisions[0].id is not None`
+- `assert len(split_audits) >= 1` and `assert split_audits[0].entity_type == "issues"`
 — **PASSED**"""
 
 

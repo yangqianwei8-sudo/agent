@@ -16,7 +16,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-# INV SSOT (#80): canonical allowed-value sets for CheckConstraints (used in upgrade()).
+# INV SSOT (#73/#60): canonical allowed-value sets for CheckConstraints (used in upgrade()).
 _PROOF_GAP_TYPES = ("FACT", "EVIDENCE", "SOURCE", "LEGAL_RESEARCH")
 _PROOF_GAP_STATUSES = ("OPEN", "RESOLVED", "WAIVED", "SUPERSEDED")
 _PROOF_GAP_SOURCES = ("AI_DETECTED", "LAWYER_CREATED")

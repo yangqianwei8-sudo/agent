@@ -1,4 +1,4 @@
-"""Issue-centered V2 — four invariant assertions (Issue #73 / #60 / #83 SSOT)."""
+"""Issue-centered V2 — four invariant assertions (Issue #73 / #60 SSOT repair)."""
 
 from __future__ import annotations
 
@@ -82,6 +82,17 @@ def test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case(
         description="跨案任务",
         actor_id=actor_id,
     )
+    # Zero/negative versions → ValidationError (explicit positive versions required)
+    with pytest.raises(ValidationError, match="explicit positive"):
+        svc.link_fact_to_proof_task(
+            case_id=c2.id,
+            proof_task_key=task.proof_task_key,
+            proof_task_version=0,
+            fact_key=fact.fact_key,
+            fact_version=fact.version,
+            role="SUPPORT",
+            actor_id=actor_id,
+        )
     # Implicit/nonexistent proof_task_version → NotFoundError (not silent current/latest)
     with pytest.raises(NotFoundError, match="proof task version not found"):
         svc.link_fact_to_proof_task(
@@ -105,13 +116,36 @@ def test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case(
             actor_id=actor_id,
         )
     # Cross-case fact → ValidationError
-    with pytest.raises(ValidationError, match="cross-case"):
+    with pytest.raises(ValidationError, match="cross-case fact link rejected"):
         svc.link_fact_to_proof_task(
             case_id=c2.id,
             proof_task_key=task.proof_task_key,
             proof_task_version=task.version,
             fact_key=fact.fact_key,
             fact_version=fact.version,
+            role="SUPPORT",
+            actor_id=actor_id,
+        )
+    # Cross-case proof task (task in c2, link attempted under c1) → ValidationError
+    issue1 = svc.confirm_issue(
+        svc.propose_issue(case_id=c1.id, statement="案A焦点").issue_key,
+        actor_id=actor_id,
+    )
+    task1 = svc.create_lawyer_proof_task(
+        case_id=c1.id,
+        issue_key=issue1.issue_key,
+        issue_version=issue1.version,
+        description="案A任务",
+        actor_id=actor_id,
+    )
+    fact2 = _seed_fact(svc, c2.id, actor_id, item)
+    with pytest.raises(ValidationError, match="cross-case proof task link rejected"):
+        svc.link_fact_to_proof_task(
+            case_id=c2.id,
+            proof_task_key=task1.proof_task_key,
+            proof_task_version=task1.version,
+            fact_key=fact2.fact_key,
+            fact_version=fact2.version,
             role="SUPPORT",
             actor_id=actor_id,
         )
@@ -182,6 +216,8 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
         )
     )
     assert len(merge_decisions) == 1
+    assert merge_decisions[0].id is not None
+    assert merge_decisions[0].result == "CONFIRMED"
     merge_audits = list(
         db_session.scalars(
             select(AuditLog).where(
@@ -191,6 +227,7 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
         )
     )
     assert len(merge_audits) >= 1
+    assert merge_audits[0].entity_type == "issues"
 
     split = svc.split_issue(
         case_id=case.id,
@@ -211,6 +248,8 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
         )
     )
     assert len(split_decisions) == 1
+    assert split_decisions[0].id is not None
+    assert split_decisions[0].result == "CONFIRMED"
     split_audits = list(
         db_session.scalars(
             select(AuditLog).where(
@@ -220,3 +259,4 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
         )
     )
     assert len(split_audits) >= 1
+    assert split_audits[0].entity_type == "issues"
