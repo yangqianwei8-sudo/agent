@@ -1,8 +1,8 @@
 # Issue #73 Repair Evidence — Issue-Centered V2 (#60)
 
-Generated: 2026-09-13T09:07:09.571449Z
+Generated: 2026-09-13T09:13:15.289065Z
 Base commit: `f84972a` (pre issue-centered v2; parent of c19379b)
-Repair commit: `8af9a7f`
+Repair commit: `3493c45`
 
 **This directory is the sole SSOT for Issue #73 repair submission.**
 
@@ -2314,7 +2314,7 @@ Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/
 Also saved to: `test_issue_centered_v2_output.txt`
 
 ```
-# Issue #73 repair capture | commit=8af9a7fe3dc536e21905870ef2d1f940286799e7 | timestamp=2026-09-13T09:07:09.544267+00:00
+# Issue #73 repair capture | commit=3493c45ae4abe64641e53001ffeafb6a3f1c425a | timestamp=2026-09-13T09:13:15.289065+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -2355,7 +2355,7 @@ backend/tests/integration/test_issue_centered_v2.py::test_proof_task_adopt_and_f
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 20 passed, 2 warnings in 1.52s ========================
+======================== 20 passed, 2 warnings in 1.48s ========================
 ```
 
 ### live_issue_centered_v2_acceptance.py
@@ -2365,7 +2365,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Also saved to: `live_issue_centered_v2_acceptance_output.txt`
 
 ```
-# Issue #73 repair capture | commit=8af9a7fe3dc536e21905870ef2d1f940286799e7 | timestamp=2026-09-13T09:07:09.544267+00:00
+# Issue #73 repair capture | commit=3493c45ae4abe64641e53001ffeafb6a3f1c425a | timestamp=2026-09-13T09:13:15.289065+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa

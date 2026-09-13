@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -39,8 +41,68 @@ def _git_short(rev: str) -> str:
     ).strip()
 
 
-def _git_head() -> str:
-    return _git_short("HEAD")
+def _git_full(rev: str = "HEAD") -> str:
+    return subprocess.check_output(
+        ["git", "rev-parse", rev], cwd=ROOT, text=True
+    ).strip()
+
+
+def _capture_header(repair_full: str, ts: datetime) -> str:
+    return (
+        f"# Issue #73 repair capture | commit={repair_full} | "
+        f"timestamp={ts.isoformat()}\n\n"
+    )
+
+
+def _strip_capture_header(content: str) -> str:
+    lines = content.splitlines(keepends=True)
+    if lines and lines[0].startswith("# Issue #73 repair capture |"):
+        if len(lines) > 1 and lines[1] == "\n":
+            return "".join(lines[2:])
+        return "".join(lines[1:])
+    return content
+
+
+def _apply_capture_header(path: Path, repair_full: str, ts: datetime) -> None:
+    body = _strip_capture_header(_read(path))
+    path.write_text(_capture_header(repair_full, ts) + body, encoding="utf-8")
+
+
+def _capture_test_outputs(ts: datetime, repair_full: str) -> None:
+    """Run pytest + live acceptance and write evidence stdout files."""
+    header = _capture_header(repair_full, ts)
+    test_db = subprocess.check_output(
+        ["bash", "-c", 'echo "${DATABASE_URL%/*}/litigation_case_agent_test"'],
+        cwd=ROOT,
+        text=True,
+    ).strip()
+    env = {**os.environ, "TEST_DATABASE_URL": test_db, "LLM_MODE": "deterministic"}
+    pytest_out = subprocess.check_output(
+        [
+            str(ROOT / ".venv/bin/python"),
+            "-m",
+            "pytest",
+            "backend/tests/integration/test_issue_centered_v2.py",
+            "backend/tests/integration/test_issue_centered_v2_invariants.py",
+            "-v",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stderr=subprocess.STDOUT,
+    )
+    live_out = subprocess.check_output(
+        [
+            str(ROOT / ".venv/bin/python"),
+            "backend/scripts/live_issue_centered_v2_acceptance.py",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stderr=subprocess.STDOUT,
+    )
+    OUTPUT_FILES["pytest"].write_text(header + pytest_out, encoding="utf-8")
+    OUTPUT_FILES["live"].write_text(header + live_out, encoding="utf-8")
 
 
 def _generate_production_patch() -> str:
@@ -310,15 +372,9 @@ def sync_sources() -> None:
         (sources / dest).write_text(_read(src), encoding="utf-8")
 
 
-def main() -> None:
-    ts = datetime.now(UTC)
-    patch_base = _git_short(PATCH_BASE)
-    repair_head = _git_head()
-    EVIDENCE.mkdir(parents=True, exist_ok=True)
-    sync_sources()
-    patch = _generate_production_patch()
-    patch_path = EVIDENCE / "issue73_repair_production.patch"
-    patch_path.write_text(patch, encoding="utf-8")
+def _write_bundle(
+    ts: datetime, patch_base: str, repair_head: str, patch: str
+) -> None:
     bundle_path = EVIDENCE / "00_reviewer_bundle.md"
     evidence_path = EVIDENCE / "issue73_repair_evidence.md"
     bundle_path.write_text(
@@ -334,11 +390,30 @@ def main() -> None:
         ),
         encoding="utf-8",
     )
+
+
+def main() -> None:
+    align_only = "--align-only" in sys.argv
+    ts = datetime.now(UTC)
+    patch_base = _git_short(PATCH_BASE)
+    repair_full = _git_full("HEAD")
+    repair_head = _git_short("HEAD")
+    EVIDENCE.mkdir(parents=True, exist_ok=True)
+    if not align_only:
+        _capture_test_outputs(ts, repair_full)
+    else:
+        for path in OUTPUT_FILES.values():
+            if path.exists():
+                _apply_capture_header(path, repair_full, ts)
+    sync_sources()
+    patch = _generate_production_patch()
+    patch_path = EVIDENCE / "issue73_repair_production.patch"
+    patch_path.write_text(patch, encoding="utf-8")
+    _write_bundle(ts, patch_base, repair_head, patch)
     marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
     marker.write_text(f"worker-run issue=73 at={ts.isoformat()}\n", encoding="utf-8")
     print(f"Wrote {patch_path} ({patch_path.stat().st_size} bytes, {patch.count(chr(10)) + 1} lines)")
-    print(f"Wrote {bundle_path} ({bundle_path.stat().st_size} bytes)")
-    print(f"Wrote {evidence_path} ({evidence_path.stat().st_size} bytes)")
+    print(f"Wrote bundle + evidence (Repair: {repair_head}, Base: {patch_base})")
     print(f"Updated {marker}")
 
 
