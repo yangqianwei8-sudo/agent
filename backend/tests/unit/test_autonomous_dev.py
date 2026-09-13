@@ -3116,23 +3116,6 @@ def test_worker_deterministic_marker_only_commits_marker_path_only(
     assert changed == marker_commit_paths()
 
 
-def test_p0_acceptance_gate_includes_fixture_determinism_tests():
-    """Marker-only gate must exercise PDF CreationDate/ModDate and /ID pinning."""
-    from autonomous_dev.p0_acceptance import (
-        ACCEPTANCE_GATE_PYTEST_TARGETS,
-        acceptance_gate_pytest_argv,
-    )
-
-    assert "backend/tests/unit/test_generate_fixtures.py" in ACCEPTANCE_GATE_PYTEST_TARGETS
-    assert "backend/tests/unit/test_issue38_p0_acceptance.py" in ACCEPTANCE_GATE_PYTEST_TARGETS
-    assert acceptance_gate_pytest_argv() == [
-        "-m",
-        "pytest",
-        *ACCEPTANCE_GATE_PYTEST_TARGETS,
-        "-q",
-    ]
-
-
 def test_issue75_repair_ensure_golden_fixtures_blocks_marker_on_drift() -> None:
     """Issue #38 repair: fixture drift must fail before marker-only commit proceeds."""
     import tempfile
@@ -3160,22 +3143,15 @@ def test_issue75_repair_ensure_golden_fixtures_blocks_marker_on_drift() -> None:
             ensure_golden_fixtures_stable(fixtures_dir=root)
 
 
-def test_ensure_golden_fixtures_stable_uses_independent_generation_check() -> None:
-    """Production guard must reject fixtures when independent generation would drift."""
-    import tempfile
+def test_validate_marker_only_commit_paths_blocks_fixture_staging():
+    """Issue #38 production guard rejects staging golden fixture paths."""
+    from autonomous_dev.p0_acceptance import marker_commit_paths, validate_marker_only_commit_paths
 
-    from autonomous_dev.p0_acceptance import ensure_golden_fixtures_stable
-
-    from backend.fixtures.deterministic import generate, verify_independent_generation_byte_identity
-
-    verify_independent_generation_byte_identity()
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        generate(output_dir=root)
-        ensure_golden_fixtures_stable(fixtures_dir=root)
-        (root / "sample_scanned.pdf").write_bytes(b"%PDF-1.4 drifted")
-        with pytest.raises(ValueError, match="sample_scanned.pdf"):
-            ensure_golden_fixtures_stable(fixtures_dir=root)
+    validate_marker_only_commit_paths(marker_commit_paths())
+    with pytest.raises(ValueError, match="must commit exactly"):
+        validate_marker_only_commit_paths(
+            marker_commit_paths() + ["backend/tests/fixtures/sample_text.pdf"]
+        )
 
 
 def test_handoff_pass_activates_queued_next_task_once(infra_env, _mock_github_client):

@@ -52,6 +52,15 @@ def marker_commit_paths() -> list[str]:
     return [MARKER_GIT_PATH]
 
 
+def validate_marker_only_commit_paths(paths: list[str]) -> None:
+    """Raise ValueError when a marker-only commit would touch paths outside the marker."""
+    allowed = [MARKER_GIT_PATH]
+    if paths != allowed:
+        raise ValueError(
+            f"marker-only acceptance must commit exactly {allowed}, got {paths}"
+        )
+
+
 def apply_harmless_marker_change(repo_root: Path, issue_number: int) -> Path:
     """Write the acceptance marker for *issue_number* and return its path."""
     return write_marker(repo_root, issue_number=issue_number)
@@ -97,5 +106,7 @@ def execute_marker_only_acceptance(
     ensure_golden_fixtures_stable(fixtures_dir=fixtures_dir)
     marker_path = apply_harmless_marker_change(repo_root, issue_number)
     run_gate_tests()
-    commit_sha = commit_paths(marker_commit_paths())
+    paths = marker_commit_paths()
+    validate_marker_only_commit_paths(paths)
+    commit_sha = commit_paths(paths)
     return marker_path, commit_sha

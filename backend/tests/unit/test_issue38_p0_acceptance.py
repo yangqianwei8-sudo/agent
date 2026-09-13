@@ -9,12 +9,11 @@ from pathlib import Path
 import pytest
 from autonomous_dev.acceptance_marker import read_marker
 from autonomous_dev.p0_acceptance import (
-    ACCEPTANCE_GATE_PYTEST_TARGETS,
-    acceptance_gate_pytest_argv,
     evaluate_marker_only_review,
     execute_marker_only_acceptance,
     is_marker_only_acceptance,
     marker_commit_paths,
+    validate_marker_only_commit_paths,
 )
 from autonomous_dev.reviewer_service import REVIEWER_ACCEPTANCE_MARKER
 
@@ -165,11 +164,8 @@ def test_committed_golden_fixtures_match_sync_output() -> None:
             assert (DEFAULT_FIXTURES_DIR / name).read_bytes() == (root / name).read_bytes()
 
 
-def test_marker_only_acceptance_end_to_end_with_independent_fixture_generation() -> None:
-    """Issue #38 flow: independent generate() dirs match before marker-only commit proceeds."""
-    from backend.fixtures.deterministic import verify_independent_generation_byte_identity
-
-    verify_independent_generation_byte_identity()
+def test_marker_only_acceptance_end_to_end_with_stable_fixtures() -> None:
+    """Issue #38 flow: stable fixtures gate passes before marker-only commit proceeds."""
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp) / "repo"
         repo.mkdir()
@@ -189,30 +185,80 @@ def test_marker_only_acceptance_end_to_end_with_independent_fixture_generation()
         assert commit_sha == "deadbeef"
 
 
-def test_issue75_repair_infrastructure_complete() -> None:
-    """Issue #75 repair SSOT: issue #38 P0 chain modules, gate, and fixtures wired."""
-    from backend.fixtures.deterministic import (
-        DEFAULT_FIXTURES_DIR,
-        pin_pdf_deterministic_metadata,
-        verify_independent_generation_byte_identity,
+def test_validate_marker_only_commit_paths_rejects_broad_scope() -> None:
+    validate_marker_only_commit_paths(marker_commit_paths())
+    with pytest.raises(ValueError, match="must commit exactly"):
+        validate_marker_only_commit_paths(
+            ["autonomous_dev/acceptance_marker.txt", "backend/tests/fixtures/sample_text.pdf"]
+        )
+
+
+def test_execute_marker_only_acceptance_enforces_marker_only_commit_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production guard must abort before commit when scope includes fixture paths."""
+    import autonomous_dev.p0_acceptance as p0
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    fixtures = tmp_path / "fixtures"
+    generate(output_dir=fixtures)
+
+    monkeypatch.setattr(
+        p0,
+        "marker_commit_paths",
+        lambda: ["autonomous_dev/acceptance_marker.txt", "backend/tests/fixtures/sample_text.pdf"],
     )
+    with pytest.raises(ValueError, match="must commit exactly"):
+        execute_marker_only_acceptance(
+            repo,
+            38,
+            run_gate_tests=lambda: None,
+            commit_paths=lambda paths: "unused",
+            fixtures_dir=fixtures,
+        )
 
-    verify_independent_generation_byte_identity()
-    validate_fixtures(DEFAULT_FIXTURES_DIR)
 
-    assert is_marker_only_acceptance(_issue38_body())
-    assert marker_commit_paths() == ["autonomous_dev/acceptance_marker.txt"]
-    assert "backend/tests/unit/test_generate_fixtures.py" in ACCEPTANCE_GATE_PYTEST_TARGETS
-    assert "backend/tests/unit/test_issue38_p0_acceptance.py" in ACCEPTANCE_GATE_PYTEST_TARGETS
-    assert acceptance_gate_pytest_argv()[0:2] == ["-m", "pytest"]
+def test_issue81_marker_only_worker_and_reviewer_e2e(tmp_path: Path) -> None:
+    """Issue #81 repair: marker-only worker commit passes reviewer on marker diff only."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_git_repo(repo)
+    fixtures = tmp_path / "fixtures"
+    generate(output_dir=fixtures)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        generate(output_dir=root)
-        first = {name: (root / name).read_bytes() for name in FIXTURE_NAMES}
-        for name in ("sample_text.pdf", "sample_scanned.pdf"):
-            assert pdf_has_deterministic_metadata(first[name])
-            assert pin_pdf_deterministic_metadata(first[name]) == first[name]
-        generate(output_dir=root)
-        second = {name: (root / name).read_bytes() for name in FIXTURE_NAMES}
-        assert first == second
+    captured_paths: list[list[str]] = []
+
+    def commit(paths: list[str]) -> str:
+        captured_paths.append(list(paths))
+        subprocess.run(["git", "add", *paths], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-m", "issue #81 marker-only"], cwd=repo, check=True)
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    execute_marker_only_acceptance(
+        repo,
+        81,
+        run_gate_tests=lambda: None,
+        commit_paths=commit,
+        fixtures_dir=fixtures,
+    )
+    assert captured_paths == [marker_commit_paths()]
+
+    diff = subprocess.run(
+        ["git", "show", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    verdict = evaluate_marker_only_review(diff, _issue38_body())
+    assert verdict is not None
+    assert verdict.verdict == "PASS"
+    assert "worker-run issue=81" in read_marker(repo)

@@ -10,7 +10,6 @@ from backend.fixtures.deterministic import (
     pin_pdf_deterministic_metadata,
     sync_golden_fixtures,
     validate_fixtures,
-    verify_independent_generation_byte_identity,
 )
 
 __all__ = [
@@ -23,5 +22,4 @@ __all__ = [
     "pin_pdf_deterministic_metadata",
     "sync_golden_fixtures",
     "validate_fixtures",
-    "verify_independent_generation_byte_identity",
 ]
