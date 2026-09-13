@@ -1,4 +1,4 @@
-# Issue #73 repair capture | commit=93bc059184ce7a8f899063eff1292dae6ff5b66f | timestamp=2026-09-13T10:33:49.683558+00:00
+# Issue #73 repair capture | commit=dbe453d184ce7a8f899063eff1292dae6ff5b66f | timestamp=2026-09-13T10:34:02.742172+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
