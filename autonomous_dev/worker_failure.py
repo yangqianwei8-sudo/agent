@@ -116,8 +116,16 @@ def report_worker_failure(
         message = summarize_error(str(exc)) or error_class
 
     react = store.get_worker_reactivation(task.issue_number)
-    retry_count = react.attempt_count if react else 0
-    exhausted = react is not None and react.status == WorkerReactivationStatus.EXHAUSTED
+    
+    existing_failure = store.get_execution_failure(task.execution_key) if task.execution_key else None
+    if existing_failure is not None:
+        retry_count = min(existing_failure.retry_count + 1, settings.worker_retry_max_attempts)
+    else:
+        retry_count = 1
+    
+    exhausted = retry_count >= settings.worker_retry_max_attempts or (
+        react is not None and react.status == WorkerReactivationStatus.EXHAUSTED
+    )
     next_action = compute_next_action(
         retry_count=retry_count,
         max_attempts=settings.worker_retry_max_attempts,

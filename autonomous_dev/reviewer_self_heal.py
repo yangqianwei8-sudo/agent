@@ -153,7 +153,24 @@ def kick_reviewer_reactivation(
     record = store.get_reviewer_reactivation(task.issue_number)
 
     if record and record.status == ReviewerReactivationStatus.EXHAUSTED:
-        return {"status": "skipped", "reason": "recovery budget exhausted"}
+        last_kick = _parse_ts(record.last_kick_at)
+        exhausted_cooldown_seconds = 3600
+        if last_kick is not None and (now - last_kick).total_seconds() < exhausted_cooldown_seconds:
+            return {"status": "skipped", "reason": "recovery budget exhausted (cooldown active)"}
+        logger.info(
+            "reviewer self-heal: resetting exhausted status for issue=#%s after cooldown",
+            task.issue_number
+        )
+        store.upsert_reviewer_reactivation(
+            issue_number=task.issue_number,
+            task_id=task.id,
+            attempt_count=0,
+            next_retry_at=None,
+            last_error="reset after exhausted cooldown",
+            status=ReviewerReactivationStatus.PENDING,
+            last_kick_at=None,
+        )
+        record = store.get_reviewer_reactivation(task.issue_number)
     if not _reactivation_is_due(store, task.issue_number, now_iso=now_iso):
         return {"status": "skipped", "reason": "backoff pending"}
     if _cooldown_blocks_kick(

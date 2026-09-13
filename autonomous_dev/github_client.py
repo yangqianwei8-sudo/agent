@@ -78,6 +78,16 @@ class GitHubClient:
         expected = set(labels)
         url = f"{self._base}/repos/{self._settings.github_repo}/issues/{issue_number}/labels"
         self._request_with_retry("PUT", url, json={"labels": sorted(expected)})
+        
+        max_verify_attempts = 3
+        for attempt in range(max_verify_attempts):
+            actual = self.get_issue_labels(issue_number)
+            if expected.issubset(actual):
+                logger.info("GitHub labels issue #%s: %s", issue_number, sorted(expected))
+                return
+            if attempt < max_verify_attempts - 1:
+                time.sleep(0.3 * (attempt + 1))
+        
         actual = self.get_issue_labels(issue_number)
         if not expected.issubset(actual):
             missing = expected - actual

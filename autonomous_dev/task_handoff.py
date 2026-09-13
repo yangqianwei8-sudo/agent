@@ -9,7 +9,6 @@ from enum import StrEnum
 from autonomous_dev.config import AutonomousDevSettings
 from autonomous_dev.execution_events import ExecutionEventType, record_review_event
 from autonomous_dev.github_client import (
-    LABEL_CURRENT_TASK,
     LABEL_CURSOR_TASK,
     GitHubClient,
     GitHubClientError,
@@ -229,11 +228,24 @@ class TaskHandoffEngine:
             return
 
         try:
+            issues = self._github.list_open_issues_with_label("", limit=100, state="open")
+            issue_still_open = any(int(iss.get("number", -1)) == issue_number for iss in issues)
+            if not issue_still_open:
+                logger.warning(
+                    "handoff worker kick skipped issue=#%s — issue is closed/not found",
+                    issue_number
+                )
+                return
+            
             body = self._github.get_issue_body(issue_number)
             labels = sorted(self._github.get_issue_labels(issue_number))
-        except GitHubClientError:
-            body = ""
-            labels = [LABEL_CURSOR_TASK, LABEL_CURRENT_TASK]
+        except GitHubClientError as exc:
+            logger.warning(
+                "handoff worker kick failed to fetch issue=#%s: %s — aborting kick",
+                issue_number,
+                exc
+            )
+            return
 
         payload = {
             "action": "labeled",
