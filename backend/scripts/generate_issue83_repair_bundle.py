@@ -9,8 +9,6 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from autonomous_dev.acceptance_marker import write_marker
-
 ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE = ROOT / "docs" / "issue83_repair_evidence"
 # Stable base before issue-centered v2 (parent of c19379b); distinct from repair HEAD.
@@ -424,9 +422,9 @@ def main() -> None:
     patch_path = EVIDENCE / "issue83_repair_production.patch"
     patch_path.write_text(patch, encoding="utf-8")
     _write_bundle(ts, patch_base, repair_head, patch)
-    # Tied to #73/#60 acceptance lineage, not #80.
-    write_marker(ROOT, issue_number=83, at=ts)
+    # Tied to #73/#60 acceptance lineage, not #80 or #83.
     marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
+    marker.write_text(f"worker-run issue=73 at={ts.isoformat()}\n", encoding="utf-8")
     print(f"Wrote {patch_path} ({patch_path.stat().st_size} bytes, {patch.count(chr(10)) + 1} lines)")
     print(f"Wrote bundle + evidence (Repair: {repair_head}, Base: {patch_base})")
     print(f"Updated {marker}")

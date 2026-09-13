@@ -1,6 +1,6 @@
 # Issue #83 Resubmit — Issue-Centered V2 (#80 repair)
 
-Generated: 2026-09-13T10:28:18.819900Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `b4c53aa`
+Generated: 2026-09-13T10:30:39.571220Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `fe74b49`
 
 **SSOT:** `docs/issue83_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -63,14 +63,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `_require_structure_mutation_audit(...)` without prior decision → `pytest.raises(ConflictError, match="HumanDecision")`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T10:28:18.819900Z
+## (B) Test output — actual run 2026-09-13T10:30:39.571220Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=b4c53aaa52d181b9ae443b46363a6c37ade34ae8 | timestamp=2026-09-13T10:28:18.819900+00:00
+# Issue #83 repair capture | commit=fe74b495770a916bcc6cd0045dc75a849a645283 | timestamp=2026-09-13T10:30:39.571220+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -119,7 +119,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 26 passed, 4 warnings in 2.33s ========================
+======================== 26 passed, 4 warnings in 2.04s ========================
 ```
 
 Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py`
@@ -127,7 +127,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #83 repair capture | commit=b4c53aaa52d181b9ae443b46363a6c37ade34ae8 | timestamp=2026-09-13T10:28:18.819900+00:00
+# Issue #83 repair capture | commit=fe74b495770a916bcc6cd0045dc75a849a645283 | timestamp=2026-09-13T10:30:39.571220+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
@@ -621,7 +621,7 @@ Production path: `backend/domain/issue_centered.py` (1254 lines)
 ```python
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #83 repair SSOT / #86 / #85 / #84 / #73 / #60):
+Explicit invariants enforced in this module (Issue #60 repair SSOT / #83 / #86 / #85 / #84 / #73):
   INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
   INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
          (no get_current_*); rejects implicit current/latest and cross-case links.
@@ -1881,7 +1881,7 @@ Production path: `backend/application/issue_work_product.py` (563 lines)
 ```python
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #83 repair SSOT / #86 / #84 / #73 / #60).
+Read-only projection over Issue-centered V2 domain (Issue #60 repair SSOT / #83 / #86 / #84 / #73).
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 invariant enforcement remains in backend/domain/issue_centered.py.
 """
@@ -2448,7 +2448,7 @@ class IssueWorkProductService:
 Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py` (486 lines)
 
 ```python
-"""Issue-centered V2 — four invariant assertions (Issue #83 SSOT repair / #86 / #85 / #84 / #73 / #60)."""
+"""Issue-centered V2 — four invariant assertions (Issue #60 SSOT repair / #83 / #86 / #85 / #84 / #73)."""
 
 from __future__ import annotations
 
@@ -3384,13 +3384,13 @@ index 0000000..0d87b7f
 +    op.drop_table("issue_positions")
 diff --git a/backend/application/issue_work_product.py b/backend/application/issue_work_product.py
 new file mode 100644
-index 0000000..d7b3dae
+index 0000000..fc0f48c
 --- /dev/null
 +++ b/backend/application/issue_work_product.py
 @@ -0,0 +1,562 @@
 +"""Issue Work Product — canonical issue-centered read projection.
 +
-+Read-only projection over Issue-centered V2 domain (Issue #83 repair SSOT / #86 / #84 / #73 / #60).
++Read-only projection over Issue-centered V2 domain (Issue #60 repair SSOT / #83 / #86 / #84 / #73).
 +Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 +invariant enforcement remains in backend/domain/issue_centered.py.
 +"""
@@ -3952,13 +3952,13 @@ index 0000000..d7b3dae
 +        }.get(status, status)
 diff --git a/backend/domain/issue_centered.py b/backend/domain/issue_centered.py
 new file mode 100644
-index 0000000..c29353c
+index 0000000..0665546
 --- /dev/null
 +++ b/backend/domain/issue_centered.py
 @@ -0,0 +1,1253 @@
 +"""Issue-centered V2 domain mutations — mixed into DomainService.
 +
-+Explicit invariants enforced in this module (Issue #83 repair SSOT / #86 / #85 / #84 / #73 / #60):
++Explicit invariants enforced in this module (Issue #60 repair SSOT / #83 / #86 / #85 / #84 / #73):
 +  INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
 +  INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
 +         (no get_current_*); rejects implicit current/latest and cross-case links.
@@ -5211,11 +5211,11 @@ index 0000000..c29353c
 +        return link
 diff --git a/backend/tests/integration/test_issue_centered_v2_invariants.py b/backend/tests/integration/test_issue_centered_v2_invariants.py
 new file mode 100644
-index 0000000..5b4daba
+index 0000000..4554e17
 --- /dev/null
 +++ b/backend/tests/integration/test_issue_centered_v2_invariants.py
 @@ -0,0 +1,485 @@
-+"""Issue-centered V2 — four invariant assertions (Issue #83 SSOT repair / #86 / #85 / #84 / #73 / #60)."""
++"""Issue-centered V2 — four invariant assertions (Issue #60 SSOT repair / #83 / #86 / #85 / #84 / #73)."""
 +
 +from __future__ import annotations
 +

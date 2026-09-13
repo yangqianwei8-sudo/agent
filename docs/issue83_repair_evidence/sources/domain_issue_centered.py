@@ -1,6 +1,6 @@
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #83 repair SSOT / #86 / #85 / #84 / #73 / #60):
+Explicit invariants enforced in this module (Issue #60 repair SSOT / #83 / #86 / #85 / #84 / #73):
   INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
   INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
          (no get_current_*); rejects implicit current/latest and cross-case links.
