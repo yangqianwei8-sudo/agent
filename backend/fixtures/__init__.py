@@ -13,6 +13,8 @@ from backend.fixtures.deterministic import (
     sync_golden_fixtures,
     validate_fixtures,
     verify_independent_generation_byte_identity,
+    write_deterministic_pdf,
+    write_deterministic_pdf_bytes,
 )
 
 __all__ = [
@@ -28,4 +30,6 @@ __all__ = [
     "sync_golden_fixtures",
     "validate_fixtures",
     "verify_independent_generation_byte_identity",
+    "write_deterministic_pdf",
+    "write_deterministic_pdf_bytes",
 ]

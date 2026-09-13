@@ -9,8 +9,10 @@ worker commits do not pick up timestamp churn.
 from __future__ import annotations
 
 import hashlib
+import io
 import re
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 DEFAULT_FIXTURES_DIR = Path(__file__).resolve().parents[1] / "tests" / "fixtures"
@@ -133,24 +135,26 @@ def extract_stable_pdf_id(pdf_bytes: bytes) -> str | None:
     return match.group(1) if match else None
 
 
-def _save_canvas_with_deterministic_metadata(canvas: object, path: Path) -> None:
-    """Save ReportLab canvas and pin CreationDate/ModDate plus trailer /ID in-place."""
-    canvas.save()  # type: ignore[union-attr]
-    pinned = pin_pdf_deterministic_metadata(path.read_bytes())
-    assert_pdf_fixture_metadata(pinned, label=path.name)
-    path.write_bytes(pinned)
-
-
-def _new_deterministic_canvas(path: Path) -> object:
-    """ReportLab canvas configured for invariant mode before metadata pinning."""
+def write_deterministic_pdf_bytes(render: Callable[[object], None]) -> bytes:
+    """Production PDF builder: render via ReportLab, pin CreationDate/ModDate and /ID."""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
 
-    return canvas.Canvas(str(path), pagesize=A4, invariant=1)
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4, invariant=1)
+    render(c)
+    c.save()
+    pinned = pin_pdf_deterministic_metadata(buf.getvalue())
+    assert_pdf_fixture_metadata(pinned, label="generated.pdf")
+    return pinned
+
+
+def write_deterministic_pdf(path: Path, render: Callable[[object], None]) -> None:
+    """Write a golden PDF fixture with pinned metadata to *path*."""
+    path.write_bytes(write_deterministic_pdf_bytes(render))
 
 
 def _write_text_pdf(path: Path) -> None:
-    c = _new_deterministic_canvas(path)
     lines_p1 = [
         "Page 1: Design contract signed by parties.",
         "The plaintiff provided construction drawing review services.",
@@ -158,34 +162,38 @@ def _write_text_pdf(path: Path) -> None:
         "Scope includes schematic design and detailed drawing optimization.",
         "Additional clause: change orders require written confirmation.",
     ]
-    y = 800
-    for line in lines_p1:
-        c.drawString(72, y, line)  # type: ignore[union-attr]
-        y -= 18
-    c.showPage()  # type: ignore[union-attr]
-    lines_p2 = [
-        "Page 2: Payment schedule and delivery terms.",
-        "First installment due upon signing. Second upon delivery.",
-        "Late payment interest accrues daily under contract section 5.",
-        "Delivery of final drawings constitutes completion of phase one.",
-        "All notices shall be sent to the addresses listed in appendix A.",
-    ]
-    y = 800
-    for line in lines_p2:
-        c.drawString(72, y, line)  # type: ignore[union-attr]
-        y -= 18
-    _save_canvas_with_deterministic_metadata(c, path)
+    def render(c: object) -> None:
+        y = 800
+        for line in lines_p1:
+            c.drawString(72, y, line)  # type: ignore[union-attr]
+            y -= 18
+        c.showPage()  # type: ignore[union-attr]
+        lines_p2 = [
+            "Page 2: Payment schedule and delivery terms.",
+            "First installment due upon signing. Second upon delivery.",
+            "Late payment interest accrues daily under contract section 5.",
+            "Delivery of final drawings constitutes completion of phase one.",
+            "All notices shall be sent to the addresses listed in appendix A.",
+        ]
+        y = 800
+        for line in lines_p2:
+            c.drawString(72, y, line)  # type: ignore[union-attr]
+            y -= 18
+
+    write_deterministic_pdf(path, render)
 
 
 def _write_blank_pdf(path: Path) -> None:
     """PDF with pages but essentially no extractable text (scan stand-in)."""
-    c = _new_deterministic_canvas(path)
-    # Draw only a thin line — extract_text typically yields empty/near-empty
-    c.setStrokeColorRGB(0.9, 0.9, 0.9)  # type: ignore[union-attr]
-    c.line(72, 72, 200, 72)  # type: ignore[union-attr]
-    c.showPage()  # type: ignore[union-attr]
-    c.line(72, 72, 200, 72)  # type: ignore[union-attr]
-    _save_canvas_with_deterministic_metadata(c, path)
+
+    def render(c: object) -> None:
+        # Draw only a thin line — extract_text typically yields empty/near-empty
+        c.setStrokeColorRGB(0.9, 0.9, 0.9)  # type: ignore[union-attr]
+        c.line(72, 72, 200, 72)  # type: ignore[union-attr]
+        c.showPage()  # type: ignore[union-attr]
+        c.line(72, 72, 200, 72)  # type: ignore[union-attr]
+
+    write_deterministic_pdf(path, render)
 
 
 def _write_docx(path: Path) -> None:

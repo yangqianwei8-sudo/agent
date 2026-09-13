@@ -28,6 +28,7 @@ from backend.fixtures.deterministic import (
     sync_golden_fixtures,
     validate_fixtures,
     verify_independent_generation_byte_identity,
+    write_deterministic_pdf_bytes,
 )
 
 
@@ -201,6 +202,19 @@ def test_committed_golden_fixtures_match_sync_output() -> None:
         sync_golden_fixtures(output_dir=root)
         for name in FIXTURE_NAMES:
             assert (DEFAULT_FIXTURES_DIR / name).read_bytes() == (root / name).read_bytes()
+
+
+def test_issue38_production_pdf_write_path_is_byte_stable() -> None:
+    """Issue #38: production PDF writer pins metadata so marker-only commits avoid PDF churn."""
+
+    def render(c) -> None:  # type: ignore[no-untyped-def]
+        c.drawString(72, 800, "issue #38 stable fixture")
+
+    first = write_deterministic_pdf_bytes(render)
+    second = write_deterministic_pdf_bytes(render)
+    assert first == second
+    assert DETERMINISTIC_PDF_EPOCH in first.decode("latin-1")
+    assert extract_stable_pdf_id(first) == extract_stable_pdf_id(second)
 
 
 def test_issue38_fixture_generation_pins_pdf_metadata_before_marker_commit() -> None:

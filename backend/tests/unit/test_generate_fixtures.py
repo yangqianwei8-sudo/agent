@@ -21,6 +21,8 @@ from backend.fixtures.deterministic import (
     pin_pdf_deterministic_metadata,
     validate_fixtures,
     verify_independent_generation_byte_identity,
+    write_deterministic_pdf,
+    write_deterministic_pdf_bytes,
 )
 
 _PDF_FIXTURES = ("sample_text.pdf", "sample_scanned.pdf")
@@ -75,11 +77,18 @@ def test_generate_without_metadata_pin_drift_from_pinned_output(monkeypatch) -> 
         generate(output_dir=base / "pinned")
         pinned_bytes = {name: (base / "pinned" / name).read_bytes() for name in _PDF_FIXTURES}
 
-    monkeypatch.setattr(
-        mod,
-        "_save_canvas_with_deterministic_metadata",
-        lambda canvas, path: canvas.save(),  # type: ignore[union-attr]
-    )
+    def volatile_pdf_bytes(render) -> bytes:  # type: ignore[no-untyped-def]
+        from reportlab.lib.pagesizes import A4
+        from reportlab.pdfgen import canvas
+
+        buf = __import__("io").BytesIO()
+        c = canvas.Canvas(buf, pagesize=A4)
+        render(c)
+        c.save()
+        return buf.getvalue()
+
+    monkeypatch.setattr(mod, "write_deterministic_pdf_bytes", volatile_pdf_bytes)
+    monkeypatch.setattr(mod, "assert_pdf_fixture_metadata", lambda *args, **kwargs: None)
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         generate(output_dir=root)
@@ -87,6 +96,33 @@ def test_generate_without_metadata_pin_drift_from_pinned_output(monkeypatch) -> 
             assert (root / name).read_bytes() != pinned_bytes[name], (
                 f"{name} must differ when metadata pin step is removed"
             )
+
+
+def test_write_deterministic_pdf_bytes_pins_metadata() -> None:
+    """Production write path must pin CreationDate/ModDate and stable /ID."""
+
+    def render(c) -> None:  # type: ignore[no-untyped-def]
+        c.drawString(72, 800, "deterministic write path")
+
+    first = write_deterministic_pdf_bytes(render)
+    second = write_deterministic_pdf_bytes(render)
+    assert pdf_has_deterministic_metadata(first)
+    assert first == second
+    assert extract_stable_pdf_id(first) is not None
+
+
+def test_write_deterministic_pdf_writes_pinned_file() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "out.pdf"
+
+        def render(c) -> None:  # type: ignore[no-untyped-def]
+            c.drawString(72, 800, "file write path")
+
+        write_deterministic_pdf(path, render)
+        data = path.read_bytes()
+        assert_pdf_fixture_metadata(data, label="out.pdf")
+        write_deterministic_pdf(path, render)
+        assert path.read_bytes() == data
 
 
 def test_pdf_fixtures_use_fixed_creation_date() -> None:
