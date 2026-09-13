@@ -1,6 +1,6 @@
 # Issue #80 Resubmit — Issue-Centered V2 (#73 repair)
 
-Generated: 2026-09-13T09:53:17.575843Z | Base: `f84972a` | Repair: `907aa8e`
+Generated: 2026-09-13T09:53:31.715694Z | Base: `f84972a` | Repair: `46157e0`
 
 **SSOT:** `docs/issue80_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -74,14 +74,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - `assert len(split_audits) >= 1` and `assert split_audits[0].entity_type == "issues"`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T09:53:17.575843Z
+## (B) Test output — actual run 2026-09-13T09:53:31.715694Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #80 repair capture | commit=907aa8e88f63af78375481ac5bce1ab258dd0b52 | timestamp=2026-09-13T09:53:17.575843+00:00
+# Issue #80 repair capture | commit=46157e06502d8a87780103bd37888c205d5422fb | timestamp=2026-09-13T09:53:31.715694+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -126,7 +126,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 22 passed, 4 warnings in 1.51s ========================
+======================== 22 passed, 4 warnings in 1.60s ========================
 ```
 
 Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py`
@@ -134,7 +134,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #80 repair capture | commit=907aa8e88f63af78375481ac5bce1ab258dd0b52 | timestamp=2026-09-13T09:53:17.575843+00:00
+# Issue #80 repair capture | commit=46157e06502d8a87780103bd37888c205d5422fb | timestamp=2026-09-13T09:53:31.715694+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
