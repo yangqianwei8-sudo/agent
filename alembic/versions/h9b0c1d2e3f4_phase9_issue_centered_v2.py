@@ -1,6 +1,12 @@
 """phase9_issue_centered_v2 — IssuePosition, ProofTask, Conflict, ProofGap, LawyerAssessment.
 
-Issue #73 repair SSOT (#60): includes proof_gaps and lawyer_assessments with every CheckConstraint:
+Issue #84 repair SSOT (#73 / #60): four invariants enforced at DB + domain layers:
+- INV-1: ClaimDirection production mutation blocked in domain/application (not this migration)
+- INV-2: proof_task_fact_links version positivity (ck_*_version_pos) rejects implicit 0/latest
+- INV-3: issue_positions FORMAL_DEFENSE ref + side constraints (ck_*_formal_defense_*)
+- INV-4: merge/split HumanDecision + AuditLog enforced in domain (issue_centered.py)
+
+Includes proof_gaps and lawyer_assessments with every CheckConstraint:
 - proof_gaps: ck_proof_gaps_type, ck_proof_gaps_status, ck_proof_gaps_source
 - lawyer_assessments: ck_lawyer_assessments_status
 - issue_positions: ck_issue_positions_side/type/source/status/formal_defense_ref
@@ -16,7 +22,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-# INV SSOT (#73): canonical allowed-value sets for CheckConstraints (used in upgrade()).
+# INV SSOT (#84): canonical allowed-value sets for CheckConstraints (used in upgrade()).
+_INV2_MIN_EXPLICIT_VERSION = 1
 _PROOF_GAP_TYPES = ("FACT", "EVIDENCE", "SOURCE", "LEGAL_RESEARCH")
 _PROOF_GAP_STATUSES = ("OPEN", "RESOLVED", "WAIVED", "SUPERSEDED")
 _PROOF_GAP_SOURCES = ("AI_DETECTED", "LAWYER_CREATED")
@@ -196,11 +203,11 @@ def upgrade() -> None:
             name="ck_proof_task_fact_link_status",
         ),
         sa.CheckConstraint(
-            "proof_task_version >= 1",
+            f"proof_task_version >= {_INV2_MIN_EXPLICIT_VERSION}",
             name="ck_proof_task_fact_links_task_version_pos",
         ),
         sa.CheckConstraint(
-            "fact_version >= 1",
+            f"fact_version >= {_INV2_MIN_EXPLICIT_VERSION}",
             name="ck_proof_task_fact_links_fact_version_pos",
         ),
     )

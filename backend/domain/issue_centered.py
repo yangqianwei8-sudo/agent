@@ -1,11 +1,11 @@
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #85 repair SSOT / #84 / #73 / #60):
+Explicit invariants enforced in this module (Issue #84 repair SSOT / #73 / #60):
+  INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
   INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
-         (no get_current_*); rejects cross-case links.
+         (no get_current_*); rejects implicit current/latest and cross-case links.
   INV-3: create_lawyer_position requires opponent_material_ref for FORMAL_DEFENSE.
   INV-4: merge_issues and split_issue persist HumanDecision + AuditLog before mutation.
-INV-1 (no production ClaimDirection creation) lives in backend/domain/services.py.
 """
 
 from __future__ import annotations
@@ -62,12 +62,22 @@ __all__ = [
     "_guard_explicit_proof_task_fact_versions",
     "_guard_formal_defense_opponent_material_ref",
     "_guard_formal_defense_side",
+    "_guard_resolved_explicit_versions",
+    "_reject_claim_direction_production_mutation",
     "_require_structure_mutation_audit",
 ]
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _reject_claim_direction_production_mutation(*, _legacy_compat: bool) -> None:
+    """INV-1: block ClaimDirection creation on production mutation paths."""
+    if not _legacy_compat:
+        raise ValidationError(
+            "ClaimDirection production mutation disabled; use Claim Domain instead"
+        )
 
 
 def _guard_explicit_proof_task_fact_versions(
@@ -97,6 +107,25 @@ def _guard_formal_defense_side(position_type: str, side: str) -> None:
         raise ValidationError("FORMAL_DEFENSE must be on OPPONENT side")
 
 
+def _guard_resolved_explicit_versions(
+    *,
+    proof_task_version: int,
+    fact_version: int,
+    task: ProofTask,
+    fact: Any,
+) -> None:
+    """INV-2: resolved rows must match explicitly requested versions (no implicit current/latest)."""
+    if task.version != proof_task_version:
+        raise ValidationError(
+            "ProofTaskFactLink requires explicit proof_task_version; "
+            "implicit current/latest rejected"
+        )
+    if fact.version != fact_version:
+        raise ValidationError(
+            "ProofTaskFactLink requires explicit fact_version; implicit current/latest rejected"
+        )
+
+
 def _resolve_proof_task_and_fact_for_link(
     svc: DomainService,
     *,
@@ -118,6 +147,12 @@ def _resolve_proof_task_and_fact_for_link(
         raise NotFoundError("fact version not found")
     if fact.case_id != case_id:
         raise ValidationError("cross-case fact link rejected")
+    _guard_resolved_explicit_versions(
+        proof_task_version=proof_task_version,
+        fact_version=fact_version,
+        task=task,
+        fact=fact,
+    )
     return task, fact
 
 

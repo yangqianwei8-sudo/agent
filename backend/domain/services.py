@@ -32,7 +32,10 @@ from backend.domain.enums import (
     StaleEvent,
 )
 from backend.domain.errors import ConflictError, ImmutableError, NotFoundError, ValidationError
-from backend.domain.issue_centered import IssueCenteredDomainMixin
+from backend.domain.issue_centered import (
+    IssueCenteredDomainMixin,
+    _reject_claim_direction_production_mutation,
+)
 from backend.domain.stale import invalidate_dependencies
 from backend.models import (
     AuditLog,
@@ -72,14 +75,6 @@ def _hash_quote(quote: str) -> str:
 def _confirmation_set_hash(parts: list[str]) -> str:
     blob = "|".join(sorted(parts))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
-
-
-def _reject_claim_direction_production_mutation(*, _legacy_compat: bool) -> None:
-    """INV-1: block ClaimDirection creation on production mutation paths."""
-    if not _legacy_compat:
-        raise ValidationError(
-            "ClaimDirection production mutation disabled; use Claim Domain instead"
-        )
 
 
 class DomainService(IssueCenteredDomainMixin):
