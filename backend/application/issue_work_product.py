@@ -1,6 +1,6 @@
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #84 repair SSOT / #73 / #60).
+Read-only projection over Issue-centered V2 domain (Issue #83 repair SSOT / #86 / #84 / #73 / #60).
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 invariant enforcement remains in backend/domain/issue_centered.py.
 """
@@ -61,6 +61,11 @@ def enforce_inv1_read_only(entity_type: str) -> None:
 def is_read_only_projection() -> bool:
     """INV-1: expose read-only configuration for invariant checks."""
     return _READ_ONLY_PROJECTION
+
+
+def _link_matches_explicit_task_version(link, task_version: int) -> bool:
+    """INV-2: read path ignores links that alias implicit current/latest versions."""
+    return link.proof_task_version == task_version
 
 
 _PROOF_STATE_ZH = {
@@ -359,6 +364,10 @@ class IssueWorkProductService:
         for link in self.repo.list_proof_task_fact_links(
             task.proof_task_key, task.version
         ):
+            if not _link_matches_explicit_task_version(link, task.version):
+                continue
+            if link.fact_version < 1:
+                continue
             fact = self.repo.get_fact_version(link.fact_key, link.fact_version)
             if fact is None:
                 continue

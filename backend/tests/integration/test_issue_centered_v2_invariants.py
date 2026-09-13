@@ -1,4 +1,4 @@
-"""Issue-centered V2 — four invariant assertions (Issue #86 SSOT repair / #85 / #84 / #73 / #60)."""
+"""Issue-centered V2 — four invariant assertions (Issue #83 SSOT repair / #86 / #85 / #84 / #73 / #60)."""
 
 from __future__ import annotations
 
@@ -18,10 +18,12 @@ from backend.application.issue_work_product import (
 from backend.domain.enums import DecisionResult
 from backend.domain.errors import ConflictError, NotFoundError, ValidationError
 from backend.domain.issue_centered import (
+    _guard_cross_case_proof_task_fact_pair,
     _guard_explicit_proof_task_fact_versions,
     _guard_formal_defense_opponent_material_ref,
     _guard_formal_defense_side,
     _guard_resolved_explicit_versions,
+    _normalize_opponent_material_ref,
     _reject_claim_direction_production_mutation,
     _require_structure_mutation_audit,
 )
@@ -70,6 +72,8 @@ def test_invariant_guard_functions_reject_invalid_inputs() -> None:
         _guard_formal_defense_opponent_material_ref("FORMAL_DEFENSE", None)
     with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
         _guard_formal_defense_opponent_material_ref("FORMAL_DEFENSE", "   ")
+    assert _normalize_opponent_material_ref("  material:answer-001  ") == "material:answer-001"
+    assert _normalize_opponent_material_ref("   ") is None
     _guard_formal_defense_opponent_material_ref(
         "FORMAL_DEFENSE", "material:answer-001"
     )
@@ -237,6 +241,29 @@ def test_invariant_3_formal_defense_requires_opponent_material_ref(
     assert pos.position_type == "FORMAL_DEFENSE"
 
 
+def test_invariant_3_formal_defense_rejects_whitespace_only_material_ref(
+    db_session, owner_id, actor_id
+) -> None:
+    """INV-3: whitespace-only opponent_material_ref is normalized then rejected."""
+    svc = DomainService(db_session)
+    case = svc.create_case(title="INV3-ws", owner_user_id=owner_id)
+    issue = svc.confirm_issue(
+        svc.propose_issue(case_id=case.id, statement="空白材料焦点").issue_key,
+        actor_id=actor_id,
+    )
+    with pytest.raises(ValidationError, match="FORMAL_DEFENSE"):
+        svc.create_lawyer_position(
+            case_id=case.id,
+            issue_key=issue.issue_key,
+            issue_version=issue.version,
+            side="OPPONENT",
+            position_type="FORMAL_DEFENSE",
+            statement="空白材料抗辩",
+            actor_id=actor_id,
+            opponent_material_ref="   \t  ",
+        )
+
+
 def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     db_session, owner_id, actor_id
 ) -> None:
@@ -317,6 +344,16 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
     assert split_audits[0].entity_type == "issues"
     assert split_audits[0].after_json is not None
     assert split_audits[0].after_json.get("decision_id") == str(split_decisions[0].id)
+
+
+def test_invariant_2_cross_case_pair_guard_rejects_mismatched_cases() -> None:
+    """INV-2: _guard_cross_case_proof_task_fact_pair rejects mismatched case_id."""
+    from types import SimpleNamespace
+
+    task = SimpleNamespace(case_id=uuid.uuid4())
+    fact = SimpleNamespace(case_id=uuid.uuid4())
+    with pytest.raises(ValidationError, match="cross-case proof task fact link rejected"):
+        _guard_cross_case_proof_task_fact_pair(task, fact)
 
 
 def test_invariant_3_formal_defense_rejects_wrong_side(

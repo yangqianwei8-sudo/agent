@@ -425,7 +425,7 @@ def main() -> None:
     patch_path.write_text(patch, encoding="utf-8")
     _write_bundle(ts, patch_base, repair_head, patch)
     # Tied to #73/#60 acceptance lineage, not #80.
-    write_marker(ROOT, issue_number=86, at=ts)
+    write_marker(ROOT, issue_number=83, at=ts)
     marker = ROOT / "autonomous_dev" / "acceptance_marker.txt"
     print(f"Wrote {patch_path} ({patch_path.stat().st_size} bytes, {patch.count(chr(10)) + 1} lines)")
     print(f"Wrote bundle + evidence (Repair: {repair_head}, Base: {patch_base})")

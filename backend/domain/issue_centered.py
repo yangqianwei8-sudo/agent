@@ -1,6 +1,6 @@
 """Issue-centered V2 domain mutations — mixed into DomainService.
 
-Explicit invariants enforced in this module (Issue #86 repair SSOT / #85 / #84 / #73 / #60):
+Explicit invariants enforced in this module (Issue #83 repair SSOT / #86 / #85 / #84 / #73 / #60):
   INV-1: _reject_claim_direction_production_mutation blocks ClaimDirection writes.
   INV-2: link_fact_to_proof_task uses explicit proof_task_version/fact_version only
          (no get_current_*); rejects implicit current/latest and cross-case links.
@@ -59,10 +59,12 @@ if TYPE_CHECKING:
 
 __all__ = [
     "IssueCenteredDomainMixin",
+    "_guard_cross_case_proof_task_fact_pair",
     "_guard_explicit_proof_task_fact_versions",
     "_guard_formal_defense_opponent_material_ref",
     "_guard_formal_defense_side",
     "_guard_resolved_explicit_versions",
+    "_normalize_opponent_material_ref",
     "_reject_claim_direction_production_mutation",
     "_require_structure_mutation_audit",
 ]
@@ -78,6 +80,14 @@ def _reject_claim_direction_production_mutation(*, _legacy_compat: bool) -> None
         raise ValidationError(
             "ClaimDirection production mutation disabled; use Claim Domain instead"
         )
+
+
+def _normalize_opponent_material_ref(ref: str | None) -> str | None:
+    """INV-3: strip whitespace so blank refs cannot bypass FORMAL_DEFENSE guard."""
+    if ref is None:
+        return None
+    stripped = ref.strip()
+    return stripped or None
 
 
 def _guard_explicit_proof_task_fact_versions(
@@ -105,6 +115,12 @@ def _guard_formal_defense_side(position_type: str, side: str) -> None:
     """INV-3: FORMAL_DEFENSE positions must be recorded on the OPPONENT side."""
     if position_type == PositionType.FORMAL_DEFENSE.value and side != PositionSide.OPPONENT.value:
         raise ValidationError("FORMAL_DEFENSE must be on OPPONENT side")
+
+
+def _guard_cross_case_proof_task_fact_pair(task: ProofTask, fact: Any) -> None:
+    """INV-2: proof task and fact must belong to the same case."""
+    if task.case_id != fact.case_id:
+        raise ValidationError("cross-case proof task fact link rejected")
 
 
 def _guard_resolved_explicit_versions(
@@ -297,6 +313,7 @@ class IssueCenteredDomainMixin:
         issue = self._require_issue_version(issue_key, issue_version)
         if issue.case_id != case_id:
             raise ValidationError("issue case_id mismatch")
+        opponent_material_ref = _normalize_opponent_material_ref(opponent_material_ref)
         _guard_formal_defense_opponent_material_ref(position_type, opponent_material_ref)
         _guard_formal_defense_side(position_type, side)
         if position_type == PositionType.FORMAL_DEFENSE.value:
@@ -591,8 +608,7 @@ class IssueCenteredDomainMixin:
             fact_key=fact_key,
             fact_version=fact_version,
         )
-        if task.case_id != fact.case_id:
-            raise ValidationError("cross-case proof task fact link rejected")
+        _guard_cross_case_proof_task_fact_pair(task, fact)
         if role not in {r.value for r in ProofTaskFactLinkRole}:
             raise ValidationError(f"invalid proof task fact link role: {role}")
         link = ProofTaskFactLink(
