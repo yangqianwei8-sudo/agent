@@ -1,6 +1,6 @@
 # Issue #80 Resubmit — Issue-Centered V2 (#73 / #86 repair)
 
-Generated: 2026-09-13T10:46:57.909511Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `b11ff94`
+Generated: 2026-09-13T10:47:09.804035Z | Base: `f84972a213c44ba602b07ae3801637dc5c045f16` | Repair: `984f396`
 
 **SSOT:** `docs/issue80_repair_evidence/` — complete untruncated artifacts below (all code, diff, and stdout inlined, NOT truncated).
 
@@ -34,7 +34,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A2. ProofTaskFactLink rejects implicit current/latest and cross-case links
 
-**Domain enforcement** (`link_fact_to_proof_task` + `_guard_resolved_explicit_versions`): uses `get_proof_task_version` / `get_fact_version` (explicit versions only); rejects version mismatch and cross-case → `ValidationError("cross-case ...")` / `ValidationError("implicit current/latest rejected")`.
+**Domain enforcement** (`link_fact_to_proof_task` + `_resolve_proof_task_and_fact_for_link`): uses `get_proof_task_version` / `get_fact_version` only (never `get_current_*`); rejects non-positive versions and cross-case → `ValidationError("cross-case ...")` / `NotFoundError("... version not found")`.
 
 **Read projection guard** (`IssueWorkProductService._proof_task_facts`): skips links where `link.case_id != task.case_id` or `fact.case_id != task.case_id`.
 
@@ -66,7 +66,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A4. merge/split emit HumanDecision + AuditLog
 
-**Domain enforcement:** `_persist_issue_structure_decision` flushes HumanDecision before mutation; `_require_structure_mutation_audit` verifies AuditLog(entity_type="issues") and `after_json.decision_id == str(decision.id)` before return.
+**Domain enforcement:** `_persist_issue_structure_decision` flushes HumanDecision before mutation; `_persist_structure_mutation_audit` flushes AuditLog(entity_type="issues", `after_json.decision_id`) before mutation; `_require_structure_mutation_audit` fail-closes before return.
 
 **Test:** `test_invariant_4_merge_split_emit_human_decision_and_audit_log`
 - `assert len(merge_decisions) == 1` and `assert merge_decisions[0].id is not None`
@@ -81,14 +81,14 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 - AuditLog missing decision_id in after_json → `pytest.raises(ConflictError, match="decision_id")`
 — **PASSED**
 
-## (B) Test output — actual run 2026-09-13T10:46:57.909511Z
+## (B) Test output — actual run 2026-09-13T10:47:09.804035Z
 
 Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python -m pytest backend/tests/integration/test_issue_centered_v2.py backend/tests/integration/test_issue_centered_v2_invariants.py -v`
 
 Full raw stdout (untruncated):
 
 ```
-# Issue #80 repair capture | commit=b11ff94eee81307808e66726ebcbd689bdc038ec | timestamp=2026-09-13T10:46:57.909511+00:00
+# Issue #80 repair capture | commit=984f39696f3e8545f6e7bc9ebb14a841b06815da | timestamp=2026-09-13T10:47:09.804035+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -140,7 +140,7 @@ backend/tests/integration/test_issue_centered_v2_invariants.py::test_invariant_3
     transaction.rollback()
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 29 passed, 4 warnings in 1.68s ========================
+======================== 29 passed, 4 warnings in 1.57s ========================
 ```
 
 Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/python backend/scripts/live_issue_centered_v2_acceptance.py`
@@ -148,7 +148,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Full raw stdout (untruncated):
 
 ```
-# Issue #80 repair capture | commit=b11ff94eee81307808e66726ebcbd689bdc038ec | timestamp=2026-09-13T10:46:57.909511+00:00
+# Issue #80 repair capture | commit=984f39696f3e8545f6e7bc9ebb14a841b06815da | timestamp=2026-09-13T10:47:09.804035+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
