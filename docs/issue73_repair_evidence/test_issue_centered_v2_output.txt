@@ -1,3 +1,5 @@
+# Issue #73 repair capture | commit=8af9a7fe3dc536e21905870ef2d1f940286799e7 | timestamp=2026-09-13T09:07:09.544267+00:00
+
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
 cachedir: .pytest_cache

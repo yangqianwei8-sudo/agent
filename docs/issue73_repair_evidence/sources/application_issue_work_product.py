@@ -1,6 +1,6 @@
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #60 / #73).
+Read-only projection over Issue-centered V2 domain (Issue #60 / #73 / #80).
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 invariant enforcement remains in backend/domain/issue_centered.py and services.py.
 """
@@ -31,6 +31,20 @@ from backend.schemas.issue_work_product import (
     ProofTaskView,
     StructuralWarningView,
 )
+
+# INV-1 (#73): read projection — must never mutate ClaimDirection or issue-centered writes.
+_FORBIDDEN_MUTATION_ENTITY_TYPES = frozenset(
+    {"claim_directions", "issue_positions", "proof_tasks", "proof_task_fact_links", "issues"}
+)
+
+
+def assert_read_only_projection(entity_type: str) -> None:
+    """Guard invoked before any would-be write from this read-only service."""
+    if entity_type in _FORBIDDEN_MUTATION_ENTITY_TYPES:
+        raise RuntimeError(
+            f"IssueWorkProductService is read-only; cannot mutate {entity_type}"
+        )
+
 
 _PROOF_STATE_ZH = {
     ProofState.RED.value: "关键证明缺口",
