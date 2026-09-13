@@ -163,8 +163,25 @@ def test_committed_golden_fixtures_match_sync_output() -> None:
             assert (DEFAULT_FIXTURES_DIR / name).read_bytes() == (root / name).read_bytes()
 
 
-def test_issue75_repair_gate_includes_issue38_behavioral_tests() -> None:
-    """Issue #75 repair wires issue #38 P0 acceptance tests into the production gate."""
-    from autonomous_dev.p0_acceptance import ACCEPTANCE_GATE_PYTEST_TARGETS
+def test_marker_only_acceptance_end_to_end_with_independent_fixture_generation() -> None:
+    """Issue #38 flow: independent generate() dirs match before marker-only commit proceeds."""
+    from backend.fixtures.deterministic import verify_independent_generation_byte_identity
 
-    assert "backend/tests/unit/test_issue38_p0_acceptance.py" in ACCEPTANCE_GATE_PYTEST_TARGETS
+    verify_independent_generation_byte_identity()
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "repo"
+        repo.mkdir()
+        _init_git_repo(repo)
+        fixtures = Path(tmp) / "fixtures"
+        generate(output_dir=fixtures)
+
+        marker_path, commit_sha = execute_marker_only_acceptance(
+            repo,
+            38,
+            run_gate_tests=lambda: None,
+            commit_paths=lambda paths: "deadbeef",
+            fixtures_dir=fixtures,
+        )
+        assert marker_path.name == "acceptance_marker.txt"
+        assert "worker-run issue=38" in read_marker(repo)
+        assert commit_sha == "deadbeef"

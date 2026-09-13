@@ -58,8 +58,26 @@ def pdf_has_deterministic_metadata(pdf_bytes: bytes) -> bool:
     return _PDF_ID_RE.search(text) is not None
 
 
+def verify_independent_generation_byte_identity() -> None:
+    """Raise ValueError when two generate() runs into separate dirs differ."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        dir_a = base / "run_a"
+        dir_b = base / "run_b"
+        generate(output_dir=dir_a)
+        generate(output_dir=dir_b)
+        drifted = [
+            name
+            for name in FIXTURE_NAMES
+            if (dir_a / name).read_bytes() != (dir_b / name).read_bytes()
+        ]
+    if drifted:
+        raise ValueError(f"independent generation drift: {', '.join(drifted)}")
+
+
 def validate_fixtures(root: Path) -> None:
     """Raise ValueError when committed fixtures drift from deterministic generation."""
+    verify_independent_generation_byte_identity()
     missing = [name for name in FIXTURE_NAMES if not (root / name).is_file()]
     if missing:
         raise ValueError(f"missing fixtures: {', '.join(missing)}")

@@ -16,6 +16,7 @@ from backend.fixtures.deterministic import (
     pdf_has_deterministic_metadata,
     pin_pdf_deterministic_metadata,
     validate_fixtures,
+    verify_independent_generation_byte_identity,
 )
 
 _PDF_FIXTURES = ("sample_text.pdf", "sample_scanned.pdf")
@@ -39,6 +40,49 @@ def test_pdf_fixtures_regenerate_byte_identically() -> None:
         after_second = {name: (root / name).read_bytes() for name in _PDF_FIXTURES}
         for name in _PDF_FIXTURES:
             assert after_first[name] == after_second[name], f"{name} changed between runs"
+
+
+def test_pdf_fixtures_identical_across_independent_output_directories() -> None:
+    """Two generate() runs into separate dirs must produce byte-identical PDF output."""
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        dir_a = base / "run_a"
+        dir_b = base / "run_b"
+        generate(output_dir=dir_a)
+        generate(output_dir=dir_b)
+        for name in _PDF_FIXTURES:
+            bytes_a = (dir_a / name).read_bytes()
+            bytes_b = (dir_b / name).read_bytes()
+            assert bytes_a == bytes_b, f"{name} differed between independent directories"
+            assert pdf_has_deterministic_metadata(bytes_a)
+
+
+def test_verify_independent_generation_byte_identity() -> None:
+    """Production cross-directory guard must pass for the deterministic generator."""
+    verify_independent_generation_byte_identity()
+
+
+def test_generate_without_metadata_pin_drift_from_pinned_output(monkeypatch) -> None:
+    """Regression: bypassing the post-save pin step must produce different PDF bytes."""
+    import backend.fixtures.deterministic as mod
+
+    with tempfile.TemporaryDirectory() as tmp:
+        base = Path(tmp)
+        generate(output_dir=base / "pinned")
+        pinned_bytes = {name: (base / "pinned" / name).read_bytes() for name in _PDF_FIXTURES}
+
+    monkeypatch.setattr(
+        mod,
+        "_save_canvas_with_deterministic_metadata",
+        lambda canvas, path: canvas.save(),  # type: ignore[union-attr]
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        generate(output_dir=root)
+        for name in _PDF_FIXTURES:
+            assert (root / name).read_bytes() != pinned_bytes[name], (
+                f"{name} must differ when metadata pin step is removed"
+            )
 
 
 def test_pdf_fixtures_use_fixed_creation_date() -> None:
