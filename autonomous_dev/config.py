@@ -26,7 +26,7 @@ class AutonomousDevSettings(BaseSettings):
     github_ssh_key_path: str = ""
     github_token_file: str = ""
     cursor_api_key: str = ""
-    cursor_model: str = "composer-2"
+    cursor_model: str = "composer-2.5"
     autonomous_worker_mode: str = "deterministic"  # deterministic | live | cursor_sdk
     autonomous_repo_root: str = "."
     autonomous_state_db_path: str = "data/autonomous_dev.db"

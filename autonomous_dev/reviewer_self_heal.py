@@ -10,6 +10,7 @@ from autonomous_dev.review_executor import ReviewExecutor
 from autonomous_dev.state import (
     ReviewerReactivationStatus,
     ReviewInvocationStatus,
+    ReviewVerdict,
     StateStore,
     TaskRecord,
     TaskStatus,
@@ -82,6 +83,8 @@ def _invocation_blocks_stall(
     if inv is None:
         return False
     if inv.status == ReviewInvocationStatus.COMPLETED:
+        if inv.verdict == ReviewVerdict.SKIP.value:
+            return False
         return True
     if inv.status in {ReviewInvocationStatus.RUNNING, ReviewInvocationStatus.PENDING}:
         if _has_valid_reviewer_lease(settings, store, task, inv, now=now):

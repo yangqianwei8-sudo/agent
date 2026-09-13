@@ -1608,7 +1608,7 @@ class StateStore:
             conn.execute(
                 """
                 UPDATE review_invocations
-                SET status = ?, error = NULL, completed_at = NULL,
+                SET status = ?, error = NULL, completed_at = NULL, verdict = NULL,
                     next_retry_at = NULL, started_at = NULL
                 WHERE invocation_id = ?
                 """,

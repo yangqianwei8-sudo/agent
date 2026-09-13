@@ -47,6 +47,14 @@ class ReviewExecutor:
         """Event-driven entry — exactly one review per (task_id, commit_sha)."""
         existing = self.store.get_review_invocation(task.id, commit_sha)
         if existing and existing.status == ReviewInvocationStatus.COMPLETED:
+            if existing.verdict == ReviewVerdict.SKIP:
+                self.store.reset_review_for_retry(existing.invocation_id)
+                self._kick_review_worker()
+                return {
+                    "status": "retry_scheduled",
+                    "invocation_id": existing.invocation_id,
+                    "reason": "skip_verdict_re_review",
+                }
             return {
                 "status": "idempotent",
                 "verdict": existing.verdict.value if existing.verdict else "",
@@ -295,7 +303,17 @@ class ReviewExecutor:
         elif verdict == "PRODUCT_DECISION":
             self._apply_product_decision(task, result)
         elif verdict == "SKIP":
-            logger.info("reviewer SKIP task=%s — no state change", task.id)
+            if self.settings.autonomous_worker_mode != "deterministic":
+                logger.info(
+                    "reviewer SKIP task=%s — scheduling real LLM re-review",
+                    task.id,
+                )
+                inv = self.store.get_review_invocation(task.id, commit_sha)
+                if inv is not None:
+                    self.store.reset_review_for_retry(inv.invocation_id)
+                self._kick_review_worker()
+            else:
+                logger.info("reviewer SKIP task=%s — no state change", task.id)
         else:
             self._apply_fail(task, result)
 
