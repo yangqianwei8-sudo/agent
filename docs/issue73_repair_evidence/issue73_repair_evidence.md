@@ -1,8 +1,8 @@
 # Issue #73 Repair Evidence — Issue-Centered V2 (#60)
 
-Generated: 2026-09-13T11:08:28.509710Z
+Generated: 2026-09-13T11:08:38.720795Z
 Base commit: `f84972a213c44ba602b07ae3801637dc5c045f16` (pre issue-centered v2; parent of c19379b)
-Repair commit: `4187d99`
+Repair commit: `2850f40`
 
 **This directory is the sole SSOT for Issue #73 repair submission.**
 
@@ -3024,7 +3024,7 @@ Run: `TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_case_agent_test .venv/bin/
 Also saved to: `test_issue_centered_v2_output.txt`
 
 ```
-# Issue #73 repair capture | commit=4187d9961f8c13589b80197b6bd2233cc130b0e5 | timestamp=2026-09-13T11:08:28.509710+00:00
+# Issue #73 repair capture | commit=2850f40a21780bec8913042fe48e0a2aea98113a | timestamp=2026-09-13T11:08:38.720795+00:00
 
 ============================= test session starts ==============================
 platform linux -- Python 3.11.2, pytest-9.1.1, pluggy-1.6.0 -- /home/devbox/project/.venv/bin/python
@@ -3088,7 +3088,7 @@ Run: `LLM_MODE=deterministic TEST_DATABASE_URL=${DATABASE_URL%/*}/litigation_cas
 Also saved to: `live_issue_centered_v2_acceptance_output.txt`
 
 ```
-# Issue #73 repair capture | commit=4187d9961f8c13589b80197b6bd2233cc130b0e5 | timestamp=2026-09-13T11:08:28.509710+00:00
+# Issue #73 repair capture | commit=2850f40a21780bec8913042fe48e0a2aea98113a | timestamp=2026-09-13T11:08:38.720795+00:00
 
 /home/devbox/project/.venv/lib/python3.11/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
   from starlette.testclient import TestClient as TestClient  # noqa
