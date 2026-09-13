@@ -392,12 +392,20 @@ def _write_bundle(
     )
 
 
+def _repair_sha_from_argv() -> str | None:
+    for arg in sys.argv[1:]:
+        if arg.startswith("--repair-sha="):
+            return arg.split("=", 1)[1]
+    return None
+
+
 def main() -> None:
     align_only = "--align-only" in sys.argv
     ts = datetime.now(UTC)
     patch_base = _git_short(PATCH_BASE)
-    repair_full = _git_full("HEAD")
-    repair_head = _git_short("HEAD")
+    repair_override = _repair_sha_from_argv()
+    repair_full = repair_override or _git_full("HEAD")
+    repair_head = repair_full[:7] if repair_override else _git_short("HEAD")
     EVIDENCE.mkdir(parents=True, exist_ok=True)
     if not align_only:
         _capture_test_outputs(ts, repair_full)

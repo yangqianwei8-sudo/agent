@@ -74,6 +74,14 @@ def _confirmation_set_hash(parts: list[str]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _reject_claim_direction_production_mutation(*, _legacy_compat: bool) -> None:
+    """INV-1: block ClaimDirection creation on production mutation paths."""
+    if not _legacy_compat:
+        raise ValidationError(
+            "ClaimDirection production mutation disabled; use Claim Domain instead"
+        )
+
+
 class DomainService(IssueCenteredDomainMixin):
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -916,10 +924,7 @@ class DomainService(IssueCenteredDomainMixin):
         actor_id: UUID | None = None,
         _legacy_compat: bool = False,
     ) -> ClaimDirection:
-        if not _legacy_compat:
-            raise ValidationError(
-                "ClaimDirection production mutation disabled; use Claim Domain instead"
-            )
+        _reject_claim_direction_production_mutation(_legacy_compat=_legacy_compat)
         self._require_case(case_id)
         validated = validate_claim_direction_payload(payload)
         claim = ClaimDirection(
