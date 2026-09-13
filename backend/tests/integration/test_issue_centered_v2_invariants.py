@@ -1,4 +1,4 @@
-"""Issue-centered V2 — four invariant assertions (Issue #73 / #60 / #83 SSOT)."""
+"""Issue-centered V2 — four invariant assertions (Issue #80 / #73 SSOT repair)."""
 
 from __future__ import annotations
 
@@ -82,6 +82,17 @@ def test_invariant_2_proof_task_fact_link_rejects_implicit_and_cross_case(
         description="跨案任务",
         actor_id=actor_id,
     )
+    # Zero/negative versions → ValidationError (explicit positive versions required)
+    with pytest.raises(ValidationError, match="explicit positive"):
+        svc.link_fact_to_proof_task(
+            case_id=c2.id,
+            proof_task_key=task.proof_task_key,
+            proof_task_version=0,
+            fact_key=fact.fact_key,
+            fact_version=fact.version,
+            role="SUPPORT",
+            actor_id=actor_id,
+        )
     # Implicit/nonexistent proof_task_version → NotFoundError (not silent current/latest)
     with pytest.raises(NotFoundError, match="proof task version not found"):
         svc.link_fact_to_proof_task(
@@ -205,6 +216,8 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
         )
     )
     assert len(merge_decisions) == 1
+    assert merge_decisions[0].id is not None
+    assert merge_decisions[0].result == "CONFIRMED"
     merge_audits = list(
         db_session.scalars(
             select(AuditLog).where(
@@ -214,6 +227,7 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
         )
     )
     assert len(merge_audits) >= 1
+    assert merge_audits[0].entity_type == "issues"
 
     split = svc.split_issue(
         case_id=case.id,
@@ -234,6 +248,8 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
         )
     )
     assert len(split_decisions) == 1
+    assert split_decisions[0].id is not None
+    assert split_decisions[0].result == "CONFIRMED"
     split_audits = list(
         db_session.scalars(
             select(AuditLog).where(
@@ -243,3 +259,4 @@ def test_invariant_4_merge_split_emit_human_decision_and_audit_log(
         )
     )
     assert len(split_audits) >= 1
+    assert split_audits[0].entity_type == "issues"
