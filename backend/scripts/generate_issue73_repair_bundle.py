@@ -140,7 +140,7 @@ Dedicated test module: `backend/tests/integration/test_issue_centered_v2_invaria
 
 ### A3. FORMAL_DEFENSE requires opponent_material_ref
 
-**Domain enforcement** (`create_lawyer_position` lines 143–145): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent.
+**Domain enforcement** (`_guard_formal_defense_opponent_material_ref`, `create_lawyer_position`): raises `ValidationError("FORMAL_DEFENSE requires opponent material reference")` when ref absent.
 
 **Test:** `test_invariant_3_formal_defense_requires_opponent_material_ref`
 - without ref → `pytest.raises(ValidationError, match="FORMAL_DEFENSE")`
@@ -249,7 +249,7 @@ Production path: `backend/tests/integration/test_issue_centered_v2_invariants.py
 
 {_fence("python", invariants)}
 
-Verified by: all 19 pytest tests + live acceptance 30 steps — **PASSED**."""
+Verified by: all 24 pytest tests + live acceptance 30 steps — **PASSED**."""
 
     return "\n\n".join(
         [

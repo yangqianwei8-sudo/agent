@@ -1,6 +1,6 @@
 """Issue Work Product — canonical issue-centered read projection.
 
-Read-only projection over Issue-centered V2 domain (Issue #60 / #73 / #80).
+Read-only projection over Issue-centered V2 domain (Issue #73 repair SSOT / #60).
 Does not mutate ClaimDirection, ProofTaskFactLink, positions, or issues;
 invariant enforcement remains in backend/domain/issue_centered.py and services.py.
 """
@@ -33,6 +33,7 @@ from backend.schemas.issue_work_product import (
 )
 
 # INV-1 (#73): read projection — must never mutate ClaimDirection or issue-centered writes.
+_READ_ONLY_PROJECTION = True
 _FORBIDDEN_MUTATION_ENTITY_TYPES = frozenset(
     {"claim_directions", "issue_positions", "proof_tasks", "proof_task_fact_links", "issues"}
 )
@@ -44,6 +45,16 @@ def assert_read_only_projection(entity_type: str) -> None:
         raise RuntimeError(
             f"IssueWorkProductService is read-only; cannot mutate {entity_type}"
         )
+
+
+def enforce_inv1_read_only(entity_type: str) -> None:
+    """INV-1: block mutation attempts from the read projection layer."""
+    assert_read_only_projection(entity_type)
+
+
+def is_read_only_projection() -> bool:
+    """INV-1: expose read-only configuration for invariant checks."""
+    return _READ_ONLY_PROJECTION
 
 
 _PROOF_STATE_ZH = {
@@ -78,11 +89,25 @@ class IssueWorkProductService:
         self.repo = Repository(session)
         self.matrix_svc = IssueMatrixService(session)
 
+    @staticmethod
+    def _assert_read_only(operation: str) -> None:
+        """INV-1: every public entrypoint stays on the read-only projection path."""
+        if not _READ_ONLY_PROJECTION:
+            raise RuntimeError(
+                f"IssueWorkProductService lost read-only configuration during {operation}"
+            )
+
+    @staticmethod
+    def guard_write_attempt(entity_type: str) -> None:
+        """INV-1: block mutation attempts from the read projection layer."""
+        enforce_inv1_read_only(entity_type)
+
     def build_issue(
         self,
         issue_key: UUID,
         issue_version: int | None = None,
     ) -> IssueWorkProduct:
+        self._assert_read_only("build_issue")
         if issue_version is not None:
             issue = self.repo.get_issue_version(issue_key, issue_version)
         else:
@@ -92,6 +117,7 @@ class IssueWorkProductService:
         return self._build_for_issue(issue)
 
     def build_case(self, case_id: UUID) -> CaseIssueWorkProduct:
+        self._assert_read_only("build_case")
         case = self.session.get(Case, case_id)
         if case is None:
             raise NotFoundError("case not found")
@@ -140,6 +166,7 @@ class IssueWorkProductService:
         )
 
     def build_litigation_plan(self, case_id: UUID) -> LitigationPlanView:
+        self._assert_read_only("build_litigation_plan")
         from backend.application.claim_view import ClaimViewService
         from backend.application.pleading_readiness import PleadingReadinessService
 
